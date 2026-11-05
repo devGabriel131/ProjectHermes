@@ -33,7 +33,7 @@ type Student struct {
 	// The index name is pinIndex.
 	Pin string `gorm:"not null;default:'';uniqueIndex:idx_student_pin,where:pin <> ''"`
 	// Group is the program stage staff edit through groupField. Enroll leaves it to the column
-	// default, so every student starts in the first group; the default and check repeat groups.
+	// default, the first group; Add uses the group staff chose. The default and check repeat groups.
 	Group string `gorm:"not null;default:'Básico';check:student_group_valid,\"group\" IN ('Básico', 'Regular')"`
 	// Cohort is the month, YYYY-MM, of the agreement start date the student accepted. Enroll sets it;
 	// students added by staff have ''; no edit reaches it.
@@ -271,9 +271,10 @@ func (r Rejection) Problems() []string {
 	return problems
 }
 
-// Add inserts each valid entry as an active Básico student with no source link and no cohort, in one
+// Add inserts each valid entry as an active student in group, with no source link and no cohort, in one
 // transaction, and returns the added students in entry order plus every rejection in entry order.
-func (s *Store) Add(ctx context.Context, entries []NewStudent) ([]Student, []Rejection, error) {
+// group must come from ParseGroup; the student_group_valid check refuses anything else.
+func (s *Store) Add(ctx context.Context, group string, entries []NewStudent) ([]Student, []Rejection, error) {
 	if len(entries) == 0 {
 		return nil, nil, nil
 	}
@@ -331,7 +332,7 @@ func (s *Store) Add(ctx context.Context, entries []NewStudent) ([]Student, []Rej
 				},
 				Pin:      pin,
 				IsActive: true,
-				Group:    groups[0],
+				Group:    group,
 			},
 		})
 	}
