@@ -832,7 +832,7 @@ func TestStoreFailuresAreServerErrors(t *testing.T) {
 		{"trash", http.MethodGet, "/management/trash", nil, nil},
 		{"students", http.MethodGet, "/management/students", nil, nil},
 		{"student", http.MethodGet, "/management/students/1", nil, nil},
-		{"add student", http.MethodPost, "/management/students", nil, url.Values{"name": {"Ana Torres"}, "email": {"ana@example.com"}, "pin": {"9999"}}},
+		{"add student", http.MethodPost, "/management/students", nil, url.Values{"name": {"Ana Torres"}, "email": {"ana@example.com"}, "pin": {"9999"}, "group": {"Básico"}}},
 		{"cancel", http.MethodPost, cancel, nil, nil},
 		{"htmx cancel", http.MethodPost, cancel, htmxHeader, nil},
 		{"program date", http.MethodPost, "/management/program-start-date", nil, url.Values{"program_start_date": {"2026-12-01"}}},

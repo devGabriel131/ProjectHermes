@@ -62,10 +62,13 @@ type rosterReport struct {
 
 type addStudentsData struct {
 	Staff       string
+	Groups      []string            // students.GroupOptions(), for both Group selects
 	Entry       students.NewStudent // values redisplayed after a refusal
+	AddGroup    string              // the single form's group: redisplayed after a refusal, kept after an add
 	Errors      students.Rejection  // per-field messages after a refusal
-	AddError    string              // refusal not tied to a field (lost PIN race)
+	AddError    string              // refusal not tied to a text field: an invalid group or a lost PIN race
 	Added       *students.Student   // the student named by ?added=
+	ImportGroup string              // the import form's group: redisplayed after a refusal, kept after an import
 	ImportError string
 	Imported    *rosterReport
 }
@@ -186,7 +189,7 @@ func registerAddStudentRoutes(mux *http.ServeMux, roster *students.Store, staff 
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 
-		data := addStudentsData{Staff: staff(r.Context())}
+		data := addStudentsData{Staff: staff(r.Context()), Groups: students.GroupOptions()}
 		if rawID := r.URL.Query().Get("added"); rawID != "" {
 			if id, err := strconv.ParseUint(rawID, 10, 64); err == nil {
 				data.Added, err = roster.Get(ctx, id)
@@ -194,6 +197,9 @@ func registerAddStudentRoutes(mux *http.ServeMux, roster *students.Store, staff 
 					logging.RecordError(r, "load", err)
 					http.Error(w, "Could not load student. Please try again.", http.StatusInternalServerError)
 					return
+				}
+				if data.Added != nil {
+					data.AddGroup = data.Added.Group
 				}
 			}
 		}
@@ -216,31 +222,26 @@ func registerAddStudentRoutes(mux *http.ServeMux, roster *students.Store, staff 
 			return
 		}
 
-		entry := students.NewStudent{
-			Name:  r.PostForm.Get("name"),
-			Email: r.PostForm.Get("email"),
-			Pin:   r.PostForm.Get("pin"),
+		entry := students.NewStudent{Name: r.PostForm.Get("name"), Email: r.PostForm.Get("email"), Pin: r.PostForm.Get("pin")}
+		data := addStudentsData{Staff: staff(r.Context()), Groups: students.GroupOptions(), Entry: entry, AddGroup: r.PostForm.Get("group")}
+		group, err := students.ParseGroup(data.AddGroup, true)
+		if err != nil {
+			data.AddError = err.Error()
+			render(w, r, page, http.StatusUnprocessableEntity, "add-students.html", data)
+			return
 		}
-		added, rejected, err := roster.Add(ctx, []students.NewStudent{entry})
+		added, rejected, err := roster.Add(ctx, group, []students.NewStudent{entry})
 
 		var valErr *students.ValidationError
 		switch {
 		case errors.As(err, &valErr):
-			data := addStudentsData{
-				Staff:    staff(r.Context()),
-				Entry:    entry,
-				AddError: valErr.Message,
-			}
+			data.AddError = valErr.Message
 			render(w, r, page, http.StatusConflict, "add-students.html", data)
 		case err != nil:
 			logging.RecordError(r, "save", err)
 			http.Error(w, "Could not add the student. Please try again.", http.StatusInternalServerError)
 		case len(rejected) > 0:
-			data := addStudentsData{
-				Staff:  staff(r.Context()),
-				Entry:  entry,
-				Errors: rejected[0],
-			}
+			data.Errors = rejected[0]
 			render(w, r, page, http.StatusUnprocessableEntity, "add-students.html", data)
 		default:
 			http.Redirect(w, r, "/management/students/new?added="+strconv.FormatUint(added[0].ID, 10), http.StatusSeeOther)
@@ -251,22 +252,33 @@ func registerAddStudentRoutes(mux *http.ServeMux, roster *students.Store, staff 
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 
+		data := addStudentsData{Staff: staff(r.Context()), Groups: students.GroupOptions()}
+
 		r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
 		if err := r.ParseMultipartForm(2 << 20); err != nil {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
-				data := addStudentsData{Staff: staff(r.Context()), ImportError: "The file is larger than 2 MB."}
+				data.ImportError = "The file is larger than 2 MB."
 				render(w, r, page, http.StatusRequestEntityTooLarge, "add-students.html", data)
 			} else {
-				data := addStudentsData{Staff: staff(r.Context()), ImportError: "Choose an .xlsx or .csv file to upload."}
+				data.ImportError = "Choose an .xlsx or .csv file to upload."
 				render(w, r, page, http.StatusUnprocessableEntity, "add-students.html", data)
 			}
 			return
 		}
 
+		data.ImportGroup = r.PostForm.Get("group")
+		group, err := students.ParseGroup(data.ImportGroup, true)
+		if err != nil {
+			data.ImportError = err.Error()
+			render(w, r, page, http.StatusUnprocessableEntity, "add-students.html", data)
+			return
+		}
+		data.ImportGroup = group
+
 		file, header, err := r.FormFile("roster")
 		if err != nil {
-			data := addStudentsData{Staff: staff(r.Context()), ImportError: "Choose an .xlsx or .csv file to upload."}
+			data.ImportError = "Choose an .xlsx or .csv file to upload."
 			render(w, r, page, http.StatusUnprocessableEntity, "add-students.html", data)
 			return
 		}
@@ -276,7 +288,7 @@ func registerAddStudentRoutes(mux *http.ServeMux, roster *students.Store, staff 
 		if err != nil {
 			var valErr *students.ValidationError
 			if errors.As(err, &valErr) {
-				data := addStudentsData{Staff: staff(r.Context()), ImportError: valErr.Message}
+				data.ImportError = valErr.Message
 				render(w, r, page, http.StatusUnprocessableEntity, "add-students.html", data)
 				return
 			}
@@ -290,11 +302,11 @@ func registerAddStudentRoutes(mux *http.ServeMux, roster *students.Store, staff 
 			entries[i] = rows[i].entry()
 		}
 
-		added, rejected, err := roster.Add(ctx, entries)
+		added, rejected, err := roster.Add(ctx, group, entries)
 		var valErr *students.ValidationError
 		switch {
 		case errors.As(err, &valErr):
-			data := addStudentsData{Staff: staff(r.Context()), ImportError: valErr.Message}
+			data.ImportError = valErr.Message
 			render(w, r, page, http.StatusConflict, "add-students.html", data)
 			return
 		case err != nil:
@@ -323,10 +335,7 @@ func registerAddStudentRoutes(mux *http.ServeMux, roster *students.Store, staff 
 			report.FixFile = template.URL("data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64," + base64.StdEncoding.EncodeToString(fixBytes))
 		}
 
-		data := addStudentsData{
-			Staff:    staff(r.Context()),
-			Imported: &report,
-		}
+		data.Imported = &report
 		render(w, r, page, http.StatusOK, "add-students.html", data)
 	})
 }

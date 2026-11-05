@@ -979,10 +979,28 @@ button.management-button-danger:enabled:hover {
   border-color: var(--danger);
 }
 
-.management .student-import-report {
+/* Wide screens put the two forms side by side; narrow screens stack them. */
+.management .student-add-panels {
   display: grid;
-  gap: 0.75rem;
-  padding: 0 var(--inset) 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+/* Import results fit the screen without sideways scrolling: Row stays as narrow as its
+   numbers, and Name and Problems share the rest and wrap. */
+.management .student-import-report .student-table {
+  min-width: 0;
+}
+
+.management .student-import-report .student-table :is(th, td) {
+  min-width: 0;
+  max-width: none;
+}
+
+.management .student-import-report .student-table :is(th, td):first-child {
+  width: 1%;
+  white-space: nowrap;
 }
 
 .management .student-field-actions {

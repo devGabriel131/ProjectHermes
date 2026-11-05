@@ -507,11 +507,11 @@ func TestAddInsertsValidStudentsAndRejectsTheRest(t *testing.T) {
 		{Name: "Enrolled Duplicate", Email: "enrolled@example.com", Pin: enrolledStudent.Pin},
 		{Name: "Link Duplicate", Email: "link@example.com", Pin: linkPin},
 		{Name: "Ana Duplicate", Email: "ana2@example.com", Pin: "0388"},
-		{Name: "Mirayda E. Silvestrini", Email: "m@example.com", Pin: "7247"},
+		{Name: "Mirayda 123 Silvestrini", Email: "m@example.com", Pin: "7247"},
 		{Name: "Luis Rivera", Email: "luis@example.com", Pin: "1234"},
 	}
 
-	added, rejected, err := roster.Add(ctx, entries)
+	added, rejected, err := roster.Add(ctx, "Regular", entries)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -562,8 +562,8 @@ func TestAddInsertsValidStudentsAndRejectsTheRest(t *testing.T) {
 		if !got.IsActive {
 			t.Fatalf("IsActive = false, want true")
 		}
-		if got.Group != "Básico" {
-			t.Fatalf("Group = %q, want 'Básico'", got.Group)
+		if got.Group != "Regular" {
+			t.Fatalf("Group = %q, want 'Regular'", got.Group)
 		}
 	}
 	ana, err := roster.Get(ctx, added[0].ID)
@@ -595,7 +595,7 @@ func TestAddInsertsValidStudentsAndRejectsTheRest(t *testing.T) {
 	invalidEntries := []students.NewStudent{
 		{Name: "Bad Name 123", Email: "bad", Pin: "99"},
 	}
-	added2, rejected2, err := roster.Add(ctx, invalidEntries)
+	added2, rejected2, err := roster.Add(ctx, "Básico", invalidEntries)
 	if err != nil {
 		t.Fatalf("Add(invalid): %v", err)
 	}
