@@ -962,7 +962,7 @@ button.management-button-danger:enabled:hover {
   gap: 0.75rem;
 }
 
-.management .student-field-editor :is(input:not([type="hidden"]), select, textarea) {
+.management :is(.student-field-editor, .student-add-form) :is(input:not([type="hidden"]), select, textarea) {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
@@ -975,8 +975,14 @@ button.management-button-danger:enabled:hover {
   font: inherit;
 }
 
-.management .student-field-editor [aria-invalid="true"] {
+.management :is(.student-field-editor, .student-add-form) [aria-invalid="true"] {
   border-color: var(--danger);
+}
+
+.management .student-import-report {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0 var(--inset) 1.5rem;
 }
 
 .management .student-field-actions {
