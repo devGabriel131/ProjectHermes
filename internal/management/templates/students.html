@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{if .Student.ID}}Student details{{else}}Students{{end}}</title>
   <link rel="icon" type="image/vnd.microsoft.icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false}'>
   <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js"
     integrity="sha384-2OatzQy1H+Zd/IIrjr1TcuDGqLXeHhbooAyJY1KdQMKnr4LZ22k31GBLdYKHmVjg"
     crossorigin="anonymous" defer></script>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&amp;family=Geist+Mono:wght@400..600&amp;family=Marcellus&amp;display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400..700&amp;family=Marcellus&amp;display=swap">
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/management-time.js" defer></script>
   <script src="/static/management-live.js" defer></script>
@@ -16,8 +17,11 @@
 </head>
 <body class="management management-workspace">
   <a class="management-skip-link" href="#main-content">Skip to content</a>
-  {{template "header" .Staff}}
-  {{template "navigation" "students"}}
+  <header class="management-sidebar">
+    {{template "brand"}}
+    {{template "navigation" "students"}}
+    {{template "account" .Staff}}
+  </header>
   <main id="main-content" class="management-links management-students" tabindex="-1">
     {{if .Student.ID}}
     <p class="student-back-link"><a class="management-back-link" href="/management/students">Back to students</a></p>
@@ -33,10 +37,7 @@
     </div>
     <p class="student-request-error" role="alert" hidden></p>
     <section class="management-panel" aria-labelledby="student-table-heading">
-      <div class="management-panel-heading">
-        <h2 id="student-table-heading">Student records</h2>
-        <p>Open a student to view or edit their information.</p>
-      </div>
+      <h2 id="student-table-heading" class="visually-hidden">Student records</h2>
       {{/* One GET form holds every filter: a change swaps just the records, so focus stays on the control,
         live refreshes include it, and it still submits without JavaScript. hx-history="false" keeps
         student records out of htmx's history snapshots. */}}
@@ -81,7 +82,7 @@
 <div class="student-table-scroll">
   <table class="student-table" aria-labelledby="student-table-heading">
     <thead>
-      <tr>{{range .Fields}}<th scope="col">{{.Label}}</th>{{end}}<th scope="col">Cohort</th><th scope="col">Enrolled</th><th scope="col">Status</th></tr>
+      <tr>{{range $index, $field := .Fields}}<th scope="col">{{$field.Label}}</th>{{if eq $index 0}}<th scope="col">Status</th>{{end}}{{end}}<th scope="col">Cohort</th><th scope="col">Enrolled</th></tr>
     </thead>
     <tbody>{{range .Students}}{{template "student-row" .}}{{end}}</tbody>
   </table>
@@ -104,17 +105,17 @@
   {{range $index, $field := .Fields}}
   <td>{{if eq $index 0}}<a id="student-link-{{$.ID}}" data-student-link href="/management/students/{{$.ID}}"
     hx-get="/management/students/{{$.ID}}" hx-target="#student-dialog-content" hx-swap="innerHTML">{{$field.Value}}</a>{{else}}{{$field.Value}}{{end}}</td>
+  {{if eq $index 0}}<td>{{if $.IsActive}}<span class="status-badge status-active">Active</span>{{else}}<span class="status-badge status-suspended">Suspended</span>{{end}}</td>{{end}}
   {{end}}
   <td>{{cohortLabel .Cohort}}</td>
   <td><time datetime="{{.CreatedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.CreatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></td>
-  <td>{{if .IsActive}}<span class="status-badge status-active">Active</span>{{else}}<span class="status-badge status-suspended">Suspended</span>{{end}}</td>
 </tr>
 {{end}}
 
 {{define "student-detail"}}
 <div class="student-details" hx-sync="closest .student-details:queue all">
   <h1 id="student-heading">Student details</h1>
-  <p class="student-submitted">Enrolled <time datetime="{{.Student.CreatedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.Student.CreatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time> · Cohort {{cohortLabel .Student.Cohort}}</p>
+  <p class="student-submitted">Enrolled <time datetime="{{.Student.CreatedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.Student.CreatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time> in the {{cohortLabel .Student.Cohort}} cohort</p>
   {{range .Student.Fields}}{{template "student-field" .}}{{end}}
   {{template "student-billing" .}}
   <p id="student-billing-{{.Student.ID}}-error" class="student-request-error" role="alert" hidden></p>
@@ -209,7 +210,7 @@
         <td>{{.Number}}</td>
         <td>{{with .DueAt}}{{template "billing-time" .}}{{else}}Set when funded{{end}}</td>
         <td>{{money .AmountCents}}</td>
-        <td>{{if eq .Status "paid"}}Paid{{with .PaidAt}} {{template "billing-time" .}}{{end}}{{else if eq .Status "overdue"}}Overdue{{else if eq .Status "action_required"}}Action required{{else}}Scheduled{{end}}</td>
+        <td>{{if eq .Status "paid"}}<span class="status-badge" data-tone="ok">Paid</span>{{with .PaidAt}} {{template "billing-time" .}}{{end}}{{else if eq .Status "overdue"}}<span class="status-badge" data-tone="danger">Overdue</span>{{else if eq .Status "action_required"}}<span class="status-badge" data-tone="warn">Action required</span>{{else}}<span class="status-badge">Scheduled</span>{{end}}</td>
         <td>{{if .InvoiceReady}}<a href="/management/students/{{$.Student.ID}}/billing/invoices/{{.ID}}" target="_blank" rel="noopener noreferrer">View invoice</a>{{end}}</td>
       </tr>
       {{end}}

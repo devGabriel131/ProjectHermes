@@ -108,7 +108,9 @@ Every event that reports an error builds it with `logging.ErrorAttrs`. It expose
 | `database_slow_summary` | warn | `operation`, `count`, `worst_duration_ms`, `threshold_ms` | A flush found slow queries for a label |
 | `orm_warning` | warn | none | GORM called the logger's `Warn`; the message is discarded |
 | `session_cleanup_failed` | error | error attrs | The 5-minute expired-session delete failed (not logged once the auth manager is closing) |
-| `stripe_webhook_rejected` | warn | error attrs | Signature or payload verification failed; answered 400 |
+| `stripe_webhook_rejected` | warn | error attrs | Signature or payload verification failed; answered 400. Logged at most once a minute so unsigned POSTs cannot flood the log |
+| `staff_login_failed` | warn | none | A sign-in with an unknown username or wrong password; the username is never logged |
+| `staff_login_throttled` | warn | none | The sign-in limiter refused an attempt; at most one line per minute |
 | `stripe_webhook_store_failed` | error | error attrs, `event` (Stripe event id) | Storing an allowlisted event failed; answered 500 so Stripe retries |
 | `checkout_create_uncertain` | warn | error attrs, `attempt` (attempt reference) | Creating a Checkout Session ended with an unknown outcome; the attempt is marked `uncertain` |
 | `checkout_expire_unresolved` | warn | error attrs, `attempt` | A Session being expired could not be resolved; the attempt stays `expiring` |
@@ -163,7 +165,7 @@ Flush points are three distinct moments: right after the startup migration, ever
 - `internal/logging/http.go`: `Requests`, `Routes`, `RecordError`, `WithOperation`, `labelFromContext`, `requestID`, `validRequestID`, `requestMethod`, `statusWriter`
 - `internal/logging/database.go`: `DBLogger`, `slowQueryThreshold`, `Trace`, `Flush`, `database_slow_summary`, `orm_warning`
 - `main.go`: `startup_started`, `startup_failed`, `server_listening`, `shutdown_requested`, `shutdown_completed`, `shutdown_failed`, `server_failed`, `RAILWAY_SERVICE_NAME`
-- `internal/auth/http.go`: `session_cleanup_failed`, `deleteExpiredSessions`
+- `internal/auth/http.go`: `session_cleanup_failed`, `deleteExpiredSessions`, `staff_login_failed`, `staff_login_throttled`
 - `internal/billing/webhook.go`: `stripe_webhook_rejected`, `stripe_webhook_store_failed`
 - `internal/billing/checkout.go`: `checkout_create_uncertain`, `checkout_expire_unresolved`
 - `internal/billing/worker.go`: `billing_reconcile_failed`, `billing_review_required`, `logFailure`

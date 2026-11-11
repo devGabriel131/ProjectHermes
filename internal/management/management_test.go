@@ -1171,7 +1171,7 @@ func TestManagementBillingRoutes(t *testing.T) {
 
 	// The funded contract shows its paid time in the registry row.
 	_, registry := request(http.MethodGet, "/management/", http.StatusOK)
-	requireText("funded registry row", registry, true, `· paid <time datetime="`+now.Format(time.RFC3339)+`">`)
+	requireText("funded registry row", registry, true, `Paid <time datetime="`+now.Format(time.RFC3339)+`">`)
 
 	// GET fragment: out-of-range and unknown students are 404; a student without a contract still gets the shell.
 	for _, id := range missing {

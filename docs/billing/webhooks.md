@@ -33,7 +33,7 @@ The mode check runs before the allowlist check, so a wrong-mode event of an igno
 |---|---|---|---|
 | 200 | empty | Event stored; duplicate delivery of a stored event; type not in the allowlist | none |
 | 400 | `bad request` | The body could not be read for a reason other than size | none |
-| 400 | `invalid webhook` | `ConstructEvent` fails: missing or wrong signature, timestamp outside the 300 s tolerance, body not JSON, a thin event notification, or an event API version outside the SDK's release train. Also an allowlisted event with an empty event ID or `data.object.id` | `stripe_webhook_rejected` for `ConstructEvent` failures only |
+| 400 | `invalid webhook` | `ConstructEvent` fails: missing or wrong signature, timestamp outside the 300 s tolerance, body not JSON, a thin event notification, or an event API version outside the SDK's release train. Also an allowlisted event with an empty event ID or `data.object.id` | `stripe_webhook_rejected` for `ConstructEvent` failures only, at most once a minute |
 | 400 | `livemode mismatch` | `event.Livemode` differs from `STRIPE_MODE` | none |
 | 413 | `payload too large` | Body over 1 MiB (`maxWebhookBody`) | none |
 | 500 | `internal error` | The insert failed | `stripe_webhook_store_failed`, with the event ID |

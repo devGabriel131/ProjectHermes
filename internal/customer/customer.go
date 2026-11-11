@@ -25,12 +25,6 @@ var templates embed.FS
 // dbTimeout bounds each request's database work.
 const dbTimeout = 5 * time.Second
 
-// customerCSP matches the page's external HTMX, Google Fonts stylesheet, and fonts; the
-// hosted Stripe Checkout redirect needs only form-action, never Stripe.js or framing.
-const customerCSP = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://fonts.googleapis.com; " +
-	"font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; " +
-	"base-uri 'self'; form-action 'self' https://checkout.stripe.com;"
-
 type pageData struct {
 	students.Details
 	Path              string
@@ -104,7 +98,6 @@ func htmx(r *http.Request) bool { return r.Header.Get("HX-Request") == "true" }
 func withHeaders(h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy", customerCSP)
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Vary", "HX-Request")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -202,6 +195,15 @@ func (s *site) submit(w http.ResponseWriter, r *http.Request) {
 		data.Error = "No pudimos leer tu información. Intenta de nuevo."
 	} else if parsed, pin, ok := readSubmission(r.PostForm, &data); !ok {
 		status = http.StatusUnprocessableEntity
+	} else if allowed, err := s.links.SpendPinCheck(ctx, token); err != nil {
+		logging.RecordError(r, "save", err)
+		data.Error = "No pudimos guardar tu información. Intenta de nuevo."
+		s.render(w, r, name, data, http.StatusInternalServerError)
+		return
+	} else if !allowed {
+		// Out of PIN answers, or no usable open link: the lookup below tells which.
+		data.FieldErrors["pin"] = pinLimitMessage
+		status = http.StatusTooManyRequests
 	} else {
 		result, err := s.links.Submit(ctx, token, parsed, pin)
 		switch {
@@ -424,6 +426,18 @@ func (s *site) checkPin(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, "pin-status", data, http.StatusUnprocessableEntity)
 		return
 	}
+	allowed, err := s.links.SpendPinCheck(ctx, token)
+	if err != nil {
+		logging.RecordError(r, "lookup", err)
+		data.Error = "No pudimos verificar el PIN. Intenta de nuevo."
+		s.render(w, r, "pin-status", data, http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		data.Error = pinLimitMessage
+		s.render(w, r, "pin-status", data, http.StatusTooManyRequests)
+		return
+	}
 	taken, err := s.roster.PinTaken(ctx, pin)
 	switch {
 	case err != nil:
@@ -491,3 +505,4 @@ func fieldError(key string) string {
 }
 
 const pinTakenMessage = "Este PIN ya está en uso. Elige otro."
+const pinLimitMessage = "Este enlace alcanzó el límite de intentos de PIN. Comunícate con el equipo."

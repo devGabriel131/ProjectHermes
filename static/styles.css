@@ -1,59 +1,94 @@
-body {
-  margin: 1rem;
-  font-family: "Geist", ui-sans-serif, system-ui, sans-serif;
-}
+/* Staff and sign-in pages. A light workspace on the brand's own colors: the deep-teal rail and the
+   bulb-yellow "you are here" marker come from the logo; everything else stays quiet.
+   Customer pages never load this sheet. */
 
-input,
-button {
-  min-height: 44px;
-  font: inherit;
-}
-
-a {
-  overflow-wrap: anywhere;
-}
-
-/* Management: dark workspace. Tokens and color-scheme stay scoped to the management pages. */
 :root:has(> .management) {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 .management {
-  --canvas: #0f171c;
-  --chrome: #131d23;
-  --surface: #17222a;
-  --raised: #1f2d36;
-  --line: #26353e;
-  --edge: #33454f;
-  --control: #5b727d;
-  --text: #e9eff1;
-  --muted: #93a7af;
-  --accent: #7ccdd2;
-  --primary: #dfe58f;
-  --on-primary: #1c2205;
-  --danger: #ff9b95;
-  --warn: #e6c872;
-  --ok: #86d4a4;
-  --font-mono: "Geist Mono", ui-monospace, monospace;
-  --font-brand: "Marcellus", serif;
-  --gutter: clamp(1rem, 4vw, 2.5rem);
-  --inset: clamp(1rem, 3vw, 1.5rem);
+  --canvas: #f3f6f6;
+  --surface: #fff;
+  --sunken: #f6f9f9;
+  --line: #dde6e7;
+  --edge: #bfcdcf;
+  --text: #14282d;
+  --muted: #586d72;
+  --brand: #2c5961;
+  --brand-strong: #1f444c;
+  --brand-tint: #e2edee;
+  --rail: #163339;
+  --rail-line: #26494f;
+  --rail-text: #d5e3e5;
+  --rail-muted: #a3bcc0;
+  --bulb: #e4e78f;
+  --ok: #1d6b45;
+  --ok-tint: #e3f3ea;
+  --warn: #6e5100;
+  --warn-tint: #fbf0cf;
+  --danger: #b42318;
+  --danger-tint: #fdecea;
+  --neutral-tint: #ebf0f0;
+  --font-brand: "Marcellus", Georgia, serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --gutter: clamp(1rem, 3vw, 2rem);
+  --inset: 1.25rem;
+  --radius: 0.375rem;
+  --radius-panel: 0.625rem;
   margin: 0;
   background: var(--canvas);
   color: var(--text);
-  font-size: 0.9375rem;
-  line-height: 1.55;
+  font-family: "Figtree", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.875rem;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
-.management-workspace {
-  display: grid;
-  grid-template: "header header" auto "nav main" 1fr / 14rem minmax(0, 1fr);
-  min-height: 100svh;
+/* Element defaults carry no class specificity, so every rule below overrides them without a fight. */
+:where(.management) :where(h1, h2, h3, p, dl, dd) {
+  margin: 0;
+}
+
+:where(.management) h1 {
+  font-size: 1.375rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+:where(.management) h2 {
+  font-size: 0.9375rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+:where(.management) label {
+  font-weight: 600;
+}
+
+:where(.management) a {
+  color: var(--brand);
+  overflow-wrap: anywhere;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 0.2em;
+}
+
+:where(.management) a:hover {
+  text-decoration-color: currentColor;
+}
+
+:where(.management) code {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+:where(.management) svg {
+  flex: none;
 }
 
 .management :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--brand);
   outline-offset: 2px;
 }
 
@@ -62,36 +97,36 @@ a {
   outline: none;
 }
 
-.management svg {
-  flex: none;
-}
-
 .management ::selection {
-  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--brand) 22%, transparent);
 }
 
-/* Quiet underlines until hover, so links stay identifiable without shouting. */
-.management a {
-  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+.management [role="alert"] {
+  color: var(--danger);
+  font-weight: 600;
 }
 
-.management a:hover {
-  text-decoration-color: currentColor;
-}
-
-.management code {
-  font-family: var(--font-mono);
-  font-size: 0.875em;
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .management-skip-link {
   position: absolute;
+  z-index: 2;
   top: 0.75rem;
   left: 0.75rem;
-  padding: 0.625rem 1rem;
-  border-radius: 0.5rem;
-  background: var(--primary);
-  color: var(--on-primary);
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--radius);
+  background: var(--bulb);
+  color: var(--text);
   font-weight: 600;
   transform: translateY(-200%);
 }
@@ -100,131 +135,140 @@ a {
   transform: none;
 }
 
-.management-header {
-  grid-area: header;
+/* Shell: brand, navigation and account share one rail; the page sits beside it. */
+.management-workspace {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr);
+  min-height: 100svh;
+}
+
+.management-sidebar {
+  position: sticky;
+  top: 0;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem 1.5rem;
+  flex-direction: column;
+  gap: 1.25rem;
   box-sizing: border-box;
-  min-height: 5rem;
-  padding: 0.75rem var(--gutter);
-  border-bottom: 1px solid var(--line);
-  background: var(--chrome);
+  height: 100svh;
+  padding: 1.125rem 0.75rem 0.875rem;
+  overflow-y: auto;
+  background: var(--rail);
+  color: var(--rail-text);
+}
+
+.management-sidebar :focus-visible {
+  outline-color: var(--bulb);
 }
 
 .management-brand {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  color: var(--text);
+  gap: 0.625rem;
+  padding-inline: 0.5rem;
+  color: #fff;
   font-family: var(--font-brand);
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   letter-spacing: 0.02em;
   white-space: nowrap;
 }
 
 .management-brand img {
-  width: 3rem;
+  width: 2.25rem;
   height: auto;
 }
 
-.management-header-actions {
+.management-menu {
   display: flex;
-  flex-wrap: wrap;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.management-nav-link {
+  position: relative;
+  display: flex;
   align-items: center;
-  gap: 0.5rem 1rem;
-  min-width: 0;
+  gap: 0.625rem;
+  min-height: 2.25rem;
+  padding: 0 0.625rem;
+  border-radius: var(--radius);
+  color: var(--rail-muted);
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color 0.12s, color 0.12s;
+}
+
+.management-nav-link svg {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.management-nav-link:hover {
+  background: rgb(255 255 255 / 0.06);
+  color: #fff;
+}
+
+.management-nav-link[aria-current="page"] {
+  background: rgb(255 255 255 / 0.1);
+  color: #fff;
+}
+
+/* The bulb marks where you are; nothing else on staff pages is yellow. */
+.management-nav-link[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  inset-block: 0.5rem;
+  left: -0.75rem;
+  width: 0.25rem;
+  border-radius: 0 0.25rem 0.25rem 0;
+  background: var(--bulb);
+}
+
+.management-nav-trash {
+  margin-top: auto;
+}
+
+.management-account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.875rem 0.5rem 0;
+  border-top: 1px solid var(--rail-line);
 }
 
 .management-staff {
   min-width: 0;
-  color: var(--muted);
+  color: #fff;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
-/* Inline-start padding lines link text up with the brand at the gutter. */
-.management-menu {
-  grid-area: nav;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: 1.5rem 0.75rem 1.5rem calc(var(--gutter) - 0.875rem);
-  border-right: 1px solid var(--line);
-  background: var(--chrome);
-}
-
-.management-nav-link {
-  display: flex;
-  align-items: center;
-  gap: 0.625rem;
-  box-sizing: border-box;
-  min-height: 44px;
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.5rem;
-  color: var(--muted);
-  font-weight: 500;
-  text-decoration: none;
-  white-space: nowrap;
-  transition: background-color 0.15s, color 0.15s;
-}
-
-.management-nav-link:hover {
-  background: color-mix(in srgb, var(--text) 6%, transparent);
-  color: var(--text);
-}
-
-.management-nav-link[aria-current="page"] {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--text);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
-}
-
-.management-nav-link[aria-current="page"] svg {
-  color: var(--accent);
-}
-
-.management-nav-trash {
-  position: sticky;
-  bottom: 1.5rem;
-  margin-top: auto;
-}
-
 .management-links {
-  grid-area: main;
   box-sizing: border-box;
-  width: 100%;
-  padding: clamp(1.75rem, 4vw, 3rem) var(--gutter) 4rem;
+  width: min(100%, 80rem);
+  margin-inline: auto;
+  padding: 1.75rem var(--gutter) 4rem;
 }
 
 .management-page-heading {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 1.25rem 2rem;
-  margin-bottom: 2rem;
+  gap: 0.75rem 2rem;
+  margin-bottom: 1.25rem;
 }
 
 .management-page-heading > div {
   flex: 1 1 20rem;
 }
 
-.management h1 {
-  margin: 0;
-  font-size: clamp(1.75rem, 1.1rem + 2vw, 2.375rem);
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  line-height: 1.15;
-  text-wrap: balance;
-}
-
 .management-page-description {
-  max-width: 70ch;
-  margin: 0.5rem 0 0;
+  max-width: 72ch;
+  margin-top: 0.25rem;
   color: var(--muted);
-  font-size: 1rem;
 }
 
 /* Buttons: secondary by default; variants share this specificity and rely on order. */
@@ -233,33 +277,37 @@ a {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  padding: 0.5rem 1rem;
+  box-sizing: border-box;
+  min-height: 2.25rem;
+  padding: 0 0.875rem;
   border: 1px solid var(--edge);
-  border-radius: 0.5rem;
-  background: color-mix(in srgb, var(--text) 5%, transparent);
+  border-radius: var(--radius);
+  background: var(--surface);
   color: var(--text);
+  font: inherit;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
   touch-action: manipulation;
-  transition: background-color 0.15s, border-color 0.15s;
+  transition: background-color 0.12s, border-color 0.12s;
 }
 
 .management button:enabled:hover {
-  border-color: var(--control);
-  background: color-mix(in srgb, var(--text) 10%, transparent);
+  border-color: var(--muted);
+  background: var(--sunken);
 }
 
 button.management-button-primary,
 .management-login button {
-  border-color: var(--primary);
-  background: var(--primary);
-  color: var(--on-primary);
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #fff;
 }
 
 button.management-button-primary:enabled:hover,
 .management-login button:enabled:hover {
-  border-color: color-mix(in srgb, var(--primary) 82%, white);
-  background: color-mix(in srgb, var(--primary) 82%, white);
+  border-color: var(--brand-strong);
+  background: var(--brand-strong);
 }
 
 button.management-button-danger {
@@ -269,8 +317,23 @@ button.management-button-danger {
 }
 
 button.management-button-danger:enabled:hover {
-  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-color: transparent;
+  background: var(--danger-tint);
+}
+
+.management-account button {
+  min-height: 2rem;
+  padding: 0 0.625rem;
+  border-color: var(--rail-line);
+  background: transparent;
+  color: var(--rail-text);
+  font-weight: 500;
+}
+
+.management-account button:enabled:hover {
+  border-color: var(--rail-muted);
+  background: rgb(255 255 255 / 0.06);
+  color: #fff;
 }
 
 /* hx-disabled-elt disables buttons only while their request is in flight. */
@@ -279,42 +342,79 @@ button.management-button-danger:enabled:hover {
   opacity: 0.6;
 }
 
+.management :is(input:not([type="range"], [type="radio"], [type="hidden"]), select) {
+  box-sizing: border-box;
+  min-height: 2.25rem;
+  padding: 0 0.625rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.management :is(input, select):hover {
+  border-color: var(--muted);
+}
+
+.management :is(input, select)[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
 .management-panel {
   border: 1px solid var(--line);
-  border-radius: 1rem;
+  border-radius: var(--radius-panel);
   background: var(--surface);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.03), 0 1px 2px rgb(0 0 0 / 0.3);
+}
+
+.management-panel + .management-panel {
+  margin-top: 1.25rem;
 }
 
 .management-panel-heading {
-  padding: 1.25rem var(--inset);
+  padding: 0.875rem var(--inset);
   border-bottom: 1px solid var(--line);
 }
 
-.management h2 {
-  margin: 0;
-  font-size: 1.125rem;
-  font-weight: 600;
+.management-panel-heading p {
+  margin-top: 0.125rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
 }
 
-.management-panel-heading p {
-  margin: 0.25rem 0 0;
+.management-panel-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  padding: 0.625rem var(--inset);
+  border-top: 1px solid var(--line);
+}
+
+.management-retention-note {
   color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.management-back-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.25rem;
 }
 
 /* Live regions stay rendered and only gain strips while they have messages. */
 #link-status,
 #link-refresh-error {
-  margin: 0;
   padding-inline: var(--inset);
   overflow-wrap: anywhere;
 }
 
 #link-status:not(:empty),
 #link-refresh-error:not(:empty) {
-  padding-block: 0.75rem;
+  padding-block: 0.625rem;
   border-bottom: 1px solid var(--line);
-  background: var(--raised);
+  background: var(--sunken);
 }
 
 #link-refresh-error {
@@ -328,16 +428,16 @@ button.management-button-danger:enabled:hover {
   position: fixed;
   right: var(--gutter);
   bottom: var(--gutter);
-  margin: 0;
   pointer-events: none;
 }
 
 #copy-toast:not(:empty) {
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--line);
-  border-radius: 0.5rem;
-  background: var(--raised);
-  box-shadow: inset 3px 0 0 var(--accent), 0 0.5rem 1.5rem rgb(0 0 0 / 0.35);
+  padding: 0.625rem 0.875rem;
+  border-radius: var(--radius);
+  background: var(--text);
+  color: #fff;
+  font-weight: 500;
+  box-shadow: 0 0.5rem 1.5rem rgb(20 40 45 / 0.25);
   animation: copy-toast 3.5s ease-out forwards;
 }
 
@@ -377,107 +477,58 @@ button.management-button-danger:enabled:hover {
   }
 }
 
+/* Link registry. Each row is its own grid with fixed status and action columns, so names,
+   statuses and actions line up down the list. The wrappers dissolve so their children are cells. */
 #generated-links {
+  container-type: inline-size;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .management-link {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 9.5rem 12.5rem;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem 2rem;
-  padding: 1.25rem var(--inset);
+  gap: 0.125rem 1rem;
+  padding: 0.75rem var(--inset);
 }
 
 .management-link + .management-link {
   border-top: 1px solid var(--line);
 }
 
-.management-link-details {
-  display: grid;
-  flex: 1 1 20rem;
-  gap: 0.5rem;
-  min-width: 0;
-}
-
+.management-link-details,
 .management-link-heading {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.375rem 0.75rem;
+  display: contents;
 }
 
 .management-link-heading strong {
+  grid-area: 1 / 1;
   min-width: 0;
-  font-size: 1rem;
   font-weight: 600;
   overflow-wrap: anywhere;
+}
+
+.management-link-heading .management-link-unnamed {
+  color: var(--muted);
+  font-weight: 400;
 }
 
 .management-link-phone {
-  display: inline-flex;
+  grid-area: 1 / 2;
   color: var(--muted);
-  font-size: 0.875rem;
   font-variant-numeric: tabular-nums;
-}
-
-/* Status text always shows; color only reinforces it. */
-.management-link-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-  padding: 0 0.625rem;
-  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, currentColor 10%, transparent);
-  color: var(--muted);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  line-height: 1.6;
-  white-space: nowrap;
-}
-
-.management-link-status::before {
-  content: "";
-  width: 0.375rem;
-  height: 0.375rem;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.management-link-status[data-status="Opened"] {
-  color: var(--accent);
-}
-
-.management-link-status[data-status="In progress"] {
-  color: var(--warn);
-}
-
-.management-link-status[data-status="Awaiting payment"] {
-  color: var(--warn);
-}
-
-.management-link-status[data-status="Finished"] {
-  color: var(--ok);
-}
-
-.management-link-status[data-status="Expired"] {
-  border-style: dashed;
-  background: none;
-}
-
-.management-link-status[data-status="Canceled"] {
-  color: var(--danger);
 }
 
 .management-link-meta {
+  grid-area: 2 / 1 / auto / span 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.25rem;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
 }
 
 .management-link-meta time {
@@ -485,30 +536,26 @@ button.management-button-danger:enabled:hover {
 }
 
 .management-link-url {
-  display: block;
+  grid-area: 3 / 1 / auto / span 3;
+  justify-self: start;
   box-sizing: border-box;
-  width: fit-content;
   max-width: 100%;
-  min-height: 44px;
-  padding: 0.625rem 0.75rem;
+  margin-top: 0.5rem;
+  padding: 0.375rem 0.625rem;
   border: 1px solid var(--line);
-  border-radius: 0.5rem;
-  background: var(--canvas);
-  color: var(--accent);
-  text-underline-offset: 0.2em;
+  border-radius: var(--radius);
+  background: var(--sunken);
   font-family: var(--font-mono);
-  font-size: 0.875rem;
-}
-
-.management-link-url:hover {
-  border-color: var(--control);
+  font-size: 0.8125rem;
 }
 
 .management-link-actions {
+  grid-area: 1 / 4 / span 3;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
+  justify-content: flex-end;
+  gap: 0.25rem;
 }
 
 /* Rows without actions still hold a hidden copy-button placeholder. */
@@ -516,11 +563,100 @@ button.management-button-danger:enabled:hover {
   display: none;
 }
 
+/* Status text always shows; color only reinforces it. */
+.management-link-status,
+.management .status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.0625rem 0.5rem;
+  border-radius: 999px;
+  background: var(--tone-tint, var(--neutral-tint));
+  color: var(--tone, var(--muted));
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.management-link-status {
+  grid-area: 1 / 3 / span 2;
+  justify-self: start;
+}
+
+.management-link-status::before,
+.management .status-badge::before {
+  content: "";
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.management-link-status:is([data-status="Opened"], [data-status="In progress"]) {
+  --tone: var(--brand);
+  --tone-tint: var(--brand-tint);
+}
+
+.management-link-status[data-status="Awaiting payment"],
+.management .status-badge[data-tone="warn"] {
+  --tone: var(--warn);
+  --tone-tint: var(--warn-tint);
+}
+
+.management-link-status[data-status="Finished"],
+.management .status-active,
+.management .status-badge[data-tone="ok"] {
+  --tone: var(--ok);
+  --tone-tint: var(--ok-tint);
+}
+
+.management-link-status[data-status="Expired"] {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+.management-link-status[data-status="Canceled"],
+.management .status-suspended,
+.management .status-badge[data-tone="danger"] {
+  --tone: var(--danger);
+  --tone-tint: var(--danger-tint);
+}
+
+/* A narrow list stacks each row: name and status, then phone, history, URL and actions. */
+@container (max-width: 52rem) {
+  .management-link {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .management-link-phone {
+    grid-area: 2 / 1 / auto / span 2;
+  }
+
+  .management-link-status {
+    grid-area: 1 / 2;
+  }
+
+  .management-link-meta {
+    grid-area: 3 / 1 / auto / span 2;
+  }
+
+  .management-link-url {
+    grid-area: 4 / 1 / auto / span 2;
+  }
+
+  .management-link-actions {
+    grid-area: 5 / 1 / auto / span 2;
+    justify-content: flex-start;
+    margin-top: 0.375rem;
+  }
+}
+
 .management-empty {
   display: grid;
   justify-items: start;
-  gap: 0.5rem;
-  padding: 2.5rem var(--inset);
+  gap: 0.25rem;
+  padding: 2rem var(--inset);
   color: var(--muted);
 }
 
@@ -531,119 +667,117 @@ button.management-button-danger:enabled:hover {
 
 .management-empty svg {
   box-sizing: content-box;
-  width: 1.5rem;
-  height: 1.5rem;
+  width: 1.25rem;
+  height: 1.25rem;
   margin-bottom: 0.5rem;
-  padding: 0.75rem;
+  padding: 0.5rem;
   border-radius: 50%;
-  background: var(--raised);
-  color: var(--accent);
+  background: var(--brand-tint);
+  color: var(--brand);
 }
 
 .management-empty h3 {
-  margin: 0;
   color: var(--text);
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: 0.9375rem;
+  font-weight: 650;
 }
 
 .management-empty p {
   max-width: 60ch;
-  margin: 0;
 }
 
-.management-panel-footer {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem 1.5rem;
-  padding: 1rem var(--inset);
-  border-top: 1px solid var(--line);
-}
-
-.management-retention-note {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.875rem;
-}
-
-.management label {
-  font-weight: 600;
-}
-
-.management [role="alert"] {
-  color: var(--danger);
-  font-weight: 600;
-}
-
+/* Settings forms: the start date on the links page, the lifetime on Settings. */
 .management-settings-panel {
   max-width: 40rem;
 }
 
 .management-settings-form {
   display: grid;
-  gap: 0.75rem;
-  padding: 1.5rem var(--inset);
+  gap: 0.625rem;
+  padding: 1rem var(--inset) 1.25rem;
 }
 
 .management-settings-form p {
   max-width: 60ch;
-  margin: 0;
   color: var(--muted);
+  font-size: 0.8125rem;
 }
 
 .management-settings-form button {
   justify-self: start;
-  margin-top: 0.25rem;
 }
 
-.management-program-settings {
-  margin-bottom: 1.5rem;
+.management-settings-footer {
+  display: grid;
+  justify-items: start;
+  gap: 0.125rem;
+  padding: 0.625rem var(--inset);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.management-settings-footer [role="status"] {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.management-settings-footer [role="status"]:empty {
+  display: none;
+}
+
+/* A footer with nothing to say leaves no empty strip. */
+.management-settings-footer:not(:has(> :not(:empty))) {
+  display: none;
 }
 
 .management-program-settings input[type="date"] {
-  box-sizing: border-box;
-  width: min(100%, 20rem);
-  min-width: 0;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--control);
-  border-radius: 0.5rem;
-  background: var(--canvas);
-  color: var(--text);
-  font-size: 1rem;
+  width: 100%;
 }
 
-.management-program-settings input[aria-invalid="true"] {
-  border-color: var(--danger);
-}
-
-/* Wide screens: date and button on the left, the explanation beside them.
-   Below 960px the form stays one column in DOM order. */
-@media (min-width: 961px) {
+/* Wide screens: date and button share a line, the explanation sits beside them.
+   Narrower, the form stays one column in DOM order. */
+@media (min-width: 48rem) {
   .management-program-settings .management-settings-form {
-    grid-template: auto auto auto 1fr / minmax(0, 20rem) minmax(0, 1fr);
-    align-items: start;
-    column-gap: 2rem;
+    grid-template-columns: 12rem auto minmax(0, 1fr);
+    align-items: center;
+    column-gap: 0.75rem;
+  }
+
+  .management-program-settings .management-settings-form label {
+    grid-area: 1 / 1 / auto / span 2;
+  }
+
+  .management-program-settings .management-settings-form input {
+    grid-area: 2 / 1;
+  }
+
+  .management-program-settings .management-settings-form button {
+    grid-area: 2 / 2;
   }
 
   .management-program-settings #program-start-scope {
-    grid-column: 2;
-    grid-row: 1 / -1;
+    grid-area: 1 / 3 / span 2;
+    padding-inline-start: 1.25rem;
+    border-inline-start: 1px solid var(--line);
+  }
+
+  .management-program-settings #program-start-error {
+    grid-area: 3 / 1 / auto / span 3;
   }
 }
 
 .management-slider {
   display: flex;
   align-items: center;
-  gap: 1.25rem;
+  gap: 1rem;
 }
 
 .management-slider input {
   flex: 1;
   min-width: 0;
   margin: 0;
-  accent-color: var(--primary);
+  accent-color: var(--brand);
 }
 
 .management-slider span {
@@ -656,71 +790,73 @@ button.management-button-danger:enabled:hover {
   display: inline-block;
   min-width: 2ch;
   color: var(--text);
-  font-size: 1.375rem;
-  font-weight: 600;
+  font-size: 1.25rem;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
   text-align: end;
 }
 
-.management-settings-footer {
+/* Sign in: the brand above one card, on the rail color. */
+.management-signin {
   display: grid;
-  justify-items: start;
-  gap: 0.25rem;
-  padding: 1rem var(--inset);
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 0.875rem;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  justify-items: center;
+  gap: 1.5rem;
+  box-sizing: border-box;
+  min-height: 100svh;
+  padding: var(--gutter);
+  background: var(--rail);
 }
 
-.management-settings-footer p {
-  margin: 0;
+.management-signin .management-brand {
+  font-size: 1.625rem;
 }
 
-.management-settings-footer [role="status"] {
-  color: var(--text);
-}
-
-.management-back-link {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  color: var(--accent);
-  text-underline-offset: 0.2em;
+.management-signin .management-brand img {
+  width: 3rem;
 }
 
 .management-login {
-  width: min(100% - 2 * var(--gutter), 26rem);
-  margin: clamp(2rem, 8vh, 5rem) auto 3rem;
-  padding: clamp(1.5rem, 4vw, 2rem);
-  border: 1px solid var(--line);
-  border-radius: 1rem;
+  box-sizing: border-box;
+  width: min(100%, 23rem);
+  padding: 1.75rem;
+  border-radius: var(--radius-panel);
   background: var(--surface);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.03), 0 1.5rem 3rem rgb(0 0 0 / 0.35);
-}
-
-.management-login h1 {
-  font-size: 1.75rem;
+  box-shadow: 0 1.5rem 3rem rgb(0 0 0 / 0.25);
 }
 
 .management-login form {
   display: grid;
-  gap: 0.5rem;
-  margin-top: 1.5rem;
+  gap: 0.375rem;
+  margin-top: 1.25rem;
 }
 
 .management-login input {
-  box-sizing: border-box;
   width: 100%;
-  margin-bottom: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--control);
-  border-radius: 0.5rem;
-  background: var(--canvas);
-  color: var(--text);
+  margin-bottom: 0.625rem;
 }
 
+.management-login button {
+  margin-top: 0.25rem;
+}
+
+.management-login #login-error {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius);
+  background: var(--danger-tint);
+  font-weight: 500;
+}
+
+/* Students. The roster takes the full width; a single record does not. */
 .management-students {
-  min-width: 0;
+  width: 100%;
+}
+
+.management-students > .management-panel:has(> .student-details) {
+  max-width: 48rem;
+  box-sizing: border-box;
 }
 
 /* Live refreshes swap the records inside this wrapper; pass the panel's
@@ -732,33 +868,44 @@ button.management-button-danger:enabled:hover {
 .management .student-table-scroll {
   max-width: 100%;
   overflow-x: auto;
-  border-radius: inherit;
+  border-radius: 0 0 var(--radius-panel) var(--radius-panel);
 }
 
 .management .student-table {
   width: 100%;
-  min-width: 28rem;
   border-collapse: collapse;
   text-align: left;
+  font-variant-numeric: tabular-nums;
 }
 
 .management .student-table :is(th, td) {
-  min-width: 12rem;
-  max-width: 32rem;
-  padding: 0.75rem var(--inset);
-  vertical-align: top;
-  overflow-wrap: anywhere;
+  padding: 0.625rem 0.75rem;
+  white-space: nowrap;
 }
 
-.management .student-table th {
-  padding-block: 1rem;
+/* The name stays put while the other columns scroll sideways. */
+.management .student-table :is(th, td):first-child {
+  position: sticky;
+  left: 0;
+  padding-inline-start: var(--inset);
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--line);
+}
+
+.management .student-table :is(th, td):last-child {
+  padding-inline-end: var(--inset);
+}
+
+.management .student-table th,
+.management .student-table th:first-child {
+  border-bottom: 1px solid var(--line);
+  background: var(--sunken);
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   font-weight: 600;
-  background: color-mix(in srgb, var(--text) 3%, transparent);
 }
 
-.management .student-table tbody tr {
+.management .student-table tbody tr + tr {
   border-top: 1px solid var(--line);
 }
 
@@ -766,28 +913,26 @@ button.management-button-danger:enabled:hover {
   cursor: pointer;
 }
 
-.management .student-table tbody tr:is(:hover, :focus-within) {
-  background: color-mix(in srgb, var(--text) 4%, transparent);
+.management .student-table tbody tr:is(:hover, :focus-within) td {
+  background: var(--sunken);
 }
 
 .management .student-table [data-student-link] {
-  display: inline-block;
-  box-sizing: border-box;
-  min-height: 44px;
-  padding-block: 0.625rem;
-  color: var(--accent);
-  text-underline-offset: 0.2em;
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.management .student-table [data-student-link]:hover {
+  text-decoration: underline;
 }
 
 .management .student-table time {
-  display: inline-block;
-  padding-block: 0.625rem;
   color: var(--muted);
-  font-variant-numeric: tabular-nums;
 }
 
 /* Filters: one GET form, so a filtered roster is a bookmarkable URL. Status
-   radios read as tabs whose text lines up with the panel heading at the inset;
+   radios read as tabs whose text lines up with the table at the inset;
    the dropdowns sit at the far side and wrap below on narrow screens. */
 .management .student-filter {
   display: flex;
@@ -795,27 +940,27 @@ button.management-button-danger:enabled:hover {
   align-items: center;
   justify-content: space-between;
   column-gap: 1rem;
-  padding-inline: calc(var(--inset) - 0.75rem) var(--inset);
+  padding-inline: calc(var(--inset) - 0.625rem) var(--inset);
   border-bottom: 1px solid var(--line);
 }
 
 .management .student-filter-status {
   display: flex;
-  gap: 0.25rem;
+  gap: 0.125rem;
 }
 
 .management .student-filter-status label {
   display: inline-flex;
   align-items: center;
   box-sizing: border-box;
-  min-height: 44px;
+  min-height: 2.75rem;
   margin-bottom: -1px;
-  padding-inline: 0.75rem;
+  padding-inline: 0.625rem;
   border-bottom: 2px solid transparent;
   color: var(--muted);
   font-weight: 500;
   cursor: pointer;
-  transition: color 0.15s;
+  transition: color 0.12s;
 }
 
 .management .student-filter-status input {
@@ -830,21 +975,22 @@ button.management-button-danger:enabled:hover {
 }
 
 .management .student-filter-status label:has(:focus-visible) {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--brand);
   outline-offset: -2px;
 }
 
 .management .student-filter-status label:has(:checked) {
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--brand);
   color: var(--text);
+  font-weight: 600;
 }
 
 .management .student-filter-selects {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 1rem;
-  padding-block: 0.5rem;
-  padding-inline-start: 0.75rem;
+  padding-block: 0.375rem;
+  padding-inline-start: 0.625rem;
 }
 
 .management .student-filter-selects label {
@@ -852,131 +998,154 @@ button.management-button-danger:enabled:hover {
   align-items: center;
   gap: 0.5rem;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   font-weight: 500;
 }
 
 .management .student-filter-selects select {
-  min-height: 36px;
-  padding: 0 0.5rem;
-  border: 1px solid var(--control);
-  border-radius: 0.5rem;
-  background: var(--canvas);
-  color: var(--text);
-  font: inherit;
+  min-height: 2rem;
 }
 
 .management .student-empty {
-  padding: 2.5rem var(--inset);
+  padding: 2rem var(--inset);
   color: var(--muted);
 }
 
 .management .student-empty h3 {
-  margin: 0;
   color: var(--text);
-  font-size: 1rem;
+  font-size: 0.9375rem;
+  font-weight: 650;
 }
 
 .management .student-empty p {
   max-width: 60ch;
-  margin: 0.5rem 0 0;
+  margin-top: 0.25rem;
 }
 
-.management .student-empty a {
-  color: var(--accent);
-  text-underline-offset: 0.2em;
-}
-
+/* A student opens beside the roster: a full-height sheet from the right edge. */
 .management #student-dialog {
   box-sizing: border-box;
-  width: min(40rem, calc(100vw - 2rem));
+  width: min(40rem, 100vw);
   max-width: none;
-  max-height: calc(100dvh - 2rem);
-  margin: auto;
+  height: 100dvh;
+  max-height: none;
+  margin: 0 0 0 auto;
   padding: 0;
   overflow: auto;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
   color: var(--text);
-  box-shadow: 0 2rem 4rem rgb(0 0 0 / 0.5);
+  box-shadow: -1.5rem 0 3rem rgb(20 40 45 / 0.18);
 }
 
 .management #student-dialog::backdrop {
-  background: rgb(6 10 12 / 72%);
-  backdrop-filter: blur(3px);
+  background: rgb(20 40 45 / 0.35);
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .management #student-dialog[open] {
+    animation: student-sheet 0.18s ease-out;
+  }
+}
+
+@keyframes student-sheet {
+  from {
+    translate: 2rem 0;
+    opacity: 0;
+  }
+}
+
+/* One record: label, value and edit control on a line. The heading wrapper dissolves so its
+   label and edit link are cells of the field's grid. */
 .management .student-details {
   min-width: 0;
-  padding: var(--inset);
-}
-
-.management #student-dialog h1 {
-  font-size: 1.5rem;
+  padding: 1.25rem var(--inset);
 }
 
 .management .student-submitted {
-  margin: 0.5rem 0 1.5rem;
+  margin: 0.25rem 0 1rem;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   overflow-wrap: anywhere;
 }
 
 .management .student-field {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 1rem;
   min-width: 0;
-  padding-block: 1.25rem;
+  min-height: 2.75rem;
+  padding-block: 0.25rem;
   border-top: 1px solid var(--line);
 }
 
 .management .student-field-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  display: contents;
+}
+
+.management .student-field-heading h2 {
+  grid-area: 1 / 1;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 500;
 }
 
 .management .student-field-value {
-  margin: 0.5rem 0 0;
+  grid-area: 1 / 2;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
 .management .student-edit-link {
+  grid-area: 1 / 3;
   display: inline-flex;
-  flex: none;
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  min-width: 44px;
-  min-height: 44px;
-  padding: 0.5rem;
-  border: 1px solid var(--edge);
-  border-radius: 0.5rem;
-  color: var(--accent);
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius);
+  color: var(--muted);
 }
 
 .management .student-edit-link:hover {
-  background: var(--raised);
+  background: var(--sunken);
+  color: var(--brand);
+}
+
+.management .student-edit-link svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.management .student-field > :is(.student-saved, .student-request-error) {
+  grid-column: 2 / -1;
+  padding-bottom: 0.375rem;
 }
 
 .management .student-field-editor {
+  grid-column: 1 / -1;
   display: grid;
-  gap: 0.75rem;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding-block: 0.5rem;
 }
 
-.management .student-field-editor :is(input:not([type="hidden"]), select, textarea) {
-  box-sizing: border-box;
+.management .student-field-editor label {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.management .student-field-editor :is(input:not([type="hidden"]), select) {
   width: 100%;
   min-width: 0;
-  min-height: 44px;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--control);
-  border-radius: 0.5rem;
-  background: var(--canvas);
-  color: var(--text);
-  font: inherit;
 }
 
-.management .student-field-editor [aria-invalid="true"] {
-  border-color: var(--danger);
+.management .student-field-editor :is(.student-validation-error, .student-field-actions) {
+  grid-column: 2;
 }
 
 .management .student-field-actions {
@@ -987,47 +1156,33 @@ button.management-button-danger:enabled:hover {
 }
 
 .management .student-back-link {
-  margin: 0 0 1rem;
+  margin-bottom: 0.75rem;
 }
 
+/* Close stays in reach however long the record is. */
 .management .student-dialog-actions {
+  position: sticky;
+  bottom: 0;
   display: flex;
   justify-content: flex-end;
-  margin: 0;
-  padding-top: 1rem;
+  margin: 1.25rem calc(-1 * var(--inset)) -1.25rem;
+  padding: 0.75rem var(--inset);
   border-top: 1px solid var(--line);
+  background: var(--surface);
 }
 
 .management :is(.student-validation-error, .student-request-error, .student-saved) {
-  margin: 0.5rem 0 0;
   overflow-wrap: anywhere;
 }
 
 .management .student-request-error:not([hidden]) {
-  margin-bottom: 1rem;
+  margin-block: 0.5rem;
 }
 
 .management .student-saved {
-  color: var(--accent);
-  font-size: 0.875rem;
-}
-
-.management .status-badge {
-  display: inline-block;
-  padding: 0.125rem 0.625rem;
-  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, currentColor 10%, transparent);
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-
-.management .status-active {
   color: var(--ok);
-}
-
-.management .status-suspended {
-  color: var(--danger);
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
 
 .management .student-billing {
@@ -1038,71 +1193,114 @@ button.management-button-danger:enabled:hover {
 
 .management .student-billing-summary {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-  gap: 0.75rem 1.5rem;
-  margin: 0.75rem 0 0;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 0.75rem 1.25rem;
+  margin-top: 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .management .student-billing-summary dt {
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
 }
 
 .management .student-billing-summary dd {
-  margin: 0;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 
 .management .student-billing-review {
-  margin: 1rem 0 0;
+  margin-top: 1rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius);
+  background: var(--danger-tint);
   color: var(--danger);
   overflow-wrap: anywhere;
 }
 
 .management .student-billing-installments {
   width: 100%;
-  margin-top: 1rem;
+  margin-top: 1.25rem;
   border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
 }
 
 .management .student-billing-installments caption {
-  padding-bottom: 0.5rem;
-  font-weight: 600;
+  padding-bottom: 0.375rem;
+  font-weight: 650;
   text-align: left;
 }
 
 .management .student-billing-installments :is(th, td) {
   padding: 0.5rem 0.75rem 0.5rem 0;
+  border-top: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
 }
 
+.management .student-billing-installments a {
+  white-space: nowrap;
+}
+
 .management .student-billing-installments th {
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.management .student-billing-fee {
+  margin-top: 0.75rem;
 }
 
 .management .student-billing-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 1rem;
+  gap: 0.5rem;
   margin-top: 1rem;
 }
 
 .management .student-billing-portal:not(:empty) {
+  margin-top: 0.75rem;
   overflow-wrap: anywhere;
 }
 
-/* Dashboard: ledger rows, each label on the left and its figure on the right. */
+.management .student-billing-empty {
+  margin-top: 0.5rem;
+  color: var(--muted);
+}
+
+/* Dashboard: what needs a person first, then money, then the roster beside the pipeline. */
 .dashboard {
   display: grid;
-  gap: 1.5rem;
+  gap: 1.25rem;
+}
+
+.dashboard .management-panel + .management-panel {
+  margin-top: 0;
 }
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
-  gap: 1.5rem;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 1.25rem;
+}
+
+.dashboard-grid > .management-panel {
+  grid-column: span 7;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Side by side only where three count tiles still fit on one line. */
+@media (min-width: 86rem) {
+  .dashboard-grid > .management-panel:nth-child(2) {
+    grid-column: span 3;
+  }
+
+  .dashboard-grid > .management-panel:nth-child(3) {
+    grid-column: span 4;
+  }
 }
 
 .dashboard-attention {
@@ -1115,9 +1313,9 @@ button.management-button-danger:enabled:hover {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem 1rem;
+  gap: 0.25rem 0.75rem;
   box-sizing: border-box;
-  min-height: 3.5rem;
+  min-height: 2.75rem;
   padding: 0.25rem var(--inset);
 }
 
@@ -1126,81 +1324,151 @@ button.management-button-danger:enabled:hover {
 }
 
 .dashboard-attention a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
   margin-inline-start: auto;
-  color: var(--accent);
-  text-underline-offset: 0.2em;
+  font-weight: 600;
 }
 
 .dashboard-count {
   box-sizing: border-box;
-  min-width: 2rem;
-  padding: 0.125rem 0.5rem;
-  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  min-width: 1.75rem;
+  padding: 0.0625rem 0.5rem;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  background: var(--warn-tint);
   color: var(--warn);
-  font-weight: 600;
+  font-size: 0.8125rem;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
 
+/* Each tile draws a rule on its left and one across the top that runs to the list's right edge;
+   the list clips the outer ones. A short last row then still gets a full-width rule and no empty cell. */
 .dashboard-stats {
-  margin: 0;
+  display: grid;
+  flex: 1;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  overflow: hidden;
+}
+
+/* Money needs room for six-figure amounts; on a phone these tiles stack. */
+.dashboard-grid > .management-panel:first-child .dashboard-stats {
+  grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr));
 }
 
 .dashboard-stats > div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1rem var(--inset);
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 0.125rem;
+  padding: 1rem var(--inset) 1.125rem;
+  box-shadow: -1px 0 0 var(--line);
 }
 
-.dashboard-stats > div + div {
-  border-top: 1px solid var(--line);
+.dashboard-stats > div::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 100vw;
+  height: 1px;
+  background: var(--line);
 }
 
-.dashboard-stats dt small {
-  display: block;
+.dashboard-stats dt {
   color: var(--muted);
   font-size: 0.8125rem;
+  font-weight: 500;
 }
 
 .dashboard-stats dd {
-  margin: 0;
-  font-size: 1.5rem;
-  font-weight: 600;
+  font-size: 1.625rem;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
-  text-align: end;
+  line-height: 1.25;
+}
+
+.dashboard-stats dd small {
+  display: block;
+  margin-top: 0.125rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.4;
 }
 
 .dashboard-stats .dashboard-alert {
   color: var(--danger);
 }
 
-@media (max-width: 960px) {
+/* Narrow screens: the rail becomes a top bar with the navigation in a scrolling row. */
+@media (max-width: 60rem) {
   .management-workspace {
-    grid-template: "header" auto "nav" auto "main" 1fr / minmax(0, 1fr);
+    display: block;
   }
 
-  .management-menu {
+  .management-sidebar {
+    position: static;
+    display: grid;
+    grid-template: "brand account" auto "nav nav" auto / minmax(0, 1fr) auto;
+    gap: 0.5rem 1rem;
+    height: auto;
+    padding: 0.625rem var(--gutter) 0.5rem;
+  }
+
+  .management-sidebar .management-brand {
+    grid-area: brand;
+    padding: 0;
+  }
+
+  .management-sidebar .management-account {
+    grid-area: account;
+    padding: 0;
+    border: 0;
+  }
+
+  .management-sidebar .management-menu {
+    grid-area: nav;
     flex-direction: row;
-    flex-wrap: wrap;
-    padding: 0.5rem calc(var(--gutter) - 0.875rem);
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
+    margin-inline: -0.375rem;
+    overflow-x: auto;
   }
 
   .management-nav-trash {
-    position: static;
     margin-top: 0;
   }
 
-  .management-nav-link[aria-current="page"] {
-    box-shadow: inset 0 -2px 0 var(--accent);
+  .management-nav-link[aria-current="page"]::before {
+    inset: auto 0.625rem 0 0.625rem;
+    width: auto;
+    height: 0.1875rem;
+    border-radius: 0.1875rem 0.1875rem 0 0;
+  }
+}
+
+@media (max-width: 44rem) {
+  .management .student-field,
+  .management .student-field-editor {
+    grid-template-columns: 6.5rem minmax(0, 1fr) auto;
+  }
+}
+
+/* Fingers get 44px targets; pointers keep the denser desk layout. Last, so it wins ties. */
+@media (pointer: coarse) {
+  .management :is(button, select, input:not([type="radio"], [type="hidden"])),
+  .management .student-filter-selects select,
+  .management-nav-link,
+  .management-back-link {
+    min-height: 2.75rem;
+  }
+
+  .management .student-edit-link {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .management .student-table :is(th, td) {
+    padding-block: 0.75rem;
   }
 }

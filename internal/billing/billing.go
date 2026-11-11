@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stripe/stripe-go/v87"
+	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -121,6 +122,8 @@ type Service struct {
 	log     *slog.Logger
 	// wake nudges Run to drain now; buffered 1 so concurrent webhooks coalesce.
 	wake chan struct{}
+	// rejected keeps unauthenticated bad-signature POSTs from flooding the log; the first still logs at once.
+	rejected rate.Sometimes
 }
 
 // New creates a verified billing service.
@@ -135,13 +138,14 @@ func New(db *gorm.DB, client *stripe.Client, cfg Config, catalog Catalog, change
 		changed = func() {}
 	}
 	return &Service{
-		db:      db,
-		client:  client,
-		cfg:     cfg,
-		catalog: catalog,
-		changed: changed,
-		log:     log,
-		wake:    make(chan struct{}, 1),
+		db:       db,
+		client:   client,
+		cfg:      cfg,
+		catalog:  catalog,
+		changed:  changed,
+		log:      log,
+		wake:     make(chan struct{}, 1),
+		rejected: rate.Sometimes{Interval: time.Minute},
 	}, nil
 }
 

@@ -5,13 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Settings</title>
   <link rel="icon" type="image/vnd.microsoft.icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&amp;family=Geist+Mono:wght@400..600&amp;family=Marcellus&amp;display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400..700&amp;family=Marcellus&amp;display=swap">
   <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/settings.js" defer></script>
 </head>
 <body class="management management-workspace">
   <a class="management-skip-link" href="#main-content">Skip to content</a>
-  {{template "header" .Staff}}
-  {{template "navigation" "settings"}}
+  <header class="management-sidebar">
+    {{template "brand"}}
+    {{template "navigation" "settings"}}
+    {{template "account" .Staff}}
+  </header>
   <main id="main-content" class="management-links" tabindex="-1">
     <div class="management-page-heading">
       <div>
@@ -23,7 +27,7 @@
       <div class="management-panel-heading">
         <h2 id="link-lifetime-heading">Link lifetime</h2>
       </div>
-      <form class="management-settings-form" method="post" action="/management/settings" oninput="lifetime_days.value = lifetime.value">
+      <form class="management-settings-form" method="post" action="/management/settings">
         <label for="lifetime">Initial customer link access</label>
         <div class="management-slider">
           <input id="lifetime" name="lifetime" type="range" min="{{.Min}}" max="{{.Max}}" step="1"
@@ -38,7 +42,6 @@
       <div class="management-settings-footer">
         <p role="status">{{.Notice}}</p>
         {{with .Current.UpdatedBy}}<p>Last changed by {{.}} on {{$.Current.UpdatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}.</p>{{end}}
-        <p><a class="management-back-link" href="/management/">Back to links</a></p>
       </div>
     </section>
   </main>

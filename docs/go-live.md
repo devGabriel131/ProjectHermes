@@ -24,6 +24,10 @@ Decisions the owner must make and gaps the code knowingly carries before the app
 | Student field edits are not attributed | Link creation and cancellation (`CreatedBy`, `CanceledBy`), settings changes (`UpdatedBy`) and reinstatement requests (`RequestedBy`) record the staff username. A Student has no editor or edit-time column and the edit handler logs nothing, so who changed a name, email, phone, PIN or group is not recoverable. | An `updated_by` column or an audit table written in `UpdateField`'s transaction. See [Management students](management/students.md). |
 | Lists are unpaginated | `links.Store.List` loads every link and `students.Store.List` every student matching the filter; the pages render them all. Fine for two staff and mock data. | Pagination or cursors before sustained growth. See [Management overview](management/overview.md). |
 | Single replica | `live.Feed` fans change events out in process, so a page connected to one replica never hears about writes made through another. The login limiter is also per process, which multiplies the attempt budget by the replica count. The billing worker is replica-safe (leases and claims). | PostgreSQL `LISTEN/NOTIFY` for the feed and a shared limiter. See [Live updates](live-updates.md). |
+| Customer tokens reach Railway's HTTP log | Railway's edge logs the raw request path `[EXTERNAL]`, so `/customer/{token}` URLs are stored with source IP and user agent and are readable by anyone with project access; query strings are not logged. The app's own logs and the database hold no usable token. | Move the token out of the path: exchange it once for a path-scoped cookie from a query or fragment entry URL. Until then keep Railway access to the owner and never attach a log drain. |
+| No deploy gate | Both Railway environments deploy every push to `master` with "Wait for CI" off `[EXTERNAL]`, and the repository has no CI workflow; tests and `govulncheck` run only when someone runs them. `preview` deploys the same commit as `production`. | A GitHub Actions workflow (build, vet, integration tests, `govulncheck`) plus Railway's "Wait for CI". |
+| Request bodies have no read deadline | `ReadTimeout` is unset so the event stream survives; a stalled POST body holds one goroutine and at most 1 MiB, never a database connection. | A per-request read deadline once the payment path is proven safe under request-context cancellation. |
+| Railway secrets are unsealed | `STRIPE_API_KEY` and `STRIPE_WEBHOOK_SECRET` can be read back by any session with project access, and `LINK_ENCRYPTION_KEY` is set but read by no code `[EXTERNAL]`. | Seal the two Stripe secrets and delete the unused variable in the dashboard. |
 
 ## Source
 
@@ -39,3 +43,4 @@ Decisions the owner must make and gaps the code knowingly carries before the app
 - `internal/billing/billing.go`: `ErrNeedsReview`
 - `internal/billing/models.go`: `RequestedBy`
 - `internal/live/live.go`: `Feed`
+- `main.go`: `newServer`

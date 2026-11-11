@@ -24,7 +24,7 @@ erDiagram
         text auth_version "random, rotated by passwd and revoke"
     }
     sessions {
-        text token PK
+        text token PK "SHA-256 of the cookie value (HashTokenInStore)"
         bytea data "scs gob: username, auth_version, deadline"
         timestamptz expiry "index sessions_expiry_idx"
     }
@@ -153,6 +153,8 @@ sequenceDiagram
 | 500 | Database, hashing or token-renewal error. | `Could not sign in. Please try again.` |
 
 Every login page response carries `Cache-Control: no-store` and `Referrer-Policy: no-referrer`. `RenewToken` issues a fresh token on every sign-in (session-fixation defense). An unknown or malformed username is compared against `dummyHash`, an Argon2id hash of a random password made at startup, so it costs the same time and returns the same text as a wrong password.
+
+Failed sign-ins (`staff_login_failed`) and limiter refusals (`staff_login_throttled`, at most one a minute) log a warning with no fields; the submitted username is never logged. Successful sign-ins log nothing. The session cookie value is never stored: `sessions.token` holds its SHA-256, so a database read yields no usable cookie.
 
 ### Rate limiter
 

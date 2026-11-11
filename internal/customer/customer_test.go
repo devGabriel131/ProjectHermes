@@ -581,6 +581,29 @@ func TestFinalValidationAndEmailConfirmation(t *testing.T) {
 	}
 }
 
+func TestPinChecksAreCappedPerLink(t *testing.T) {
+	f := newFixture(t)
+	if err := f.db.Exec("UPDATE links SET pin_checks = ?", links.MaxPinChecks-1).Error; err != nil {
+		t.Fatal(err)
+	}
+	pin := url.Values{"pin": {"4821"}}.Encode()
+	if w := customerRequest(t, f.mux, http.MethodPost, f.path+"/pin", pin, true); w.Code != http.StatusOK {
+		t.Fatalf("last PIN check status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	w := customerRequest(t, f.mux, http.MethodPost, f.path+"/pin", pin, true)
+	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), pinLimitMessage) {
+		t.Fatalf("PIN check over budget: status %d, body %s", w.Code, w.Body.String())
+	}
+	w = customerRequest(t, f.mux, http.MethodPost, f.path, contactForm("Ada Lovelace").Encode(), true)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("final submit over budget status = %d, want 429: %s", w.Code, w.Body.String())
+	}
+	var submitted int64
+	if err := f.db.Raw("SELECT count(*) FROM links WHERE submitted_at IS NOT NULL").Scan(&submitted).Error; err != nil || submitted != 0 {
+		t.Fatalf("submitted links = %d, err %v; want 0", submitted, err)
+	}
+}
+
 func contactDetails(name string) students.Details {
 	return students.Details{Name: name, Email: "Ada+private@example.com", Phone: "+17872345678", Municipality: "San Juan", DateOfBirth: "2005-06-15", Gender: "Female"}
 }
@@ -638,7 +661,7 @@ func customerRequest(t *testing.T, handler http.Handler, method, path, body stri
 	handler.ServeHTTP(w, r)
 	// Unregistered obsolete routes use ServeMux's own 404 response.
 	if !strings.HasSuffix(path, "/draft") {
-		for name, want := range map[string]string{"Cache-Control": "no-store", "Content-Security-Policy": customerCSP,
+		for name, want := range map[string]string{"Cache-Control": "no-store",
 			"Referrer-Policy": "no-referrer", "Vary": "HX-Request", "Content-Type": "text/html; charset=utf-8"} {
 			if got := w.Header().Get(name); got != want {
 				t.Errorf("%s = %q, want %q", name, got, want)
@@ -891,12 +914,11 @@ func head(t *testing.T, server *httptest.Server, path string, htmx bool) int {
 		refresh = "true"
 	}
 	for name, want := range map[string]string{
-		"Cache-Control":           "no-store",
-		"Content-Security-Policy": customerCSP,
-		"Referrer-Policy":         "no-referrer",
-		"Vary":                    "HX-Request",
-		"Content-Type":            "text/html; charset=utf-8",
-		"HX-Refresh":              refresh,
+		"Cache-Control":   "no-store",
+		"Referrer-Policy": "no-referrer",
+		"Vary":            "HX-Request",
+		"Content-Type":    "text/html; charset=utf-8",
+		"HX-Refresh":      refresh,
 	} {
 		if got := resp.Header.Get(name); got != want {
 			t.Errorf("HEAD %s (htmx=%v): %s = %q, want %q", path, htmx, name, got, want)

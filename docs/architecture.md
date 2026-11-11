@@ -113,7 +113,7 @@ All GET patterns also answer HEAD (`ServeMux` behavior). On the outer mux, a met
 
 | Pattern | Wrapper after the global chain | Owner | Access |
 |---|---|---|---|
-| `GET /static/` | `http.FileServerFS(assets)` | main (embedded `static/`) | Public |
+| `GET /static/` | `http.FileServerFS(assets)`; `GET /static/{$}` answers 404 | main (embedded `static/`) | Public |
 | `GET /favicon.ico` | `http.ServeFileFS` | main | Public |
 | `GET /{$}` | 302 to `/management/` | main | Public |
 | `POST /management/login` | SCS `LoadAndSave` | `auth` | Public, rate-limited |

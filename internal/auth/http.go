@@ -47,6 +47,9 @@ type Manager struct {
 	// 64 MiB per check. Accepted risk: an outsider who keeps it spent blocks new
 	// staff sign-ins; key it per client IP if that ever happens.
 	limiter *rate.Limiter
+	log     *slog.Logger
+	// throttled keeps a guessing run from flooding the log with one line per refusal.
+	throttled rate.Sometimes
 }
 
 // New owns staff-session configuration and expired-session cleanup, not the SQL pool.
@@ -66,6 +69,7 @@ func New(db *gorm.DB, secureCookies bool, log *slog.Logger) (*Manager, error) {
 	}
 	sessions := scs.New()
 	sessions.Store = postgresstore.NewWithCleanupInterval(sqlDB, 0)
+	sessions.HashTokenInStore = true
 	sessions.Lifetime = 14 * 24 * time.Hour
 	sessions.Cookie.Name = cookieName
 	sessions.Cookie.Path = "/management/"
@@ -86,6 +90,8 @@ func New(db *gorm.DB, secureCookies bool, log *slog.Logger) (*Manager, error) {
 		page:        page,
 		dummyHash:   dummyHash,
 		limiter:     rate.NewLimiter(rate.Every(loginInterval), 2),
+		log:         log,
+		throttled:   rate.Sometimes{Interval: time.Minute},
 	}
 	go func() {
 		defer close(m.cleanupDone)
@@ -199,6 +205,7 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 	}
 	page := loginPage{Username: r.PostForm.Get("username")}
 	if !m.limiter.Allow() {
+		m.throttled.Do(func() { m.log.LogAttrs(r.Context(), slog.LevelWarn, "staff_login_throttled") })
 		w.Header().Set("Retry-After", strconv.Itoa(int(loginInterval/time.Second)))
 		page.Error = "Too many sign-in attempts. Please wait a few seconds and try again."
 		m.render(w, r, http.StatusTooManyRequests, page)
@@ -218,6 +225,7 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user == nil {
+		m.log.LogAttrs(ctx, slog.LevelWarn, "staff_login_failed")
 		page.Error = invalidCredentials
 		m.render(w, r, http.StatusUnauthorized, page)
 		return

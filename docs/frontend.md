@@ -1,6 +1,6 @@
 # Frontend
 
-The browser side of the site: server-rendered templates, htmx 2.0.11 and five small scripts, two standalone stylesheets. This page owns scripts, CSS, fonts, the customer CSP's effect on markup, accessibility behavior and no-JavaScript fallbacks. Staff routes and fragments are in [Management overview](management/overview.md); customer routes, headers and the CSP value are in [Customer flow](domain/customer-flow.md).
+The browser side of the site: server-rendered templates, htmx 2.0.11 and six small scripts, two standalone stylesheets. This page owns scripts, CSS, fonts, the site CSP's effect on markup, accessibility behavior and no-JavaScript fallbacks. Staff routes and fragments are in [Management overview](management/overview.md); customer routes, headers and the CSP value are in [Customer flow](domain/customer-flow.md).
 
 ## Assets
 
@@ -9,8 +9,7 @@ The browser side of the site: server-rendered templates, htmx 2.0.11 and five sm
 | File | Used by |
 |---|---|
 | `styles.css`, `customer.css` | staff and login pages; customer pages (never together) |
-| `logo.png` | staff header and login, `alt=""` because the brand text sits beside it |
-| `logo-mark.webp` | customer pages, `alt="Masterminds Programa ASVAB"` |
+| `logo-mark.webp` | staff rail and login (`alt=""`, the brand text sits beside it); customer pages (`alt="Masterminds Programa ASVAB"`) |
 | `payment-{visa,mastercard,amex,discover,applepay,googlepay}.svg` | badges on the customer payments page |
 | `favicon.ico` | every page |
 
@@ -21,7 +20,7 @@ The browser side of the site: server-rendered templates, htmx 2.0.11 and five sm
 | Customer links, Trash | yes | yes | yes | `management.js` |
 | Students list and details | yes | yes | yes | `students.js` |
 | Dashboard | yes | no | yes | none |
-| Settings | no | no | no | none (inline `oninput` on the slider) |
+| Settings | no | no | no | `settings.js` |
 | Login | no | no | no | none |
 | Customer form and edit view | yes | no | no | `customer.js` |
 | Customer payment return | yes | no | no | none |
@@ -30,9 +29,10 @@ The browser side of the site: server-rendered templates, htmx 2.0.11 and five sm
 | Script | Behavior |
 |---|---|
 | `management-live.js` | Opens `EventSource("/management/events")`; each message triggers `management-changed` on `body`. If the stream is closed (a deploy's 502, a sign-in redirect) it triggers one refresh, which sends a signed-out tab to login through `HX-Redirect`, and reconnects after 5 s. Does nothing unless `window.htmx` exists. |
-| `management-time.js` | `htmx.onLoad` rewrites every `<time datetime>` into the staff member's own time zone (`Intl.DateTimeFormat`, medium date, short time), including swapped-in rows. The server renders UTC. Settings has no script, so its "last changed" time stays UTC. |
+| `management-time.js` | `htmx.onLoad` rewrites every `<time datetime>` into the staff member's own time zone (`Intl.DateTimeFormat`, medium date, short time), including swapped-in rows. The server renders UTC. Settings does not load this script, so its "last changed" time stays UTC. |
 | `management.js` | Links page. Shows absolute URLs, create-and-copy, copy buttons, the copy toast, and errors in `#link-status` and `#link-refresh-error`. |
 | `students.js` | Student pages. A click anywhere on a row opens it (ignoring controls, modifier keys and text selection); `showModal()` when content arrives in `#student-dialog-content`; forces a swap on a 422 from the field editor and blocks swaps for other 4xx and 5xx; moves focus to the first input or the edit link after a field swap; returns focus to the opening row on close; shows per-field, billing and roster errors ([Students](management/students.md)). |
+| `settings.js` | Settings page. Mirrors the lifetime slider into its `<output>` because the site CSP blocks inline handlers. |
 | `customer.js` | Customer form. Live email and confirmation check through `setCustomValidity`; ignores autosave responses for controls that left the page; keeps `aria-invalid` in step with the status region; focuses the first invalid field after a 422; on status 0 shows "No se guardó. Verifica tu conexión e intenta de nuevo." |
 
 ## Management refresh
@@ -119,24 +119,24 @@ Draft controls use `hx-trigger="change"`, not `blur`: the browser's `change` eve
 
 The two sheets are standalone; customer pages never load `styles.css`.
 
-- **`styles.css`** (staff and login). A few global rules (`input, button` get `min-height: 44px`, links wrap long text), then the management workspace. Color tokens (`--canvas`, `--surface`, `--accent`, `--primary`, `--danger`) are scoped to `.management`, and `:root:has(> .management)` sets `color-scheme: dark`. `.management-workspace` is a grid of header, 14 rem navigation and main; below 960 px it becomes one column with a wrapping navigation row. Sections follow the pages: header and navigation, buttons, live regions and copy toast, link list, program start and lifetime forms, students and dialog, dashboard.
+- **`styles.css`** (staff and login). Everything is scoped to `.management`: a light workspace on the logo's colors. Tokens (`--canvas`, `--surface`, `--brand`, `--rail`, `--bulb`, status tints) sit at the top, and `:root:has(> .management)` sets `color-scheme: light`. `.management-workspace` is a grid of a 15 rem deep-teal rail (`.management-sidebar`: brand, navigation, account) and main; `--bulb` yellow appears only as the current-page marker, rail focus rings and the skip link. Below 60 rem the rail becomes a top bar with a scrolling navigation row. Controls are 36 px for mouse users and 44 px under `pointer: coarse`. A student opens as a full-height sheet from the right edge. Sections follow the pages: shell, buttons, live regions and copy toast, link list, program start and lifetime forms, sign in, students and sheet, dashboard.
 - **`customer.css`** (customer pages). Tokens on `.customer` (`--ink`, `--teal`, `--bulb`, `--danger`), `color-scheme: light`, mobile-first single column (`--column` 32 rem, 38 rem on the agreement, 62 rem on payments) with breakpoints at 40 rem and 56 rem. Sections: page frame, progress steps, type, notices, buttons, welcome, student form, checkbox and radio, agreement, plans, funded readout, payment return.
-- **No theme switch.** Neither sheet has a `prefers-color-scheme` rule: staff are always dark, customers always light.
-- **Fonts.** Staff pages load Geist (400 to 700), Geist Mono (400 to 600) and Marcellus for the brand name; customer pages load Figtree (400 to 700) and Marcellus. All use `display=swap` and fall back to system stacks.
+- **No theme switch.** Neither sheet has a `prefers-color-scheme` rule: both are light only.
+- **Fonts.** Staff and customer pages load Figtree (400 to 700) and Marcellus for the brand name. All use `display=swap` and fall back to system stacks. Staff monospace text (one-time link URL, billing review codes) uses a system monospace stack because the CSP allows no second family.
 
-## Customer CSP implications
+## Site CSP implications
 
-The exact header is in [Customer flow](domain/customer-flow.md). What it forces on markup:
+`secureHeaders` in `main.go` sends one policy on every response, staff, login, customer and static. The exact header is `sitePolicy`; the customer flow does not set its own ([Customer flow](domain/customer-flow.md)). What it forces on markup:
 
 | Directive | Consequence |
 |---|---|
-| `script-src 'self' https://cdn.jsdelivr.net` | No inline script, `on*` attribute or `hx-on`. Behavior lives in `/static/customer.js`; htmx loads from jsDelivr under SRI. |
-| `style-src 'self' https://fonts.googleapis.com` | No inline `<style>` or `style=` attribute. htmx would inject indicator styles, so every customer page that loads it sets `includeIndicatorStyles: false` in its `htmx-config` meta. |
+| `script-src 'self' https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js` | No inline script, `on*` attribute or `hx-on`. Behavior lives in `/static/*.js`; the one pinned htmx file loads from jsDelivr under SRI, so an htmx upgrade changes the template URL and `sitePolicy` together. |
+| `style-src 'self' https://fonts.googleapis.com` | No inline `<style>` or `style=` attribute. htmx would inject indicator styles, so every page that loads it sets `includeIndicatorStyles: false` in its `htmx-config` meta. |
 | `font-src https://fonts.gstatic.com` | Font files only from Google Fonts. |
-| `connect-src 'self'` | Autosave, PIN check and payment polling talk only to this origin. |
+| `connect-src 'self'` | Autosave, PIN check, live events and payment polling talk only to this origin. |
 | `img-src 'self' data:`, `object-src 'none'`, `frame-ancestors 'none'` | Local images only, no plugins, no embedding. |
 
-Staff and login pages send no CSP and no framing protection, which is why the Settings slider can use an inline `oninput` ([Management overview](management/overview.md)).
+The same middleware sends `Strict-Transport-Security: max-age=31536000` (no `includeSubDomains`), `X-Content-Type-Options: nosniff` and `X-Robots-Tag: noindex, nofollow`. `GET /static/` itself answers 404, so the asset list is not browsable.
 
 ## Accessibility
 
@@ -147,7 +147,7 @@ Staff and login pages send no CSP and no framing protection, which is why the Se
 | Live regions: `role="status"` for `#link-status`, `#link-refresh-error`, `#copy-toast`, "Saved.", the portal link area and per-field `#save-status-{field}`; `role="alert"` for validation and request errors; `aria-live="assertive"` on the customer `#form-error` | staff and customer pages |
 | `aria-invalid` plus `aria-describedby` on invalid controls | staff field editor, program start date, lifetime, customer form |
 | Native `<dialog>` with `aria-labelledby`, opened by `showModal()`; focus goes to the first control, and back to the opening row on close | student dialog |
-| Controls at least 44 px tall (`min-height: 44px`, or 2.75 rem and more on the customer sheet); `:focus-visible` outlines in both sheets | both |
+| Controls at least 44 px tall on touch (`pointer: coarse`; 36 px with a mouse on staff pages; 2.75 rem and more on the customer sheet); `:focus-visible` outlines in both sheets | both |
 | `prefers-reduced-motion`: the toast only fades, the payment spinner stops | `styles.css`, `customer.css` |
 | Decorative SVG icons are `aria-hidden`; customer icons also set `focusable="false"` | all templates |
 | `lang`: `en` on staff pages, `es-PR` on customer pages, `lang="es"` on the Spanish start-date panel; `translate="no"` on the brand | all templates |
@@ -169,7 +169,7 @@ Staff and login pages send no CSP and no framing protection, which is why the Se
 
 ## Deliberate choices
 
-- **`includeIndicatorStyles: false`.** Removing it makes htmx inject inline styles that the customer CSP blocks.
+- **`includeIndicatorStyles: false`.** Removing it makes htmx inject inline styles that the site CSP blocks.
 - **Clipboard write started inside the click.** Moving it after the response breaks Safari's user-activation rule.
 - **The htmx tag repeated per template.** The management pages (`index.html`, `students.html`, `dashboard.html`) and the customer `index.html` each define their own complete HTML documents rather than sharing a global layout template.
 
@@ -181,13 +181,13 @@ Staff and login pages send no CSP and no framing protection, which is why the Se
 - `static/management.js`: `ClipboardItem`, `requestSequence`, `startAction`, `showCreationFeedback`, `link-tokens`
 - `static/students.js`: `showModal`, `requestError`, `htmx:beforeSwap`
 - `static/customer.js`: `setCustomValidity`, `reconcileEmails`, `ignoreDetachedDraft`
-- `static/styles.css`: `color-scheme`, `management-workspace`, `prefers-reduced-motion`, `copy-toast`
+- `static/styles.css`: `color-scheme`, `management-workspace`, `management-sidebar`, `prefers-reduced-motion`, `copy-toast`
 - `static/customer.css`: `color-scheme`, `--column`, `prefers-reduced-motion`
 - `internal/management/templates/index.html`: `hx-preserve`, `copy-toast`, `hx-confirm`, `management-skip-link`
 - `internal/management/templates/students.html`: `student-dialog`, `noscript`
-- `internal/management/templates/settings.html`: `oninput`
+- `internal/management/templates/settings.html`: `settings.js`
 - `internal/customer/templates/index.html`: `htmx-config`, `includeIndicatorStyles`, `hx-trigger`, `customer.js`
 - `internal/customer/templates/payment-return.html`: `noscript`, `hx-trigger`
 - `internal/customer/templates/icons.html`: `focusable`
 - `internal/auth/templates/login.html`: `management-skip-link`
-- `internal/customer/customer.go`: `customerCSP`, `withHeaders`
+- `internal/customer/customer.go`: `withHeaders`

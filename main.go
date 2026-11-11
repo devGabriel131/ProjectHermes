@@ -209,6 +209,25 @@ func run(log *slog.Logger, args []string) error {
 	return serve(signalContext, server, listener, log, slow, 10*time.Second)
 }
 
+// sitePolicy is the Content-Security-Policy of every response. Pages load local assets, the one
+// pinned htmx file and Google Fonts; forms post here or to hosted Checkout. An htmx upgrade
+// changes the script URL in the templates and here together.
+const sitePolicy = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js; " +
+	"style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; " +
+	"frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self' https://checkout.stripe.com;"
+
+// secureHeaders sets the browser policies every response carries, whichever handler answers.
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := w.Header()
+		header.Set("Content-Security-Policy", sitePolicy)
+		header.Set("Strict-Transport-Security", "max-age=31536000")
+		header.Set("X-Content-Type-Options", "nosniff")
+		header.Set("X-Robots-Tag", "noindex, nofollow")
+		next.ServeHTTP(w, r)
+	})
+}
+
 func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.Manager, biller *billing.Service, log *slog.Logger) (*http.Server, error) {
 	store := links.New(db, feed.Changed)
 	roster := students.New(db, feed.Changed)
@@ -216,6 +235,7 @@ func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.M
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.FileServerFS(assets))
+	mux.Handle("GET /static/{$}", http.NotFoundHandler())
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFileFS(w, r, assets, "static/favicon.ico")
 	})
@@ -236,7 +256,7 @@ func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.M
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           logging.Requests(log, http.NewCrossOriginProtection().Handler(logging.Routes(mux))),
+		Handler:           logging.Requests(log, secureHeaders(http.NewCrossOriginProtection().Handler(logging.Routes(mux)))),
 		ErrorLog:          logging.ServerErrorLog(log),
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      10 * time.Second,

@@ -5,17 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dashboard</title>
   <link rel="icon" type="image/vnd.microsoft.icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false}'>
   <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js"
     integrity="sha384-2OatzQy1H+Zd/IIrjr1TcuDGqLXeHhbooAyJY1KdQMKnr4LZ22k31GBLdYKHmVjg"
     crossorigin="anonymous" defer></script>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&amp;family=Geist+Mono:wght@400..600&amp;family=Marcellus&amp;display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400..700&amp;family=Marcellus&amp;display=swap">
   <link rel="stylesheet" href="/static/styles.css">
   <script src="/static/management-live.js" defer></script>
 </head>
 <body class="management management-workspace">
   <a class="management-skip-link" href="#main-content">Skip to content</a>
-  {{template "header" .Staff}}
-  {{template "navigation" "dashboard"}}
+  <header class="management-sidebar">
+    {{template "brand"}}
+    {{template "navigation" "dashboard"}}
+    {{template "account" .Staff}}
+  </header>
   <main id="main-content" class="management-links" tabindex="-1">
     <div class="management-page-heading">
       <div>
@@ -67,6 +71,18 @@
 </section>
 
 <div class="dashboard-grid">
+  <section class="management-panel" aria-labelledby="dashboard-tuition-heading">
+    <div class="management-panel-heading">
+      <h2 id="dashboard-tuition-heading">Tuition</h2>
+    </div>
+    <dl class="dashboard-stats">
+      <div><dt>Collected</dt><dd>{{money .Billing.CollectedCents}}<small>After refunds, before Stripe fees</small></dd></div>
+      <div><dt>Outstanding</dt><dd>{{money .Billing.OutstandingCents}}<small>Funded students only</small></dd></div>
+      <div><dt>Overdue</dt><dd{{if .Billing.OverdueCents}} class="dashboard-alert"{{end}}>{{money .Billing.OverdueCents}}<small>{{.Billing.OverdueInstallments}} {{plural .Billing.OverdueInstallments "installment" "installments"}}</small></dd></div>
+      <div><dt>Due in the next {{.Days}} days</dt><dd>{{money .Billing.DueSoonCents}}<small>{{.Billing.DueSoonInstallments}} {{plural .Billing.DueSoonInstallments "installment" "installments"}}</small></dd></div>
+    </dl>
+  </section>
+
   <section class="management-panel" aria-labelledby="dashboard-students-heading">
     <div class="management-panel-heading">
       <h2 id="dashboard-students-heading">Students</h2>
@@ -78,18 +94,6 @@
     </dl>
   </section>
 
-  <section class="management-panel" aria-labelledby="dashboard-tuition-heading">
-    <div class="management-panel-heading">
-      <h2 id="dashboard-tuition-heading">Tuition</h2>
-    </div>
-    <dl class="dashboard-stats">
-      <div><dt>Collected<small>After refunds, before Stripe fees</small></dt><dd>{{money .Billing.CollectedCents}}</dd></div>
-      <div><dt>Outstanding<small>Funded students only</small></dt><dd>{{money .Billing.OutstandingCents}}</dd></div>
-      <div><dt>Overdue<small>{{.Billing.OverdueInstallments}} {{plural .Billing.OverdueInstallments "installment" "installments"}}</small></dt><dd{{if .Billing.OverdueCents}} class="dashboard-alert"{{end}}>{{money .Billing.OverdueCents}}</dd></div>
-      <div><dt>Due in the next {{.Days}} days<small>{{.Billing.DueSoonInstallments}} {{plural .Billing.DueSoonInstallments "installment" "installments"}}</small></dt><dd>{{money .Billing.DueSoonCents}}</dd></div>
-    </dl>
-  </section>
-
   <section class="management-panel" aria-labelledby="dashboard-enrollment-heading">
     <div class="management-panel-heading">
       <h2 id="dashboard-enrollment-heading">Enrollment, last {{.Days}} days</h2>
@@ -98,7 +102,7 @@
       <div><dt>Links created</dt><dd>{{.LinksSent}}</dd></div>
       <div><dt>Forms completed</dt><dd>{{.FormsCompleted}}</dd></div>
       <div><dt>Paid enrollments</dt><dd>{{.Billing.FundedRecently}}</dd></div>
-      <div><dt>Links waiting on a customer<small>Right now</small></dt><dd>{{.LinksWaiting}}</dd></div>
+      <div><dt>Open links</dt><dd>{{.LinksWaiting}}<small>Waiting on a customer right now</small></dd></div>
     </dl>
   </section>
 </div>

@@ -4,7 +4,8 @@ import { check, sleep } from 'k6';
 import { SharedArray } from 'k6/data';
 import { Counter, Trend } from 'k6/metrics';
 
-export const BASE = (__ENV.BASE_URL || 'https://paymentwebsite-production.up.railway.app').replace(/\/+$/, '');
+if (!__ENV.BASE_URL) throw new Error('BASE_URL is required, for example BASE_URL=http://host.docker.internal:3000');
+export const BASE = __ENV.BASE_URL.replace(/\/+$/, '');
 export const ORIGIN = BASE.match(/^https?:\/\/[^/]+/)[0];
 export const intEnv = (key, fallback) => (__ENV[key] ? parseInt(__ENV[key], 10) : fallback);
 export const OFFSET = intEnv('OFFSET', 0);

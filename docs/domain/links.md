@@ -85,6 +85,8 @@ A link already issued keeps its own expiry when the lifetime setting changes. A 
 
 `Store.SaveDraft` writes one column per call, for the six registry fields only (`students.FindField`). PIN and group are not draftable, so `/draft/pin` is an unknown field. The UPDATE requires a usable link with `submitted_at IS NULL` and `column <> value`: an unchanged value writes nothing and publishes nothing. Empty values are accepted, so a customer can clear a field. Drafts are validated with `required=false`: empty passes, non-empty must be valid ([Students](students.md)).
 
+`Store.SpendPinCheck` adds one to `pin_checks` on a usable, unsubmitted link while it is under `MaxPinChecks` (30) and reports whether it did. The customer PIN check and every valid final submit call it first, so one link can obtain at most 30 PIN availability answers. It publishes nothing.
+
 ## Submit
 
 `Store.Submit` is one guarded `UPDATE links`: it writes the six contact columns and the PIN, sets `submitted_at = now()` and `expires_at = now() + 168 hours`. It creates no Student. The guards are: usable, not yet submitted, and no enrolled Student holding the PIN ([Students](students.md) covers the PIN rules). A replay on a submitted link changes nothing, so the deadline never moves. When the UPDATE touches no row, `saveResult` re-reads the link to separate "unusable" (404) from "already submitted" from "PIN held".

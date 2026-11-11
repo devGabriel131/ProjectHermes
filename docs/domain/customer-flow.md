@@ -14,7 +14,7 @@ The token in the path is the only credential. There is no sign-in.
 | GET | `/customer/{token}/forms` | Same checks. Renders the contact form with drafts prefilled and autosave wired. |
 | POST | `/customer/{token}` | Final submit: six contact fields, `email_confirm` and PIN. Success: 303 to `/agreement`. |
 | POST | `/customer/{token}/draft/{field}` | Autosave one registry field. Answers only a status fragment ("Guardado.") and never redraws the form. |
-| POST | `/customer/{token}/pin` | Advisory PIN check, saves nothing ("PIN disponible."). A POST keeps the PIN out of URLs and access logs. |
+| POST | `/customer/{token}/pin` | Advisory PIN check, saves nothing ("PIN disponible."). A POST keeps the PIN out of URLs and access logs. Each answer, and each valid final submit, spends one of `links.MaxPinChecks` (30) per link; past that the answer is 429, so a link holder cannot enumerate held PINs. Staff reissue the link to reset the budget. |
 | GET, POST | `/customer/{token}/edit` | Reopens the contact form of a submitted link before payment. |
 | GET, POST | `/customer/{token}/agreement` | Terms and acceptance ([Agreement](agreement.md)). |
 | GET, POST | `/customer/{token}/payments` | Plan choice and Checkout start; after funding, the persisted plan and schedule. |
@@ -151,13 +151,7 @@ While `pending`, the status block polls itself with `hx-trigger="every 1.5s"`, c
 
 ## Headers and CSP
 
-`withHeaders` sets these before the handler runs, so 404, 422 and 500 carry them too: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `Vary: HX-Request`, `Content-Type: text/html; charset=utf-8`, and:
-
-```
-default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self' https://checkout.stripe.com;
-```
-
-No inline script or style is allowed. htmx loads from jsDelivr with an integrity hash, and a `htmx-config` meta tag sets `includeIndicatorStyles` to false, so htmx injects no inline indicator style. `form-action` allows the hosted Checkout redirect and nothing else from Stripe: no Stripe.js, no framing.
+`withHeaders` sets these before the handler runs, so 404, 422 and 500 carry them too: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `Vary: HX-Request` and `Content-Type: text/html; charset=utf-8`. The Content-Security-Policy, HSTS and `nosniff` come from the server-wide `secureHeaders` middleware ([Frontend](../frontend.md)): scripts only from `'self'` and the pinned htmx file, no inline script or style, `frame-ancestors 'none'`. A `htmx-config` meta tag sets `includeIndicatorStyles` to false, so htmx injects no inline indicator style. `form-action` allows the hosted Checkout redirect and nothing else from Stripe: no Stripe.js, no framing.
 
 Redirects carry no contact data: targets are paths only, plus Stripe's URL. An HTMX `POST` gets 200 with `HX-Redirect` instead of 303.
 
@@ -184,7 +178,7 @@ Anyone holding a link can read the customer's submitted details, edit them while
 
 ## Source
 
-- `internal/customer/customer.go`: `RegisterRoutes`, `withHeaders`, `customerCSP`, `dbTimeout`, `site.render`, `site.found`, `redirectCustomer`, `site.view`, `site.submit`, `site.draft`, `locked`, `site.edit`, `parseCustomerForm`, `readSubmission`, `site.checkPin`, `pinTakenMessage`
+- `internal/customer/customer.go`: `RegisterRoutes`, `withHeaders`, `dbTimeout`, `site.render`, `site.found`, `redirectCustomer`, `site.view`, `site.submit`, `site.draft`, `locked`, `site.edit`, `parseCustomerForm`, `readSubmission`, `site.checkPin`, `pinTakenMessage`
 - `internal/customer/payments.go`: `site.payments`, `site.paymentReturn`, `maxReturnPolls`
 - `internal/customer/agreement.go`: `agreement`
 - `internal/customer/templates/index.html`: `htmx-config`, `includeIndicatorStyles`, `customer-content`

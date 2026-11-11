@@ -58,7 +58,9 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 
 	event, err := webhook.ConstructEvent(body, r.Header.Get("Stripe-Signature"), s.cfg.WebhookSecret)
 	if err != nil {
-		s.log.LogAttrs(r.Context(), slog.LevelWarn, "stripe_webhook_rejected", logging.ErrorAttrs(err)...)
+		s.rejected.Do(func() {
+			s.log.LogAttrs(r.Context(), slog.LevelWarn, "stripe_webhook_rejected", logging.ErrorAttrs(err)...)
+		})
 		http.Error(w, "invalid webhook", http.StatusBadRequest)
 		return
 	}

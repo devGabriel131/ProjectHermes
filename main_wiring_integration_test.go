@@ -35,6 +35,7 @@ func TestRoutesAreMounted(t *testing.T) {
 	}{
 		{"root redirects to management", http.MethodGet, "/", http.StatusFound, "/management/"},
 		{"stylesheet is public", http.MethodGet, "/static/styles.css", http.StatusOK, ""},
+		{"static directory is not listed", http.MethodGet, "/static/", http.StatusNotFound, ""},
 		{"favicon is public", http.MethodGet, "/favicon.ico", http.StatusOK, ""},
 		{"management prefix requires sign-in", http.MethodGet, "/management/events", http.StatusSeeOther, "/management/"},
 		{"webhook bypasses sign-in and rejects unsigned events", http.MethodPost, "/webhooks/stripe", http.StatusBadRequest, ""},
@@ -44,6 +45,10 @@ func TestRoutesAreMounted(t *testing.T) {
 			if rec.Code != test.status || rec.Header().Get("Location") != test.location {
 				t.Fatalf("%s %s: status %d, Location %q; want %d, %q",
 					test.method, test.path, rec.Code, rec.Header().Get("Location"), test.status, test.location)
+			}
+			if rec.Header().Get("Content-Security-Policy") != sitePolicy || rec.Header().Get("X-Content-Type-Options") != "nosniff" ||
+				rec.Header().Get("Strict-Transport-Security") == "" {
+				t.Fatalf("%s %s: missing browser policy headers, got %v", test.method, test.path, rec.Header())
 			}
 		})
 	}

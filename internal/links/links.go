@@ -22,6 +22,9 @@ const pinIndex = "idx_link_pin"
 
 const tokenBytes = 32
 
+// MaxPinChecks bounds the PIN availability answers one link can obtain, so a link holder cannot enumerate the PINs students hold.
+const MaxPinChecks = 30
+
 // Link stores only the token's digest, so a database leak yields no usable URL.
 type Link struct {
 	TokenHash []byte `gorm:"primaryKey;not null;check:token_hash_size,octet_length(token_hash) = 32"`
@@ -45,9 +48,11 @@ type Link struct {
 	ExpiresAt time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 	// CreatedBy and CanceledBy are the staff usernames behind each action.
 	// Empty audit values mean the corresponding action has not occurred.
-	CreatedBy  string            `gorm:"not null;default:''"`
-	CanceledBy string            `gorm:"not null;default:''"`
-	Student    *students.Student `gorm:"foreignKey:SourceLinkHash;references:TokenHash;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
+	CreatedBy  string `gorm:"not null;default:''"`
+	CanceledBy string `gorm:"not null;default:''"`
+	// PinChecks counts the PIN availability answers this link has obtained; MaxPinChecks caps it.
+	PinChecks int               `gorm:"not null;default:0"`
+	Student   *students.Student `gorm:"foreignKey:SourceLinkHash;references:TokenHash;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 }
 
 // Status is a link's customer progress as shown to staff.
@@ -263,6 +268,18 @@ UPDATE links
 		return PinTaken, nil
 	}
 	return s.saveResult(ctx, digest, result, PinTaken)
+}
+
+// SpendPinCheck counts one PIN availability answer against the usable, unsubmitted link behind
+// token and reports whether the link still had budget.
+func (s *Store) SpendPinCheck(ctx context.Context, token string) (bool, error) {
+	digest, ok := tokenDigest(token)
+	if !ok {
+		return false, nil
+	}
+	result := s.active(ctx, digest).Where("submitted_at IS NULL AND pin_checks < ?", MaxPinChecks).
+		Update("pin_checks", gorm.Expr("pin_checks + 1"))
+	return result.RowsAffected == 1, result.Error
 }
 
 var errNotEnrollable = errors.New("links: link is not submitted or already enrolled")

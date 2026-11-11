@@ -58,7 +58,7 @@ All staff templates are parsed together from `templates/*.html`, so `header`, `n
 
 `render` sets `Content-Type: text/html; charset=utf-8`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and `Vary: HX-Request`, then writes the status and template. `Vary` is required because one URL returns a full page to a browser and a fragment to htmx. The invoice redirect sets `no-store` itself. Plain-text errors (`http.Error`) skip `render`.
 
-Staff pages send no `Content-Security-Policy` and no framing protection, unlike the customer pages ([Customer flow](../domain/customer-flow.md)). The inline `oninput` on the settings slider depends on that. Cross-origin POSTs are rejected server-wide by `CrossOriginProtection` ([Architecture](../architecture.md)), not by this package.
+Staff pages carry the same server-wide CSP and browser headers as every response ([Frontend](../frontend.md)), so the settings slider's output is updated by `/static/settings.js`, not an inline handler. Cross-origin POSTs are rejected server-wide by `CrossOriginProtection` ([Architecture](../architecture.md)), not by this package.
 
 ## HTMX contract
 
@@ -91,7 +91,7 @@ Other POST handlers read no body. `GET /management/events` clears its own write 
 ## Lists and live regions
 
 - **Unpaginated.** `links.Store.List` returns every link, oldest first, and `list` filters by tab in Go; `students.Store.List` returns every matching student, newest first. Both carry `ponytail` ceilings; see [Go-live](../go-live.md).
-- **Pages with a stream.** Links, Trash, students list, student details and the dashboard load `management-live.js`. Settings and login load no script and open no stream.
+- **Pages with a stream.** Links, Trash, students list, student details and the dashboard load `management-live.js`. Settings loads only `settings.js`, login loads no script; neither opens a stream.
 - **Settings publish no event.** `settings.Store` has no `changed` callback, so a start date or lifetime write does not refresh other tabs.
 - **Auth is checked when the stream connects.** A tab signed out later keeps its open stream; the next event triggers a refresh, which the 401 plus `HX-Redirect` turns into the login page.
 
@@ -111,7 +111,7 @@ Other POST handlers read no body. `GET /management/events` clears its own write 
 - `internal/management/templates/index.html`: `link-rows`, `link-url`, `link-copy`, `result`, `link-tokens`, `navigation`
 - `internal/management/templates/students.html`: `student-records`, `student-detail`, `student-billing`
 - `internal/management/templates/dashboard.html`: `dashboard-content`
-- `internal/management/templates/settings.html`: `oninput`
+- `internal/management/templates/settings.html`: `settings.js`
 - `internal/auth/http.go`: `Require`
 - `internal/billing/billing.go`: `providerBudget`
 - `internal/live/live.go`: `Feed`

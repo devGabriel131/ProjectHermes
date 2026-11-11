@@ -75,7 +75,7 @@ The fake is whatever handler a test supplies: billing worker and checkout tests 
 
 | Test | Guards |
 |---|---|
-| `TestRoutesAreMounted` | `/` redirects to `/management/`; `/static/styles.css` and `/favicon.ico` are public; `/management/events` requires sign-in; `POST /webhooks/stripe` bypasses sign-in and rejects unsigned events with 400 |
+| `TestRoutesAreMounted` | `/` redirects to `/management/`; `/static/styles.css` and `/favicon.ico` are public; `/static/` answers 404; `/management/events` requires sign-in; `POST /webhooks/stripe` bypasses sign-in and rejects unsigned events with 400; every response carries the site CSP, `nosniff` and HSTS |
 | `TestPublicCustomerIgnoresStaffSessions` | with the `sessions` table made unavailable, `HEAD /customer/{token}` for an unknown token still answers 404 with the customer headers, an empty body, no `Vary: Cookie` and no cookie, while `/management/` answers 500 |
 | `TestCrossOriginWritesAreRejected` | management, customer and login `POST`s with cross-site `Sec-Fetch-Site` or foreign `Origin` get 403; without either header they reach their handlers |
 
@@ -103,7 +103,7 @@ Tests do not prove randomness statistically. No test proves these browser checks
 `loadtest/` holds three k6 scripts (`journey.js`, `safety.js`, `checkout.js`) and shared helpers; usage, token files and slices are in [loadtest/README.md](../loadtest/README.md). Two facts matter here:
 
 - "No test calls Stripe" holds for Go tests only. `checkout.js` creates **real Stripe sandbox Checkout Sessions** through the app it targets.
-- `BASE_URL` defaults to the deployed Railway URL (`loadtest/lib.js`), so a run without `BASE_URL` hits the deployed service ([Railway](operations/railway.md)).
+- `BASE_URL` is required by `loadtest/lib.js`; a run without it fails instead of picking a host ([Railway](operations/railway.md)).
 
 ## Known test gaps
 

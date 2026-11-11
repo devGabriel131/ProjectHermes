@@ -1,8 +1,8 @@
 # k6 load and safety scripts
 
-**Warning:** by default these scripts hit the deployed app (BASE_URL defaults to https://paymentwebsite-production.up.railway.app) and checkout.js creates real Stripe sandbox Checkout Sessions through it. Set BASE_URL to a local server to avoid that.
+**Warning:** `BASE_URL` is required and a run fails without it; checkout.js creates real Stripe sandbox Checkout Sessions through whatever host it names. Point it at a local server to avoid that.
 
-Scripts for the deployed app (`BASE_URL`, default `https://paymentwebsite-production.up.railway.app`). Tokens come from a JSON
+Scripts for the app at `BASE_URL` (required, no default). Tokens come from a JSON
 array of 43-char link tokens at `TOKENS_FILE` (default `/tmp/k6/tokens.json`); each script uses `OFFSET`..`OFFSET+COUNT`.
 Tokens are only revealed when staff create a link (POST /management/links) and this repository has no generator, so build the file from links you created.
 One link is one customer and can be submitted once, so use disjoint slices per script and never reuse a token across runs.
