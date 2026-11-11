@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/students"
-	"paymentwebsite/internal/testdb"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/links"
+	"projecthermes/internal/students"
+	"projecthermes/internal/testdb"
 )
 
 func TestBillingModelsMigration(t *testing.T) {

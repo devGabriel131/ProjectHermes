@@ -17,9 +17,9 @@ import (
 
 	"gorm.io/gorm"
 
-	"paymentwebsite/internal/settings"
-	"paymentwebsite/internal/students"
-	"paymentwebsite/internal/testdb"
+	"projecthermes/internal/settings"
+	"projecthermes/internal/students"
+	"projecthermes/internal/testdb"
 )
 
 // staff is the acting account for tests that aren't about the audit trail.
@@ -304,7 +304,7 @@ func TestOpenObservesConcurrentCancellation(t *testing.T) {
 	}
 }
 
-func TestConcurrentSubmissionEnrollsOnce(t *testing.T) {
+func TestConcurrentSubmissionSubmitsOnce(t *testing.T) {
 	db, store, ctx := testStore(t)
 	issued, err := store.Create(ctx, staff, later)
 	if err != nil {
@@ -364,8 +364,7 @@ func TestConcurrentSubmissionEnrollsOnce(t *testing.T) {
 	}
 }
 
-// A PIN belongs to one enrolled student: of two links racing for it, one enrolls and the other
-// stays open with its draft, free to pick another PIN.
+// A PIN belongs to one submitted link at a time: of two links racing for it, one submits and the other stays open with its draft, free to pick another PIN.
 func TestConcurrentSubmissionsCannotShareAPin(t *testing.T) {
 	db, store, ctx := testStore(t)
 	tokens := make([]string, 2)
@@ -1387,6 +1386,18 @@ func TestPayBeforeStudentInvariants(t *testing.T) {
 	db.Model(&students.Student{}).Count(&count)
 	if count != 1 {
 		t.Fatalf("expected exactly 1 student after second enroll, got %d", count)
+	}
+
+	// (c2) Enroll cleared link 1's PIN, but the Student holds it: a fourth link cannot submit it
+	issued4, err := store.Create(ctx, staff, later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved, err := store.Submit(ctx, issued4.Token, contactDetails("Customer Four"), pin); err != nil || saved != PinTaken {
+		t.Fatalf("submit with an enrolled student's pin: saved=%v, err=%v; want PinTaken", saved, err)
+	}
+	if link4, err := store.Lookup(ctx, issued4.Token); err != nil || link4 == nil || link4.SubmittedAt != nil || link4.Pin != "" {
+		t.Fatalf("link 4 should stay unsubmitted: %+v, err=%v", link4, err)
 	}
 
 	// (d) a submitted unpaid link past expires_at is Expired and Trashed(), but the same link with PaidAt set is Finished and not trashed; Archived flips 24 h after PaidAt, not after SubmittedAt.

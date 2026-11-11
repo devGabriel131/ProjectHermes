@@ -15,11 +15,11 @@ import (
 	"github.com/alexedwards/argon2id"
 	"gorm.io/gorm"
 
-	"paymentwebsite/internal/auth"
-	"paymentwebsite/internal/billing/billingtest"
-	"paymentwebsite/internal/live"
-	"paymentwebsite/internal/logging"
-	"paymentwebsite/internal/testdb"
+	"projecthermes/internal/auth"
+	"projecthermes/internal/billing/billingtest"
+	"projecthermes/internal/live"
+	"projecthermes/internal/logging"
+	"projecthermes/internal/testdb"
 )
 
 // unknownToken has a valid customer-token shape but matches no link.

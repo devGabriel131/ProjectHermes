@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"paymentwebsite/internal/payments"
+	"projecthermes/internal/payments"
 )
 
 func TestPlans(t *testing.T) {

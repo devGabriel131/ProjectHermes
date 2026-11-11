@@ -12,7 +12,7 @@ Commands:
   remove <username>  Delete an account.
   list               List account usernames.
 
-Runs deployed PaymentWebsite in amused-light, production by default.
+Runs deployed ProjectHermes in amused-light, production by default.
 Requires Railway CLI login and a registered SSH key, not local DATABASE_URL.
 Passwords are entered twice at hidden interactive terminal prompts.'
     exit 0
@@ -30,5 +30,5 @@ end
 exec railway ssh \
     --project a0207263-4a1b-4174-b693-5830fd46e486 \
     --environment "$_flag_environment" \
-    --service PaymentWebsite \
+    --service ProjectHermes \
     -- /app/out user $argv

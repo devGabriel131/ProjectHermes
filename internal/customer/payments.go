@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/logging"
-	"paymentwebsite/internal/payments"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/logging"
+	"projecthermes/internal/payments"
 )
 
 type planView struct {

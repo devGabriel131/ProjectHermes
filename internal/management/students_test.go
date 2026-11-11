@@ -16,9 +16,9 @@ import (
 
 	"gorm.io/gorm"
 
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/settings"
-	"paymentwebsite/internal/students"
+	"projecthermes/internal/links"
+	"projecthermes/internal/settings"
+	"projecthermes/internal/students"
 )
 
 // pinSeq hands each enrolled test student its own PIN: the roster refuses duplicates.

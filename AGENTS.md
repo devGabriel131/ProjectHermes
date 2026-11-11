@@ -15,3 +15,7 @@ All data is mock. Losing links, sessions, settings, or any rows in a migration i
 - Pushes to `master` auto-deploy; push only with approval.
 - After an approved push, use the Railway MCP to confirm the deployment reached SUCCESS, read its logs, and test the change live in its environment.
 - Server-side dependency changes (`go.mod`/`go.sum`, Go toolchain, build or deploy config) first get a preview deployment in a non-production Railway environment, verified there, before merge or push to `master`.
+
+## Docs
+
+- A change that alters behavior updates the matching page in docs/ in the same change; docs/README.md maps each area to its page.

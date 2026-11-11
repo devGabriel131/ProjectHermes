@@ -17,8 +17,8 @@ import (
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 
-	"paymentwebsite/internal/logging"
-	"paymentwebsite/internal/testdb"
+	"projecthermes/internal/logging"
+	"projecthermes/internal/testdb"
 )
 
 func TestSignIn(t *testing.T) {

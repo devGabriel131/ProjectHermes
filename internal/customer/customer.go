@@ -1,3 +1,4 @@
+// Package customer serves the private /customer/{token} pages: contact form with autosave, agreement, plan choice, Stripe Checkout start and the token-free payment return page. It holds handlers only; every write goes through the links store or billing. See docs/domain/customer-flow.md.
 package customer
 
 import (
@@ -10,12 +11,12 @@ import (
 	"strings"
 	"time"
 
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/logging"
-	"paymentwebsite/internal/payments"
-	"paymentwebsite/internal/settings"
-	"paymentwebsite/internal/students"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/links"
+	"projecthermes/internal/logging"
+	"projecthermes/internal/payments"
+	"projecthermes/internal/settings"
+	"projecthermes/internal/students"
 )
 
 //go:embed templates/*.html
@@ -213,7 +214,7 @@ func (s *site) submit(w http.ResponseWriter, r *http.Request) {
 			redirectCustomer(w, r, data.Path+"/agreement")
 			return
 		case result == links.PinTaken:
-			// Another student won the PIN after the live check: redraw below with what was typed.
+			// Another submitted link or enrolled student holds the PIN: redraw below with what was typed.
 			data.FieldErrors["pin"] = pinTakenMessage
 			status = http.StatusUnprocessableEntity
 		default:
@@ -296,7 +297,7 @@ func locked(w http.ResponseWriter, r *http.Request) {
 
 // edit reopens the contact form of a submitted link until payment is confirmed or in flight.
 // The edit has no autosave: one POST updates the link's contact snapshot, then returns to the agreement.
-// Submission time, expiry, link snapshot, and accepted terms never change.
+// Submission time, expiry and accepted terms never change.
 func (s *site) edit(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "form", Editing: true}

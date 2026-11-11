@@ -2,15 +2,15 @@ services:
   db:
     image: postgres:17
     environment:
-      POSTGRES_DB: paymentwebsite
-      POSTGRES_USER: paymentwebsite
-      POSTGRES_PASSWORD: paymentwebsite
+      POSTGRES_DB: hermes
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U paymentwebsite -d paymentwebsite"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hermes"]
       interval: 2s
       timeout: 2s
       retries: 15

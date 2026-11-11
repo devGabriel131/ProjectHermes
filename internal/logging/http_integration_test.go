@@ -20,16 +20,16 @@ import (
 	"github.com/alexedwards/argon2id"
 	"gorm.io/gorm"
 
-	"paymentwebsite/internal/auth"
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/billing/billingtest"
-	"paymentwebsite/internal/customer"
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/logging"
-	"paymentwebsite/internal/management"
-	"paymentwebsite/internal/settings"
-	"paymentwebsite/internal/students"
-	"paymentwebsite/internal/testdb"
+	"projecthermes/internal/auth"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/billing/billingtest"
+	"projecthermes/internal/customer"
+	"projecthermes/internal/links"
+	"projecthermes/internal/logging"
+	"projecthermes/internal/management"
+	"projecthermes/internal/settings"
+	"projecthermes/internal/students"
+	"projecthermes/internal/testdb"
 )
 
 const (

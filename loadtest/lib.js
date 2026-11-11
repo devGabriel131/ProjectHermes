@@ -1,4 +1,4 @@
-// Shared helpers for the PaymentWebsite k6 scripts. Offline-safe: no remote imports.
+// Shared helpers for the ProjectHermes k6 scripts. Offline-safe: no remote imports.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { SharedArray } from 'k6/data';

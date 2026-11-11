@@ -54,7 +54,7 @@ var fields = []Field{
 	},
 }
 
-// pinField lives only on the Student: it is never drafted: it is only written at final submit, so abandoned drafts never reserve a PIN.
+// pinField is staff-only and never drafted: the customer enters it once, at final submit, so abandoned drafts never reserve a PIN. The Link holds it from submit until payment; the Student holds it afterwards.
 var pinField = Field{
 	Key: "pin", Label: "PIN", InputType: "text",
 	Value: func(s Student) string { return s.Pin },

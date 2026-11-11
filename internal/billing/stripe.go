@@ -14,7 +14,7 @@ import (
 
 	"github.com/stripe/stripe-go/v87"
 
-	"paymentwebsite/internal/payments"
+	"projecthermes/internal/payments"
 )
 
 const (

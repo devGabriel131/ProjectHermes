@@ -1,3 +1,4 @@
+// Package management serves the staff pages: customer links and Trash, students with billing actions, the dashboard and settings. Access is enforced by auth.Require in main.go, not here. See docs/management/overview.md.
 package management
 
 import (
@@ -11,12 +12,12 @@ import (
 	"strconv"
 	"time"
 
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/logging"
-	"paymentwebsite/internal/payments"
-	"paymentwebsite/internal/settings"
-	"paymentwebsite/internal/students"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/links"
+	"projecthermes/internal/logging"
+	"projecthermes/internal/payments"
+	"projecthermes/internal/settings"
+	"projecthermes/internal/students"
 )
 
 //go:embed templates/*.html

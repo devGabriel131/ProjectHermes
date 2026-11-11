@@ -15,12 +15,12 @@ import (
 	"time"
 
 	"gorm.io/gorm"
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/billing/billingtest"
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/payments"
-	"paymentwebsite/internal/students"
-	"paymentwebsite/internal/testdb"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/billing/billingtest"
+	"projecthermes/internal/links"
+	"projecthermes/internal/payments"
+	"projecthermes/internal/students"
+	"projecthermes/internal/testdb"
 )
 
 type customerUpdate struct{ ID, Name, Email string }
@@ -210,6 +210,9 @@ func (m *mockStripeServer) with(f func()) {
 	f()
 }
 
+// setupTestEnvironment seeds a Link and, only so staff-keyed entry points (ForStudent, ReconcileStudent)
+// can reach the contract, a Student. Production creates the Student at funding (links.Enroll), so a
+// contract never has one before funding.
 func setupTestEnvironment(t *testing.T, mock *mockStripeServer) (*gorm.DB, *billing.Service, []byte, uint64) {
 	t.Helper()
 	allModels := append([]any{&links.Link{}, &students.Student{}}, billing.Models()...)

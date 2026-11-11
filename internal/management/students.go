@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/logging"
-	"paymentwebsite/internal/students"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/logging"
+	"projecthermes/internal/students"
 )
 
 type studentFieldView struct {

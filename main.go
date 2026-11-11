@@ -1,3 +1,4 @@
+// Command projecthermes serves the enrollment, agreement and tuition-payment site, and runs the staff account CLI (projecthermes user ...). See docs/architecture.md and docs/operations/startup-shutdown.md.
 package main
 
 import (
@@ -18,15 +19,15 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	"paymentwebsite/internal/auth"
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/customer"
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/live"
-	"paymentwebsite/internal/logging"
-	"paymentwebsite/internal/management"
-	"paymentwebsite/internal/settings"
-	"paymentwebsite/internal/students"
+	"projecthermes/internal/auth"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/customer"
+	"projecthermes/internal/links"
+	"projecthermes/internal/live"
+	"projecthermes/internal/logging"
+	"projecthermes/internal/management"
+	"projecthermes/internal/settings"
+	"projecthermes/internal/students"
 )
 
 //go:embed static
@@ -56,7 +57,7 @@ func main() {
 	}
 	service := os.Getenv("RAILWAY_SERVICE_NAME")
 	if service == "" {
-		service = "PaymentWebsite"
+		service = "ProjectHermes"
 	}
 	environment := os.Getenv("RAILWAY_ENVIRONMENT_NAME")
 	if environment == "" {

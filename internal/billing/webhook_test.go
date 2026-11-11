@@ -16,9 +16,9 @@ import (
 	"time"
 
 	"github.com/stripe/stripe-go/v87"
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/billing/billingtest"
-	"paymentwebsite/internal/testdb"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/billing/billingtest"
+	"projecthermes/internal/testdb"
 )
 
 func signWebhookPayload(t *testing.T, payload []byte, secret string, timestamp time.Time) string {

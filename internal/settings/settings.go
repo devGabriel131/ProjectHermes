@@ -27,9 +27,7 @@ var ErrProgramStartDate = errors.New("settings: program start date must be a val
 
 var errNoStaff = errors.New("settings: staff username required")
 
-// Settings is the only row, ID 1. The checks repeat the range constants,
-// which struct tags can't reference, so a bad value can't be stored even
-// by bypassing the Store.
+// Settings is the only row, ID 1. The single-row and lifetime-range checks repeat the constants, which struct tags can't reference, so neither can be violated even by bypassing the Store. ProgramStartDate is validated only by ParseProgramStartDate.
 type Settings struct {
 	ID               int       `gorm:"primaryKey;autoIncrement:false;check:settings_single_row,id = 1"`
 	LinkLifetimeDays int       `gorm:"not null;check:link_lifetime_days_range,link_lifetime_days BETWEEN 2 AND 14"`

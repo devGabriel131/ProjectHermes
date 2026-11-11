@@ -7,9 +7,9 @@ import (
 	"net/url"
 	"time"
 
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/logging"
-	"paymentwebsite/internal/payments"
+	"projecthermes/internal/links"
+	"projecthermes/internal/logging"
+	"projecthermes/internal/payments"
 )
 
 // agreement shows the terms and records their acceptance against the program start date the

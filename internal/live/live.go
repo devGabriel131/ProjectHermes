@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"paymentwebsite/internal/logging"
+	"projecthermes/internal/logging"
 )
 
 // heartbeat keeps proxies from closing quiet streams; Railway's cutoff is five

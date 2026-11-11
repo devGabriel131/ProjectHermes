@@ -17,7 +17,7 @@ import (
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 
-	"paymentwebsite/internal/logging"
+	"projecthermes/internal/logging"
 )
 
 //go:embed templates/login.html

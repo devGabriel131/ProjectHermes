@@ -1,3 +1,4 @@
+// Package links stores customer links by token digest and owns their life from staff issuance through drafts, final submit, agreement acceptance and cancellation. Enroll, called inside billing's funding transaction, turns a paid link into a Student. See docs/domain/links.md.
 package links
 
 import (
@@ -12,9 +13,12 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"paymentwebsite/internal/settings"
-	"paymentwebsite/internal/students"
+	"projecthermes/internal/settings"
+	"projecthermes/internal/students"
 )
+
+// pinIndex names Link.Pin's unique index; the struct tag below cannot reference it.
+const pinIndex = "idx_link_pin"
 
 const tokenBytes = 32
 
@@ -31,14 +35,13 @@ type Link struct {
 	TermsAcceptedAt  *time.Time `gorm:"type:timestamptz"`
 	ProgramStartDate string     `gorm:"type:text;not null;default:''"`
 	// Pin is the PIN chosen at submit. It reserves the PIN until payment moves it to the Student; "" before submit and after payment.
-	// The index name must equal students.linkPinIndex.
+	// The index name must equal pinIndex.
 	Pin string `gorm:"not null;default:'';uniqueIndex:idx_link_pin,where:pin <> ''"`
 	// PaidAt is when the first payment was confirmed: the instant Enroll created the Student. Nil while unpaid.
 	PaidAt *time.Time `gorm:"type:timestamptz"`
 	// CanceledAt revokes an unfinished token but keeps its draft for staff.
 	CanceledAt *time.Time
-	// ExpiresAt starts with the configured lifetime; completion replaces it
-	// with seven days from SubmittedAt. Missing expiries fail closed.
+	// ExpiresAt starts with the configured lifetime; Submit replaces it with 168 hours from submission. Missing expiries fail closed.
 	ExpiresAt time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 	// CreatedBy and CanceledBy are the staff usernames behind each action.
 	// Empty audit values mean the corresponding action has not occurred.
@@ -128,6 +131,7 @@ func (l Link) entry(now time.Time) Entry {
 	}
 	return e
 }
+
 // errNoStaff rejects staff actions that would leave an anonymous audit entry.
 var errNoStaff = errors.New("links: staff username required")
 
@@ -237,7 +241,8 @@ func (s *Store) SaveDraft(ctx context.Context, token, key, value string) (SaveRe
 	return s.saveResult(ctx, digest, result, Saved)
 }
 
-// Submit commits final answers and the PIN to the link, locking the form. No Student exists until Enroll.
+// Submit commits final answers and the PIN to the link, locking the form. A PIN held by an enrolled Student is refused here (PinTaken); one held by another submitted link is refused by idx_link_pin. No Student exists until Enroll.
+// ponytail: a Submit racing a concurrent Enroll can still see the PIN free (READ COMMITTED); funding then fails on idx_student_pin. Upgrade: one PIN-reservation table or an advisory lock.
 func (s *Store) Submit(ctx context.Context, token string, details students.Details, pin string) (SaveResult, error) {
 	digest, ok := tokenDigest(token)
 	if !ok {
@@ -252,11 +257,12 @@ UPDATE links
    AND canceled_at IS NULL
    AND expires_at > now()
    AND submitted_at IS NULL
-`, details.Name, details.Email, details.Phone, details.Municipality, details.DateOfBirth, details.Gender, pin, digest)
-	if students.IsPinTaken(result.Error) {
+   AND NOT EXISTS (SELECT 1 FROM students WHERE pin = ? AND pin <> '')
+`, details.Name, details.Email, details.Phone, details.Municipality, details.DateOfBirth, details.Gender, pin, digest, pin)
+	if students.IsUniqueViolation(result.Error, pinIndex) {
 		return PinTaken, nil
 	}
-	return s.saveResult(ctx, digest, result, Unavailable)
+	return s.saveResult(ctx, digest, result, PinTaken)
 }
 
 var errNotEnrollable = errors.New("links: link is not submitted or already enrolled")

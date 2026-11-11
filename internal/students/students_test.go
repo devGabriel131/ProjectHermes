@@ -14,10 +14,10 @@ import (
 
 	"gorm.io/gorm"
 
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/settings"
-	"paymentwebsite/internal/students"
-	"paymentwebsite/internal/testdb"
+	"projecthermes/internal/links"
+	"projecthermes/internal/settings"
+	"projecthermes/internal/students"
+	"projecthermes/internal/testdb"
 )
 
 func TestListRetainsExpiredSourcesAndOrdersNewestFirst(t *testing.T) {

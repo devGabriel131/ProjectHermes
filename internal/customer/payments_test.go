@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/students"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/links"
+	"projecthermes/internal/students"
 )
 
 func TestPaymentReturnRoute(t *testing.T) {

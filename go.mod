@@ -1,4 +1,4 @@
-module paymentwebsite
+module projecthermes
 
 go 1.27.3
 

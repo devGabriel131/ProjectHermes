@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"paymentwebsite/internal/billing"
+	"projecthermes/internal/billing"
 )
 
 func TestSummaryForLinkAndStudent(t *testing.T) {
@@ -46,4 +46,3 @@ func TestSummaryForLinkAndStudent(t *testing.T) {
 		t.Fatalf("ForStudent: Funded=%v, IsActive=%v; want true, true", sumStudent.Funded, sumStudent.IsActive)
 	}
 }
-

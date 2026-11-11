@@ -1,3 +1,4 @@
+// Package students owns the Student record, the contact-field registry whose parsers serve submit, autosave, customer edit and staff edit, and the municipality list. See docs/domain/students.md.
 package students
 
 import (
@@ -136,18 +137,15 @@ func (s *Store) PinTaken(ctx context.Context, pin string) (bool, error) {
 	return pinHeld(s.db.WithContext(ctx), pin)
 }
 
-const (
-	pinIndex     = "idx_student_pin" // Student.Pin
-	linkPinIndex = "idx_link_pin"    // links.Link.Pin; keep in sync with its tag
-)
+// pinIndex names Student.Pin's unique index.
+const pinIndex = "idx_student_pin"
 
-// IsPinTaken reports whether err is the unique violation on either PIN index. The driver error
+// IsUniqueViolation reports whether err is a unique violation on the named index. The driver error
 // exposes its SQLSTATE through a method but the constraint name only in its message, which
 // carries no row values.
-func IsPinTaken(err error) bool {
+func IsUniqueViolation(err error, index string) bool {
 	var database interface{ SQLState() string }
-	return errors.As(err, &database) && database.SQLState() == "23505" &&
-		(strings.Contains(err.Error(), pinIndex) || strings.Contains(err.Error(), linkPinIndex))
+	return errors.As(err, &database) && database.SQLState() == "23505" && strings.Contains(err.Error(), index)
 }
 
 var ErrUnknownField = errors.New("students: unknown field")
@@ -180,7 +178,7 @@ func (s *Store) UpdateField(ctx context.Context, id uint64, key, raw string) (*S
 			persisted = &record
 			return nil
 		}
-		if field.Key == pinField.Key && value != "" {
+		if field.Key == pinField.Key {
 			held, err := pinHeld(tx, value)
 			if err != nil {
 				return err
@@ -198,7 +196,7 @@ func (s *Store) UpdateField(ctx context.Context, id uint64, key, raw string) (*S
 		persisted, wrote = &record, true
 		return nil
 	})
-	if IsPinTaken(err) {
+	if IsUniqueViolation(err, pinIndex) {
 		return nil, &ValidationError{Message: "That PIN is already in use."}
 	}
 	if err != nil {

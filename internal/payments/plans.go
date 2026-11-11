@@ -1,3 +1,4 @@
+// Package payments defines the three tuition plans, their integer-cent installments, Puerto Rico due-date schedules and money formatting. See docs/billing/overview.md.
 package payments
 
 import (

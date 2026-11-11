@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/stripe/stripe-go/v87"
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/billing/billingtest"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/billing/billingtest"
 )
 
 func TestConfigValidation(t *testing.T) {

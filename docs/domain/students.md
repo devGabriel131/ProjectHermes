@@ -1,0 +1,108 @@
+# Students
+
+This page covers the contact-field registry and its parse rules, the PIN's journey across two tables, and the Student record created at payment. It is the home of those rules for every writer: customer drafts, final submit, customer edit and staff edit. The Link side is in [Links](links.md); the staff screens are in [Management students](../management/students.md); the money side is in [Billing overview](../billing/overview.md).
+
+## Field registry
+
+`internal/students/fields.go` holds one registry. `Fields()` is the six customer contact fields; `StaffFields()` adds PIN and group.
+
+| Key | Label | Input | Options | Draft | Submit | Customer edit | Staff edit | Held by |
+|---|---|---|---|---|---|---|---|---|
+| `name` | Name | text | none | yes | yes | yes | yes | Link, then Student |
+| `email` | Email | email | none | yes | yes | yes | yes | Link, then Student |
+| `phone` | Phone | tel | none | yes | yes | yes | yes | Link, then Student |
+| `municipality` | Municipality | select | 79 values | yes | yes | yes | yes | Link, then Student |
+| `date_of_birth` | Date of birth | date | none | yes | yes | yes | yes | Link, then Student |
+| `gender` | Gender | radio | `Male`, `Female` | yes | yes | yes | yes | Link, then Student |
+| `pin` | PIN | text | none | never | yes | no | yes | Link from submit until payment, then Student |
+| `group` | Group | select | `Básico`, `Regular` | no | no | no | yes | Student |
+
+`email_confirm` is compared at submit and customer edit and never stored. Cohort is not a registry field: nothing edits it after enrollment.
+
+## Parse rules
+
+One `Parse(raw, required)` per field. Drafts call it with `required=false`, so empty passes and a non-empty value must still be valid. Submit, customer edit and staff edit use `required=true`; a staff edit therefore cannot blank a field.
+
+| Field | Rule |
+|---|---|
+| Name | Valid UTF-8, trimmed. Allowed: letters, combining marks directly after a letter, and Unicode space separators between words. Anything else is rejected: digits, hyphen, apostrophe, period, an internal tab or newline. Required needs at least two words; drafts allow empty or one word. Space runs collapse to one ASCII space. No length cap. |
+| Email | Trimmed, at most 254 bytes, ASCII 33 to 126 only, no `"`. Must parse as one bare address (`net/mail`, no display name). The last `@` sits at byte 1 to 64. The domain contains a dot and every label is 1 to 63 letters, digits or hyphens with no edge hyphen. The domain is lowercased; the local part keeps its case. |
+| Phone | Trimmed. Characters: digits, space, `(`, `)`, `-`, `.`, and `+` only first. Parsed with `phonenumbers` using region `PR`. The number's region must be `PR` or `US` and valid for it. Stored as E.164. |
+| Date of birth | Trimmed, strict `YYYY-MM-DD` read in Puerto Rico time (UTC-4). Must be strictly before today there. Age above 100 is rejected. There is no minimum age. |
+| Municipality | Exact match after trimming against 79 values: 78 municipios plus `Fuera de Puerto Rico`. |
+| Gender | Exactly `Male` or `Female` (the form shows "Masculino" and "Femenino"). |
+| PIN | 4 to 6 ASCII digits after trimming. Kept as text so leading zeros survive. |
+| Group | Exactly `Básico` or `Regular`. The database repeats this as the `student_group_valid` check and the `Básico` default. |
+
+## PIN lifecycle
+
+The customer enters the PIN once, on the final submit. It is never drafted, so abandoned forms never reserve a PIN. Uniqueness spans two tables, and each has only its own partial unique index (`where pin <> ''`).
+
+```mermaid
+flowchart TD
+    A["Customer types a PIN"] --> B["POST /customer/{token}/pin: ParsePin, then pinHeld (students and links)"]
+    B -->|"held"| B1["422 pin-status: Este PIN ya está en uso. Elige otro."]
+    B -->|"free"| B2["200 PIN disponible. Nothing is saved"]
+    A --> C["POST /customer/{token}: Store.Submit"]
+    B2 --> C
+    C -->|"ParsePin fails"| C1["422 on the form"]
+    C -->|"an enrolled Student holds it (NOT EXISTS students)"| C2["PinTaken: 422, link stays unsubmitted"]
+    C -->|"a submitted link holds it (idx_link_pin)"| C2
+    C -->|"free"| D["links.pin = PIN and submitted_at set"]
+    D --> E["billing fund transaction: links.Enroll"]
+    E --> F["students.pin = PIN, links.pin = empty"]
+    F -->|"idx_student_pin violation (residual race)"| G["transaction rolls back, worker retries the contract"]
+    F --> H["Staff UpdateField: pinHeld, then idx_student_pin: 422 That PIN is already in use."]
+```
+
+| Refusal point | What it checks | Authority |
+|---|---|---|
+| `/pin` | `pinHeld`: a Student or any link holds the PIN | advisory; customer-facing warning only |
+| `Store.Submit` | `AND NOT EXISTS (SELECT 1 FROM students WHERE pin = ? AND pin <> '')` plus `idx_link_pin` | binding for submitted links and enrolled Students |
+| `Store.UpdateField` (staff) | `pinHeld`, then a unique violation on `idx_student_pin` | binding; both become the same 422 message |
+| `links.Enroll` | `idx_student_pin` at funding | last resort |
+
+A `Submit` racing a concurrent `Enroll` can still see the PIN free under READ COMMITTED; funding then fails on `idx_student_pin` and the contract retries without creating a Student ([Go-live](../go-live.md)). The code marks the upgrade path: one PIN-reservation table or an advisory lock.
+
+## Student record
+
+| Column | Rule |
+|---|---|
+| `id` | Primary key. `Store.Get` returns nothing for 0 or any ID above `BIGINT`. |
+| `source_link_hash` | Unique and a `RESTRICT` foreign key to `links.token_hash`: one Student per link, and the link cannot be deleted or rekeyed. |
+| six contact columns | Copied from the Link at enrollment. After that the Student is canonical and staff edit it; the Link keeps its last pre-payment snapshot. |
+| `created_at` | The payment instant: `links.paid_at` and `billing_contracts.funded_at`. |
+| `is_active` | Default true. Billing flips it on suspension and reactivation ([Suspension](../billing/suspension.md)). Nothing in this package writes it. |
+| `pin` | Moved from the Link by `Enroll`. |
+| `group` | The column default `Básico`: `Enroll` never sets it. Staff change it afterwards. |
+| `cohort` | `left(program_start_date, 7)` of the Link's accepted agreement snapshot, `YYYY-MM`. The `student_cohort_month` check enforces the shape. No edit reaches it, so it stays the start month after a promotion. `CohortLabel` renders it as "November 2026". |
+
+`links.Enroll(tx, hash, paidAt)` runs inside billing's funding transaction, which already holds the Link row lock. It inserts the Student from the submitted, unpaid link, then sets `links.paid_at` and clears `links.pin`. It fails the transaction if the link is not submitted or is already paid. It ignores `Usable`, so a link that expired before payment still enrolls. The Student outlives the link: `Store.List` returns every retained student regardless of link access. See [Lifecycle](lifecycle.md) for the surrounding sequence.
+
+## Staff field edit
+
+`Store.UpdateField(id, key, raw)` accepts any `StaffFields` key. Order: unknown key returns `ErrUnknownField`; parse (invalid returns a `ValidationError`, shown as 422); IDs outside `BIGINT` return nothing. Then one transaction:
+
+1. `SELECT ... FOR UPDATE` on the student row, so comparison and write share one version.
+2. If the normalized value equals the stored one, return the row without writing or publishing.
+3. For the PIN, run `pinHeld` and refuse a held PIN.
+4. Update the one column; zero rows after the locked read means a trigger suppressed the write and is not reported as saved.
+
+A write publishes a live event. Management then calls `TouchContract` so the contract re-syncs ([Management students](../management/students.md)). Edits are not blocked by funding and carry no staff attribution; that gap is listed in [Go-live](../go-live.md).
+
+## Deliberate choices
+
+- `Fields()` and `StaffFields()` stay separate so PIN and group stay undraftable: `/draft/pin` returns 404 because `FindField` does not know it.
+- `pinHeld` queries `links` by table name because `links` imports this package; importing `links` back would be a cycle.
+- The Puerto Rico zone is defined here (`puertoRico`) and in `payments`. Importing `payments` would couple contact validation to plan math for one line.
+- The partial indexes (`where pin <> ''`) let unsubmitted links and PIN-less rows coexist, and let the store accept an empty PIN in tests.
+
+## Source
+
+- `internal/students/students.go`: `Details`, `Student`, `CohortLabel`, `Store.List`, `Store.Get`, `Store.PinTaken`, `Store.UpdateField`, `pinHeld`, `pinIndex`, `IsUniqueViolation`, `ErrUnknownField`
+- `internal/students/fields.go`: `Fields`, `StaffFields`, `FindField`, `FindStaffField`, `pinField`, `groupField`, `puertoRico`, `ParseName`, `ParseEmail`, `ParsePhone`, `ParseDateOfBirth`, `ParseGender`, `ParseGroup`, `ParsePin`, `ValidationError`
+- `internal/students/municipalities.go`: `MunicipalityOptions`, `ParseMunicipality`
+- `internal/links/links.go`: `Enroll`, `Store.Submit`, `pinIndex`
+- `internal/customer/customer.go`: `checkPin`, `readSubmission`, `pinTakenMessage`
+- `internal/billing/worker.go`: `fund`
+- `internal/billing/suspension.go`: `evaluateDeadlines`

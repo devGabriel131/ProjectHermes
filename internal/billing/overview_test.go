@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/students"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/links"
+	"projecthermes/internal/students"
 )
 
 // Dashboard money must count only what funded contracts owe, once, and agree with
@@ -38,7 +38,7 @@ func TestOverviewCountsOnlyFundedTuition(t *testing.T) {
 	contract := func(sourceHash []byte, fundedAt *time.Time, attention *string) uint64 {
 		t.Helper()
 		c := billing.Contract{SourceLinkHash: sourceHash, Reference: rand.Text(), PlanID: "three", PlanName: "Plan de 3 Pagos Mensuales",
-			InstallmentCount: 3, TotalCents: 62500, FundedAt: fundedAt, AttentionReason: attention}
+			InstallmentCount: 3, TotalCents: 62500, FundedAt: fundedAt, ReviewReason: attention}
 		create(&c)
 		return c.ID
 	}

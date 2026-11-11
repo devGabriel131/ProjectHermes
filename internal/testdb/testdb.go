@@ -1,5 +1,6 @@
 //go:build integration
 
+// Package testdb gives each integration test its own PostgreSQL schema on TEST_DATABASE_URL, migrated at open and dropped with the test. See docs/testing.md.
 package testdb
 
 import (

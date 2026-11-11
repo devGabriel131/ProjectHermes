@@ -6,8 +6,7 @@ import (
 	"slices"
 	"time"
 
-
-	"paymentwebsite/internal/students"
+	"projecthermes/internal/students"
 )
 
 // ForLink returns the summary for the enrollment behind sourceLinkHash, or nil before checkout creates its contract.
@@ -44,22 +43,6 @@ func (s *Service) ForStudent(ctx context.Context, studentID uint64) (*Summary, e
 	return s.summarize(ctx, contract, student.IsActive)
 }
 
-// ContactEditable reports whether the customer's contact details can still be edited.
-// Once funded or while a payment is in flight (processing, uncertain, expiring), edits are locked.
-func (s *Service) ContactEditable(ctx context.Context, sourceLinkHash []byte) (bool, error) {
-	if len(sourceLinkHash) != sha256.Size {
-		return false, nil
-	}
-	var count int64
-	err := s.db.WithContext(ctx).Model(&Contract{}).
-		Where("source_link_hash = ? AND (funded_at IS NOT NULL OR EXISTS (SELECT 1 FROM billing_checkout_attempts a WHERE a.contract_id = billing_contracts.id AND a.state IN ?))", sourceLinkHash, inFlightAttemptStates).
-		Count(&count).Error
-	if err != nil {
-		return false, err
-	}
-	return count == 0, nil
-}
-
 func (s *Service) summarize(ctx context.Context, contract Contract, active bool) (*Summary, error) {
 	var obligations []Obligation
 	if err := s.db.WithContext(ctx).Where("contract_id = ?", contract.ID).Order("number ASC").Find(&obligations).Error; err != nil {
@@ -94,7 +77,7 @@ func (s *Service) summarize(ctx context.Context, contract Contract, active bool)
 			summary.ReviewReasons = append(summary.ReviewReasons, *reason)
 		}
 	}
-	addReason(contract.AttentionReason)
+	addReason(contract.ReviewReason)
 	for _, o := range obligations {
 		summary.OtherSettlementCents += o.OtherSettlementCents
 		addReason(o.ReviewReason)

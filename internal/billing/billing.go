@@ -1,17 +1,21 @@
+// Package billing owns tuition money: the Stripe configuration and price catalog, hosted Checkout for the first payment,
+// scheduled one-off invoices for later installments, webhook intake, and the leased background worker that mirrors
+// Stripe state into contracts, obligations, attempts and payments. Stripe's current objects are authoritative; stored
+// webhook events carry no payload and only wake the worker. Funding is the single moment a Student is created (links.Enroll).
+// See docs/billing/overview.md.
 package billing
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"log/slog"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/stripe/stripe-go/v87"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // providerBudget bounds one call's synchronous provider work and stays under the server's
@@ -36,9 +40,29 @@ var (
 	ErrNotSuspended    = errors.New("student is not suspended")
 	ErrNeedsReview     = errors.New("financial state needs review")
 	ErrInvoiceNotReady = errors.New("invoice is not ready")
+	ErrContactLocked   = errors.New("billing: contact is locked")
 )
 
-var errStaffRequired = errors.New("staff identity is required")
+var forUpdate = clause.Locking{Strength: clause.LockingStrengthUpdate}
+
+// persistCtx outlives the request so work that follows a committed outcome (recording a provider result, syncing a provider update) still runs.
+func persistCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+}
+
+// firstRow loads the first row matching query; found is false when none match.
+func firstRow(db *gorm.DB, dest any, query string, args ...any) (found bool, err error) {
+	result := db.Where(query, args...).Limit(1).Find(dest)
+	return result.RowsAffected > 0, result.Error
+}
+
+// require turns a missing row into ErrUnavailable.
+func require(found bool, err error) error {
+	if err == nil && !found {
+		return ErrUnavailable
+	}
+	return err
+}
 
 // CheckoutResult returns the outcome of initiating or resuming a checkout attempt.
 type CheckoutResult struct {
@@ -128,18 +152,6 @@ func (s *Service) wakeWorker() {
 	}
 }
 
-// touch marks the contract due for sync now.
-func touch(db *gorm.DB, sourceLinkHash []byte) error {
-	return db.Model(&Contract{}).Where("source_link_hash = ? AND stripe_customer_id IS NOT NULL", sourceLinkHash).Update("next_sync_at", time.Now().UTC()).Error
-}
-
-// TouchContract marks the contract behind sourceLinkHash due now and wakes the
-// billing worker so contact updates sync promptly.
-func (s *Service) TouchContract(ctx context.Context, sourceLinkHash []byte) {
-	_ = touch(s.db.WithContext(ctx), sourceLinkHash)
-	s.wakeWorker()
-}
-
 // contractFor finds the contract behind a student; unknown or out-of-range IDs are unavailable.
 func (s *Service) contractFor(ctx context.Context, studentID uint64) (Contract, error) {
 	var c Contract
@@ -156,126 +168,6 @@ func (s *Service) withStaffContract(ctx context.Context, id uint64, fn func(leas
 	err := s.withContract(ctx, id, fn)
 	if errors.Is(err, errContractBusy) {
 		return ErrPaymentPending
-	}
-	return err
-}
-
-// markSynced records a staff-triggered sync the way the worker does, so the next scheduled
-// sync accounts for whatever the action just created.
-func (s *Service) markSynced(ctx context.Context, l lease) error {
-	ctx, cancel := persistCtx(ctx)
-	defer cancel()
-	now := time.Now().UTC()
-	next, err := s.nextSync(ctx, l.id, now)
-	if err != nil {
-		return err
-	}
-	return s.db.WithContext(ctx).Model(&Contract{}).Where("id = ? AND lease_token = ?", l.id, l.token).
-		Updates(map[string]any{"last_synced_at": now, "next_sync_at": next}).Error
-}
-
-// reinstatable returns the contract's open episode with its contract and obligations, or
-// ErrNotSuspended when none is open, or ErrNeedsReview while any review reason is unresolved.
-func (s *Service) reinstatable(ctx context.Context, contractID uint64) (ep Suspension, c Contract, obligations []Obligation, err error) {
-	db := s.db.WithContext(ctx)
-	found, err := firstRow(db, &ep, "contract_id = ? AND closed_at IS NULL", contractID)
-	if err != nil {
-		return
-	}
-	if !found {
-		err = ErrNotSuspended
-		return
-	}
-	if err = require(firstRow(db, &c, "id = ?", contractID)); err != nil {
-		return
-	}
-	if err = db.Where("contract_id = ?", contractID).Find(&obligations).Error; err != nil {
-		return
-	}
-	if hasReview(c, obligations) {
-		err = ErrNeedsReview
-	}
-	return
-}
-
-// RequestReinstatement creates, or resumes, the open episode's single 2500-cent fee invoice for
-// staff. Original overdue invoices are refreshed first and are never duplicated onto the fee.
-func (s *Service) RequestReinstatement(ctx context.Context, studentID uint64, staff string) (*Summary, error) {
-	if strings.TrimSpace(staff) == "" {
-		return nil, errStaffRequired
-	}
-	ctx, cancel := context.WithTimeout(ctx, providerBudget)
-	defer cancel()
-	c, err := s.contractFor(ctx, studentID)
-	if err != nil {
-		return nil, err
-	}
-	// Refuse early, before any provider work; the decision is repeated after the refresh.
-	if _, _, _, err := s.reinstatable(ctx, c.ID); err != nil {
-		return nil, err
-	}
-	err = s.withStaffContract(ctx, c.ID, func(l lease) error {
-		if err := s.reconcileContract(ctx, l); err != nil {
-			return err
-		}
-		if err := s.requestFee(ctx, l, staff); err != nil {
-			return err
-		}
-		return s.markSynced(ctx, l)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return s.ForStudent(ctx, studentID)
-}
-
-// requestFee reuses the episode's fee obligation or inserts it, runs the persisted invoice
-// stages, then records who requested it first. A repeated request resumes where one stopped
-// and never changes RequestedBy or the request time.
-func (s *Service) requestFee(ctx context.Context, l lease, staff string) error {
-	ep, c, obligations, err := s.reinstatable(ctx, l.id)
-	if err != nil {
-		return err
-	}
-	if c.StripeCustomerID == nil {
-		return ErrUnavailable
-	}
-	var fee Obligation
-	if i := slices.IndexFunc(obligations, func(o Obligation) bool {
-		return o.Kind == "reinstatement" && o.SuspensionID != nil && *o.SuspensionID == ep.ID
-	}); i >= 0 {
-		fee = obligations[i]
-	} else {
-		price := s.catalog[reinstatementKey]
-		if price == "" {
-			return errors.New("billing: catalog has no reinstatement price")
-		}
-		fee = Obligation{
-			ContractID:            c.ID,
-			Reference:             rand.Text(),
-			Kind:                  "reinstatement",
-			AmountCents:           ReinstatementFeeCents,
-			StripePriceID:         price,
-			SuspensionID:          &ep.ID,
-			CollectionDisposition: "collect",
-			AmountRemainingCents:  ReinstatementFeeCents,
-		}
-		if err := s.leased(ctx, l, func(tx *gorm.DB, _ *Contract) error { return tx.Create(&fee).Error }); err != nil {
-			return err
-		}
-	}
-	if err := s.scheduleOne(ctx, l, c, &fee); err != nil {
-		if errors.Is(err, errReviewed) {
-			return ErrNeedsReview
-		}
-		return err
-	}
-	err = s.leased(ctx, l, func(tx *gorm.DB, _ *Contract) error {
-		return tx.Model(&Suspension{}).Where("id = ? AND reinstatement_requested_at IS NULL", ep.ID).
-			Updates(map[string]any{"reinstatement_requested_at": time.Now().UTC(), "requested_by": staff}).Error
-	})
-	if err == nil {
-		s.changed()
 	}
 	return err
 }
@@ -336,8 +228,9 @@ func (s *Service) PortalURL(ctx context.Context, studentID uint64) (string, erro
 	return session.URL, nil
 }
 
-// ReconcileStudent refreshes the student's existing Stripe resources for staff: in-flight
-// Checkouts, invoices, then deadlines and reactivation. It never creates a fresh charge.
+// ReconcileStudent runs the worker's full contract sync for staff: it can fund the contract, create or
+// arm invoices (a past-due invoice is finalized at once, so Stripe then collects), replay a Checkout
+// create, and evaluate deadlines and reactivation. It never charges a card itself.
 func (s *Service) ReconcileStudent(ctx context.Context, studentID uint64) (*Summary, error) {
 	ctx, cancel := context.WithTimeout(ctx, providerBudget)
 	defer cancel()

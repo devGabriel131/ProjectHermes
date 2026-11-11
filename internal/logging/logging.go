@@ -1,3 +1,4 @@
+// Package logging writes structured JSON events to stdout, correlates requests and summarizes slow database queries. Requests must be the outermost wrapper; Routes and RecordError panic without it. See docs/operations/observability.md.
 package logging
 
 import (

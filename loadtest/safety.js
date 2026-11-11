@@ -244,7 +244,7 @@ export default function () {
       const r = call('GET', path);
       check(r, {
         [`traversal ${path} is not served`]: (res) => res.status !== 200,
-        [`traversal ${path} leaks no Go source`]: (res) => !String(res.body).includes('module paymentwebsite') && !String(res.body).includes('package main'),
+        [`traversal ${path} leaks no Go source`]: (res) => !String(res.body).includes('module projecthermes') && !String(res.body).includes('package main'),
       });
     }
   });

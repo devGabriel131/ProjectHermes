@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"paymentwebsite/internal/students"
+	"projecthermes/internal/students"
 )
 
 func TestFieldParsersRespectNormalizationAndDraftBoundaries(t *testing.T) {

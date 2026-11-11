@@ -13,7 +13,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"paymentwebsite/internal/logging"
+	"projecthermes/internal/logging"
 )
 
 // Pages stay current only if a stream catches them up on connect, follows

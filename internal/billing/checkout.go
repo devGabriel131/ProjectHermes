@@ -14,12 +14,10 @@ import (
 
 	"github.com/stripe/stripe-go/v87"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/logging"
-	"paymentwebsite/internal/payments"
-	"paymentwebsite/internal/students"
+	"projecthermes/internal/links"
+	"projecthermes/internal/logging"
+	"projecthermes/internal/payments"
 )
 
 // integrationIdentifier is Stripe's non-unique grouping label for this integration's Checkout
@@ -29,15 +27,7 @@ const integrationIdentifier = "tuition_checkout"
 // activeAttemptStates are the nonterminal states guarded by idx_active_checkout_attempt.
 var activeAttemptStates = []string{"creating", "open", "processing", "expiring", "uncertain"}
 
-// inFlightAttemptStates are the active states where money may be in transit, blocking contact edits.
-var inFlightAttemptStates = []string{"processing", "uncertain", "expiring"}
-
-var (
-	forUpdate = clause.Locking{Strength: clause.LockingStrengthUpdate}
-
-	ErrContactLocked    = errors.New("billing: contact is locked")
-	errCheckoutMismatch = errors.New("billing: checkout session does not match its attempt")
-)
+var errCheckoutMismatch = errors.New("billing: checkout session does not match its attempt")
 
 // checkoutStep is what one start transaction decided.
 type checkoutStep struct {
@@ -88,54 +78,6 @@ func (s *Service) StartCheckout(ctx context.Context, sourceLinkHash []byte, plan
 		}
 		return s.createSession(callCtx, step.contract, step.first, step.attempt)
 	}
-}
-
-// UpdateContact updates the Link's contact snapshot, guarded against concurrent checkouts
-// and blocked once funded (the Student is then canonical and staff-edited) or while payment is in flight.
-func (s *Service) UpdateContact(ctx context.Context, sourceLinkHash []byte, details students.Details) error {
-	if len(sourceLinkHash) != sha256.Size {
-		return ErrUnavailable
-	}
-	contact := map[string]any{
-		"name": details.Name, "email": details.Email, "phone": details.Phone,
-		"municipality": details.Municipality, "date_of_birth": details.DateOfBirth, "gender": details.Gender,
-	}
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var link links.Link
-		if err := require(firstRow(tx.Clauses(forUpdate).Scopes(links.Usable), &link,
-			"token_hash = ? AND submitted_at IS NOT NULL", sourceLinkHash)); err != nil {
-			return err
-		}
-		var contract Contract
-		exists, err := firstRow(tx.Clauses(forUpdate), &contract, "source_link_hash = ?", sourceLinkHash)
-		if err != nil {
-			return err
-		}
-		if exists {
-			if contract.FundedAt != nil {
-				return ErrContactLocked
-			}
-			var attempt CheckoutAttempt
-			inFlight, err := firstRow(tx.Clauses(forUpdate), &attempt,
-				"contract_id = ? AND state IN ?", contract.ID, inFlightAttemptStates)
-			if err != nil {
-				return err
-			}
-			if inFlight {
-				return ErrContactLocked
-			}
-		}
-		if err := touch(tx, sourceLinkHash); err != nil {
-			return err
-		}
-		return tx.Model(&links.Link{}).Where("token_hash = ?", sourceLinkHash).Updates(contact).Error
-	})
-	if err != nil {
-		return err
-	}
-	s.changed()
-	s.wakeWorker()
-	return nil
 }
 
 // beginCheckout runs the locked decision transaction: Link, then Contract, then attempt.
@@ -409,11 +351,6 @@ func (s *Service) setAttempt(ctx context.Context, id uint64, from, to string, ex
 	return s.db.WithContext(ctx).Model(&CheckoutAttempt{}).Where("id = ? AND state = ?", id, from).Updates(updates).Error
 }
 
-// persistCtx outlives the request so work that follows a committed outcome (recording a provider result, syncing a provider update) still runs.
-func persistCtx(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-}
-
 // outcomeUnknown reports whether Stripe may have acted despite err: transport failures,
 // timeouts, cancellation, 5xx, rate limits and in-flight idempotency conflicts.
 func outcomeUnknown(err error) bool {
@@ -425,18 +362,4 @@ func outcomeUnknown(err error) bool {
 	rejected := code >= http.StatusBadRequest && code < http.StatusInternalServerError &&
 		code != http.StatusTooManyRequests && code != http.StatusConflict
 	return !rejected
-}
-
-// firstRow loads the first row matching query; found is false when none match.
-func firstRow(db *gorm.DB, dest any, query string, args ...any) (found bool, err error) {
-	result := db.Where(query, args...).Limit(1).Find(dest)
-	return result.RowsAffected > 0, result.Error
-}
-
-// require turns a missing row into ErrUnavailable.
-func require(found bool, err error) error {
-	if err == nil && !found {
-		return ErrUnavailable
-	}
-	return err
 }

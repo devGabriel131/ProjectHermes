@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/payments"
-	"paymentwebsite/internal/settings"
-	"paymentwebsite/internal/testdb"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/links"
+	"projecthermes/internal/payments"
+	"projecthermes/internal/settings"
+	"projecthermes/internal/testdb"
 )
 
 const agreementDate = "2027-02-28"

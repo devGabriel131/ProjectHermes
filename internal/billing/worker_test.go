@@ -16,12 +16,20 @@ import (
 	"time"
 
 	"github.com/stripe/stripe-go/v87"
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/billing/billingtest"
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/students"
-	"paymentwebsite/internal/testdb"
+	"gorm.io/gorm"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/billing/billingtest"
+	"projecthermes/internal/links"
+	"projecthermes/internal/students"
+	"projecthermes/internal/testdb"
 )
+
+func mustCreate(t *testing.T, db *gorm.DB, value any) {
+	t.Helper()
+	if err := db.Create(value).Error; err != nil {
+		t.Fatal(err)
+	}
+}
 
 type workerMockServer struct {
 	mux           *http.ServeMux
@@ -388,7 +396,7 @@ func newWorkerMockServer(paidAt time.Time, initialAmount int64) *workerMockServe
 	return wms
 }
 
-func TestScheduledInvoiceCreationRecoversEveryBoundary(t *testing.T) {
+func TestFundingSchedulesLaterInvoicesOnce(t *testing.T) {
 	paidAt := time.Date(2026, time.November, 15, 4, 0, 0, 0, time.UTC)
 	mock := newWorkerMockServer(paidAt, 20834)
 
@@ -410,9 +418,7 @@ func TestScheduledInvoiceCreationRecoversEveryBoundary(t *testing.T) {
 		ProgramStartDate: "2026-11-01",
 		ExpiresAt:        now.Add(7 * 24 * time.Hour),
 	}
-	if err := db.Create(&link).Error; err != nil {
-		t.Fatalf("create link: %v", err)
-	}
+	mustCreate(t, db, &link)
 	contractRef := rand.Text()
 	cusID := "cus_worker_test"
 	contract := billing.Contract{
@@ -424,7 +430,7 @@ func TestScheduledInvoiceCreationRecoversEveryBoundary(t *testing.T) {
 		TotalCents:       62500,
 		StripeCustomerID: &cusID,
 	}
-	db.Create(&contract)
+	mustCreate(t, db, &contract)
 	// Create 3 tuition obligations
 	obl1 := billing.Obligation{
 		ContractID:            contract.ID,
@@ -456,9 +462,9 @@ func TestScheduledInvoiceCreationRecoversEveryBoundary(t *testing.T) {
 		StripePriceID:         "pr_three_2",
 		CollectionDisposition: "collect",
 	}
-	db.Create(&obl1)
-	db.Create(&obl2)
-	db.Create(&obl3)
+	mustCreate(t, db, &obl1)
+	mustCreate(t, db, &obl2)
+	mustCreate(t, db, &obl3)
 
 	sessID := "cs_worker_sess"
 	attempt := billing.CheckoutAttempt{
@@ -471,7 +477,7 @@ func TestScheduledInvoiceCreationRecoversEveryBoundary(t *testing.T) {
 		StripeSessionID:   &sessID,
 		State:             "open",
 	}
-	db.Create(&attempt)
+	mustCreate(t, db, &attempt)
 
 	svc := billingtest.New(t, db, mock.mux)
 
@@ -481,7 +487,7 @@ func TestScheduledInvoiceCreationRecoversEveryBoundary(t *testing.T) {
 		EventType:  "checkout.session.completed",
 		ResourceID: sessID,
 	}
-	db.Create(&evt)
+	mustCreate(t, db, &evt)
 
 	var studentCountBefore int64
 	db.Model(&students.Student{}).Count(&studentCountBefore)
@@ -574,9 +580,7 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 		ProgramStartDate: "2026-11-01",
 		ExpiresAt:        now.Add(7 * 24 * time.Hour),
 	}
-	if err := db.Create(&link).Error; err != nil {
-		t.Fatalf("create link: %v", err)
-	}
+	mustCreate(t, db, &link)
 	contractRef := rand.Text()
 	cusID := "cus_worker_test"
 	contract := billing.Contract{
@@ -588,7 +592,7 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 		TotalCents:       62500,
 		StripeCustomerID: &cusID,
 	}
-	db.Create(&contract)
+	mustCreate(t, db, &contract)
 
 	obl1 := billing.Obligation{
 		ContractID:            contract.ID,
@@ -620,9 +624,9 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 		StripePriceID:         "pr_three_2",
 		CollectionDisposition: "collect",
 	}
-	db.Create(&obl1)
-	db.Create(&obl2)
-	db.Create(&obl3)
+	mustCreate(t, db, &obl1)
+	mustCreate(t, db, &obl2)
+	mustCreate(t, db, &obl3)
 
 	sessID := "cs_recurring_sess"
 	attempt := billing.CheckoutAttempt{
@@ -635,7 +639,7 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 		StripeSessionID:   &sessID,
 		State:             "open",
 	}
-	db.Create(&attempt)
+	mustCreate(t, db, &attempt)
 
 	svc := billingtest.New(t, db, mock.mux)
 
@@ -815,18 +819,14 @@ func TestRefundsAndFraudSignalsSurfaceWithoutWebhook(t *testing.T) {
 		PaidAt:      &now,
 		ExpiresAt:   now.Add(7 * 24 * time.Hour),
 	}
-	if err := db.Create(&link).Error; err != nil {
-		t.Fatalf("create link: %v", err)
-	}
+	mustCreate(t, db, &link)
 	student := students.Student{
 		SourceLinkHash: tokenHash,
 		Details:        link.Details,
 		IsActive:       true,
 		Cohort:         "2026-11",
 	}
-	if err := db.Create(&student).Error; err != nil {
-		t.Fatalf("create student: %v", err)
-	}
+	mustCreate(t, db, &student)
 	cusID := "cus_worker_test"
 	contract := billing.Contract{
 		SourceLinkHash:   tokenHash,
@@ -838,7 +838,7 @@ func TestRefundsAndFraudSignalsSurfaceWithoutWebhook(t *testing.T) {
 		FundedAt:         &now,
 		StripeCustomerID: &cusID,
 	}
-	db.Create(&contract)
+	mustCreate(t, db, &contract)
 	chID := "ch_mock_1"
 	payment := billing.Payment{
 		ID:                 "pi_worker_test",
@@ -848,7 +848,7 @@ func TestRefundsAndFraudSignalsSurfaceWithoutWebhook(t *testing.T) {
 		GrossRefundedCents: 0,
 		PaymentTime:        now,
 	}
-	db.Create(&payment)
+	mustCreate(t, db, &payment)
 
 	invID := "in_initial_paid"
 	obligation := billing.Obligation{
@@ -863,7 +863,7 @@ func TestRefundsAndFraudSignalsSurfaceWithoutWebhook(t *testing.T) {
 		FirstSettledAt:        &now,
 		CollectionDisposition: "collect",
 	}
-	db.Create(&obligation)
+	mustCreate(t, db, &obligation)
 
 	svc := billingtest.New(t, db, mock.mux)
 
@@ -881,8 +881,8 @@ func TestRefundsAndFraudSignalsSurfaceWithoutWebhook(t *testing.T) {
 		db.First(&p, "id = ?", payment.ID)
 		var c billing.Contract
 		db.First(&c, contract.ID)
-		if c.AttentionReason != nil {
-			attention = *c.AttentionReason
+		if c.ReviewReason != nil {
+			attention = *c.ReviewReason
 		}
 		return p, attention
 	}
@@ -891,7 +891,7 @@ func TestRefundsAndFraudSignalsSurfaceWithoutWebhook(t *testing.T) {
 	mock.mu.Lock()
 	mock.refundedCents = 10000
 	mock.mu.Unlock()
-	db.Create(&billing.WebhookEvent{
+	mustCreate(t, db, &billing.WebhookEvent{
 		ID:         "evt_refund_1",
 		EventType:  "refund.updated",
 		ResourceID: "re_test_1",
@@ -960,18 +960,14 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 			CreatedAt: now, SubmittedAt: &now, PaidAt: &now,
 			ExpiresAt: now.Add(7 * 24 * time.Hour),
 		}
-		if err := db.Create(&link).Error; err != nil {
-			t.Fatal(err)
-		}
+		mustCreate(t, db, &link)
 		student := students.Student{
 			SourceLinkHash: tokenHash,
 			Details:        link.Details,
 			IsActive:       true,
 			Cohort:         "2026-11",
 		}
-		if err := db.Create(&student).Error; err != nil {
-			t.Fatal(err)
-		}
+		mustCreate(t, db, &student)
 		cusID := "cus_worker_" + rand.Text()[:8]
 		contract := billing.Contract{
 			SourceLinkHash:   tokenHash,
@@ -983,9 +979,7 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 			FundedAt:         &now,
 			StripeCustomerID: &cusID,
 		}
-		if err := db.Create(&contract).Error; err != nil {
-			t.Fatal(err)
-		}
+		mustCreate(t, db, &contract)
 		return student, contract
 	}
 
@@ -1038,7 +1032,7 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 		DueAt:                 &dueNear,
 		CollectionDisposition: "collect",
 	}
-	db.Create(&obNear)
+	mustCreate(t, db, &obNear)
 
 	// Run worker sweep for contract 1
 	svc.DrainForTest(t.Context())
@@ -1054,7 +1048,7 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 		t.Fatalf("expected 0 suspensions, got %d", suspCount1)
 	}
 
-	// 2. Exact 14-day boundary: unpaid obligation 14 days 1 hour past due -> SUSPENDED
+	// 2. Just past the 14-day boundary: unpaid obligation 14 days 1 hour past due -> SUSPENDED
 	student2, contract2 := setupStudent("Past Boundary", "past@example.com")
 	duePast := now.Add(-14*24*time.Hour - time.Hour)
 	invID2 := "in_boundary_2"
@@ -1071,7 +1065,7 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 		DueAt:                 &duePast,
 		CollectionDisposition: "collect",
 	}
-	db.Create(&obPast)
+	mustCreate(t, db, &obPast)
 
 	// Also add installment 3 (future invoice) to verify future invoices remain scheduled/armed
 	dueFuture := now.Add(15 * 24 * time.Hour)
@@ -1079,6 +1073,7 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 	registerInvoice(invID3, 20833, "draft", *contract2.StripeCustomerID)
 	obFuture := billing.Obligation{
 		ContractID:            contract2.ID,
+		Reference:             rand.Text(),
 		Kind:                  "tuition",
 		Number:                3,
 		AmountCents:           20833,
@@ -1088,7 +1083,7 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 		DueAt:                 &dueFuture,
 		CollectionDisposition: "collect",
 	}
-	db.Create(&obFuture)
+	mustCreate(t, db, &obFuture)
 
 	svc.DrainForTest(t.Context())
 
@@ -1207,6 +1202,7 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 	registerInvoice(invIDOnTime, 20833, "paid", *contract3.StripeCustomerID)
 	obOnTime := billing.Obligation{
 		ContractID:            contract3.ID,
+		Reference:             rand.Text(),
 		Kind:                  "tuition",
 		Number:                2,
 		AmountCents:           20833,
@@ -1218,7 +1214,7 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 		DueAt:                 &dueOld,
 		CollectionDisposition: "collect",
 	}
-	db.Create(&obOnTime)
+	mustCreate(t, db, &obOnTime)
 
 	svc.DrainForTest(t.Context())
 
@@ -1254,7 +1250,7 @@ func TestWorkerSyncsCustomerContact(t *testing.T) {
 		t.Fatalf("initial stamps wrong: %s, %s", c.SyncedCustomerName, c.SyncedCustomerEmail)
 	}
 
-	// 1. Unchanged student => drain produces 0 customer updates
+	// 1. Unchanged contact => drain produces 0 customer updates
 	svc.TouchContract(ctx, tokenHash)
 	svc.DrainForTest(ctx)
 	mock.with(func() {
@@ -1283,7 +1279,7 @@ func TestWorkerSyncsCustomerContact(t *testing.T) {
 		t.Fatalf("customer update = %+v, want %+v", updates[0], wantUpdate)
 	}
 
-	// DB contract stamp equals student
+	// DB contract stamp equals the link's contact
 	if err := db.Where("id = ?", c.ID).Take(&c).Error; err != nil {
 		t.Fatal(err)
 	}

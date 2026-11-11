@@ -3,7 +3,7 @@ package billing
 import (
 	"time"
 
-	"paymentwebsite/internal/links"
+	"projecthermes/internal/links"
 )
 
 // TableName overrides for billing models.
@@ -20,15 +20,15 @@ type Contract struct {
 	SourceLinkHash      []byte      `gorm:"not null;uniqueIndex;check:contract_source_link_hash_size,octet_length(source_link_hash) = 32"`
 	Link                *links.Link `gorm:"foreignKey:SourceLinkHash;references:TokenHash;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 	Reference           string      `gorm:"not null;uniqueIndex"`
-	PlanID              string            `gorm:"not null"`
-	PlanName            string            `gorm:"not null"`
-	InstallmentCount    int               `gorm:"not null;check:contract_installment_count,installment_count > 0"`
-	TotalCents          int64             `gorm:"not null;check:contract_total_cents,total_cents > 0"`
+	PlanID              string      `gorm:"not null"`
+	PlanName            string      `gorm:"not null"`
+	InstallmentCount    int         `gorm:"not null;check:contract_installment_count,installment_count > 0"`
+	TotalCents          int64       `gorm:"not null;check:contract_total_cents,total_cents > 0"`
 	FundedAt            *time.Time
 	StripeCustomerID    *string `gorm:"uniqueIndex"`
 	SyncedCustomerName  string
 	SyncedCustomerEmail string
-	AttentionReason     *string
+	ReviewReason        *string
 	LastSyncedAt        *time.Time
 	NextSyncAt          *time.Time
 	LeaseToken          *string

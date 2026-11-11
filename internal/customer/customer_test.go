@@ -22,13 +22,13 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/billing/billingtest"
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/logging"
-	"paymentwebsite/internal/settings"
-	"paymentwebsite/internal/students"
-	"paymentwebsite/internal/testdb"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/billing/billingtest"
+	"projecthermes/internal/links"
+	"projecthermes/internal/logging"
+	"projecthermes/internal/settings"
+	"projecthermes/internal/students"
+	"projecthermes/internal/testdb"
 )
 
 // later keeps test links usable for any test's duration.
@@ -1056,7 +1056,7 @@ func TestContactEditFlowAndBackNavigation(t *testing.T) {
 	}
 }
 
-func TestContactEditGuardAndStaffPrecedence(t *testing.T) {
+func TestContactEditGuard(t *testing.T) {
 	f := newFixture(t)
 
 	// 1. Submit link
@@ -1141,7 +1141,7 @@ func TestContactEditGuardAndStaffPrecedence(t *testing.T) {
 		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != f.path+"/payments" {
 			t.Fatalf("GET /edit in %s: %d, loc %s; want redirect to /payments", blockedState, w.Code, w.Header().Get("Location"))
 		}
-		// POST /edit redirects to /payments and does NOT modify student
+		// POST /edit redirects to /payments and does NOT modify the link's contact snapshot
 		attemptForm := url.Values{
 			"name":          {"Hacked Name"},
 			"email":         {"hacked@example.com"},

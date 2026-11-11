@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/logging"
-	"paymentwebsite/internal/students"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/links"
+	"projecthermes/internal/logging"
+	"projecthermes/internal/students"
 )
 
 // dashboardWindow is how far the dashboard looks back at enrollment and ahead at
@@ -17,9 +17,9 @@ import (
 const dashboardWindow = 30 * 24 * time.Hour
 
 type dashboardData struct {
-	Staff        string
-	Days         int // The window, in days, for headings.
-	Students     students.Counts
+	Staff          string
+	Days           int // The window, in days, for headings.
+	Students       students.Counts
 	LinksSent      int // Links created within the window, whatever became of them.
 	FormsCompleted int // Links whose customer submitted the form within the window, paid or not.
 	LinksWaiting   int // Links a customer can still fill in.

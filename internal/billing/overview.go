@@ -58,7 +58,7 @@ func (s *Service) Overview(ctx context.Context, now time.Time, window time.Durat
 	if err := db.Raw(`
 		SELECT
 			count(*) FILTER (WHERE c.funded_at >= @since),
-			count(*) FILTER (WHERE c.attention_reason IS NOT NULL OR EXISTS (
+			count(*) FILTER (WHERE c.review_reason IS NOT NULL OR EXISTS (
 				SELECT 1 FROM billing_obligations o WHERE o.contract_id = c.id AND o.review_reason IS NOT NULL))
 		FROM billing_contracts c`, since).Row().Scan(&o.FundedRecently, &o.ContractsInReview); err != nil {
 		return Overview{}, err

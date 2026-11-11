@@ -23,14 +23,14 @@ import (
 
 	"github.com/alexedwards/argon2id"
 	"gorm.io/gorm"
-	"paymentwebsite/internal/auth"
-	"paymentwebsite/internal/billing"
-	"paymentwebsite/internal/billing/billingtest"
-	"paymentwebsite/internal/links"
-	"paymentwebsite/internal/logging"
-	"paymentwebsite/internal/settings"
-	"paymentwebsite/internal/students"
-	"paymentwebsite/internal/testdb"
+	"projecthermes/internal/auth"
+	"projecthermes/internal/billing"
+	"projecthermes/internal/billing/billingtest"
+	"projecthermes/internal/links"
+	"projecthermes/internal/logging"
+	"projecthermes/internal/settings"
+	"projecthermes/internal/students"
+	"projecthermes/internal/testdb"
 )
 
 var htmxHeader = http.Header{"Hx-Request": {"true"}}
@@ -555,13 +555,13 @@ func TestRegistryProjectsNewAndRefreshedRows(t *testing.T) {
 	requireRegistryPrivacy(t, body, details)
 }
 
-func TestRegistryArchivesCompletedSubmissions(t *testing.T) {
+func TestRegistryArchivesPaidLinks(t *testing.T) {
 	a := newApp(t)
 	staff := a.signIn(t, "staff")
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	for _, fixture := range []struct {
-		name                     string
-		createdAge, submittedAge time.Duration
+		name                string
+		createdAge, paidAge time.Duration
 	}{
 		{"Recent completion", 30 * 24 * time.Hour, 23 * time.Hour},
 		{"Archived completion", 26 * time.Hour, 25 * time.Hour},
@@ -575,17 +575,17 @@ func TestRegistryArchivesCompletedSubmissions(t *testing.T) {
 			t.Fatalf("submit %s: saved=%v, err=%v", fixture.name, saved, err)
 		}
 		acceptAgreement(t, a, created.Token)
-		submitted := now.Add(-fixture.submittedAge)
+		paid := now.Add(-fixture.paidAge)
 		digest, _ := hex.DecodeString(created.ID)
 		if err := a.db.WithContext(t.Context()).Transaction(func(tx *gorm.DB) error {
-			if err := links.Enroll(tx, digest, submitted); err != nil {
+			if err := links.Enroll(tx, digest, paid); err != nil {
 				return err
 			}
 			return tx.Model(&links.Link{}).Where("token_hash = ?", digest).
 				Updates(map[string]any{
-					"created_at": now.Add(-fixture.createdAge), "submitted_at": submitted,
-					"paid_at": submitted,
-					"expires_at": submitted.Add(7 * 24 * time.Hour),
+					"created_at": now.Add(-fixture.createdAge), "submitted_at": paid,
+					"paid_at":    paid,
+					"expires_at": paid.Add(7 * 24 * time.Hour),
 				}).Error
 		}); err != nil {
 			t.Fatal(err)
