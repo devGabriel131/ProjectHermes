@@ -72,6 +72,7 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 		return err
 	}
 	registerStudentRoutes(mux, roster, biller, staff, page)
+	registerAddStudentRoutes(mux, roster, staff, page)
 	registerDashboardRoutes(mux, store, roster, biller, staff, page)
 
 	// list renders a tab's registry as a full page, or as just its rows for an

@@ -32,7 +32,7 @@
     <div class="management-page-heading">
       <div>
         <h1>Students</h1>
-        <p class="management-page-description">Paid enrollments, retained after their links expire.</p>
+        <p class="management-page-description">Paid enrollments and students added by staff.</p>
       </div>
     </div>
     <p class="student-request-error" role="alert" hidden></p>
@@ -95,7 +95,7 @@
 {{else}}
 <div class="student-empty">
   <h3>No students yet</h3>
-  <p>Paid enrollments will appear here.</p>
+  <p>Paid enrollments and students added by staff appear here.</p>
 </div>
 {{end}}
 {{end}}
@@ -115,7 +115,7 @@
 {{define "student-detail"}}
 <div class="student-details" hx-sync="closest .student-details:queue all">
   <h1 id="student-heading">Student details</h1>
-  <p class="student-submitted">Enrolled <time datetime="{{.Student.CreatedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.Student.CreatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time> in the {{cohortLabel .Student.Cohort}} cohort</p>
+  <p class="student-submitted">Enrolled <time datetime="{{.Student.CreatedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.Student.CreatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time>{{if .Student.Cohort}} in the {{cohortLabel .Student.Cohort}} cohort{{end}}</p>
   {{range .Student.Fields}}{{template "student-field" .}}{{end}}
   {{template "student-billing" .}}
   <p id="student-billing-{{.Student.ID}}-error" class="student-request-error" role="alert" hidden></p>

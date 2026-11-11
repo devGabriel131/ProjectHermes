@@ -113,18 +113,23 @@ func ParseName(raw string, required bool) (string, error) {
 		return "", nil
 	}
 	words, inWord := 0, false
+	lastWasDot := false
 	normalize := false
 	for _, r := range name {
 		switch {
 		case unicode.IsLetter(r):
-			if !inWord {
+			if !inWord || lastWasDot {
 				words++
 			}
 			inWord = true
-		case unicode.IsMark(r) && inWord:
+			lastWasDot = false
+		case unicode.IsMark(r) && inWord && !lastWasDot:
+		case r == '.' && inWord && !lastWasDot:
+			lastWasDot = true
 		case unicode.Is(unicode.Zs, r):
 			normalize = normalize || r != ' ' || !inWord
 			inWord = false
+			lastWasDot = false
 		default:
 			return "", &ValidationError{Message: message}
 		}
@@ -266,7 +271,7 @@ func ParseGender(raw string, required bool) (string, error) {
 	return parseOption(raw, required, genders, "Select Male or Female.")
 }
 
-// groups are the program stages in order: every student starts in the first.
+// groups are the program stages in order. Enroll starts students in the first; Add uses the one staff choose.
 // Student.Group's column default and check repeat them.
 var groups = []string{"Básico", "Regular"}
 

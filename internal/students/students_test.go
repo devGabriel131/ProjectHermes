@@ -479,3 +479,130 @@ func TestRosterCount(t *testing.T) {
 	}
 	_ = s1
 }
+
+func TestAddInsertsValidStudentsAndRejectsTheRest(t *testing.T) {
+	db, _, sources, ctx := studentStores(t)
+	var calls int
+	roster := students.New(db, func() { calls++ })
+
+	// Setup: enroll one student
+	_, enrolledStudent := enroll(t, db, sources, ctx, "Enrolled Student")
+
+	// Submit a link holding PIN 654321
+	linkEntry, err := sources.Create(ctx, "student-test", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const linkPin = "654321"
+	linkDetails := students.Details{
+		Name: "Pending Customer", Email: "pending@example.com", Phone: "+17875550000", Municipality: "Ponce",
+	}
+	if saved, err := sources.Submit(ctx, linkEntry.Token, linkDetails, linkPin); err != nil || saved != links.Saved {
+		t.Fatalf("submit: saved=%v, err=%v", saved, err)
+	}
+
+	entries := []students.NewStudent{
+		{Name: "Ana Torres", Email: "ana@example.com", Pin: "0388"},
+		{Name: "Amarilys Zapata", Email: "", Pin: "2556"},
+		{Name: "Enrolled Duplicate", Email: "enrolled@example.com", Pin: enrolledStudent.Pin},
+		{Name: "Link Duplicate", Email: "link@example.com", Pin: linkPin},
+		{Name: "Ana Duplicate", Email: "ana2@example.com", Pin: "0388"},
+		{Name: "Mirayda 123 Silvestrini", Email: "m@example.com", Pin: "7247"},
+		{Name: "Luis Rivera", Email: "luis@example.com", Pin: "1234"},
+	}
+
+	added, rejected, err := roster.Add(ctx, "Regular", entries)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	if len(added) != 2 {
+		t.Fatalf("len(added) = %d, want 2", len(added))
+	}
+	if added[0].Name != "Ana Torres" || added[0].Pin != "0388" {
+		t.Fatalf("added[0] = %+v, want Ana Torres (0388)", added[0])
+	}
+	if added[1].Name != "Luis Rivera" || added[1].Pin != "1234" {
+		t.Fatalf("added[1] = %+v, want Luis Rivera (1234)", added[1])
+	}
+
+	wantRejectedIndices := []int{1, 2, 3, 4, 5}
+	if len(rejected) != len(wantRejectedIndices) {
+		t.Fatalf("len(rejected) = %d, want %d: %+v", len(rejected), len(wantRejectedIndices), rejected)
+	}
+	for i, r := range rejected {
+		if r.Index != wantRejectedIndices[i] {
+			t.Fatalf("rejected[%d].Index = %d, want %d", i, r.Index, wantRejectedIndices[i])
+		}
+	}
+	if rejected[0].EmailError != "Enter a valid email address." {
+		t.Fatalf("rejected[0].EmailError = %q, want 'Enter a valid email address.'", rejected[0].EmailError)
+	}
+	for i := 1; i <= 3; i++ {
+		if rejected[i].PinError != "That PIN is already in use." {
+			t.Fatalf("rejected[%d].PinError = %q, want 'That PIN is already in use.'", i, rejected[i].PinError)
+		}
+	}
+	if rejected[4].NameError != "Enter a full name using letters and spaces." {
+		t.Fatalf("rejected[4].NameError = %q, want 'Enter a full name using letters and spaces.'", rejected[4].NameError)
+	}
+
+	// Re-read the added rows with Get
+	for _, a := range added {
+		got, err := roster.Get(ctx, a.ID)
+		if err != nil || got == nil {
+			t.Fatalf("Get(%d) = %+v, %v", a.ID, got, err)
+		}
+		if got.SourceLinkHash != nil {
+			t.Fatalf("SourceLinkHash = %v, want nil", got.SourceLinkHash)
+		}
+		if got.Cohort != "" {
+			t.Fatalf("Cohort = %q, want ''", got.Cohort)
+		}
+		if !got.IsActive {
+			t.Fatalf("IsActive = false, want true")
+		}
+		if got.Group != "Regular" {
+			t.Fatalf("Group = %q, want 'Regular'", got.Group)
+		}
+	}
+	ana, err := roster.Get(ctx, added[0].ID)
+	if err != nil || ana.Pin != "0388" {
+		t.Fatalf("ana.Pin = %q, want '0388'", ana.Pin)
+	}
+
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+
+	cohorts, err := roster.Cohorts(ctx)
+	if err != nil {
+		t.Fatalf("Cohorts() err: %v", err)
+	}
+	if len(cohorts) == 0 || cohorts[len(cohorts)-1] != students.NoCohort {
+		t.Fatalf("Cohorts() = %v, want ending with %q", cohorts, students.NoCohort)
+	}
+
+	list, err := roster.List(ctx, students.Filter{Cohort: students.NoCohort})
+	if err != nil {
+		t.Fatalf("List(Cohort: NoCohort): %v", err)
+	}
+	if len(list) != 2 || list[0].Name != "Luis Rivera" || list[1].Name != "Ana Torres" {
+		t.Fatalf("List = %+v, want [Luis Rivera, Ana Torres]", list)
+	}
+
+	// A second Add where every entry is invalid writes nothing and leaves calls at 1
+	invalidEntries := []students.NewStudent{
+		{Name: "Bad Name 123", Email: "bad", Pin: "99"},
+	}
+	added2, rejected2, err := roster.Add(ctx, "Básico", invalidEntries)
+	if err != nil {
+		t.Fatalf("Add(invalid): %v", err)
+	}
+	if len(added2) != 0 || len(rejected2) != 1 {
+		t.Fatalf("Add(invalid) added=%d, rejected=%d", len(added2), len(rejected2))
+	}
+	if calls != 1 {
+		t.Fatalf("calls after invalid Add = %d, want 1", calls)
+	}
+}

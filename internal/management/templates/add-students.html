@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Add students</title>
+  <link rel="icon" type="image/vnd.microsoft.icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400..700&amp;family=Marcellus&amp;display=swap">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="management management-workspace">
+  <a class="management-skip-link" href="#main-content">Skip to content</a>
+  <header class="management-sidebar">
+    {{template "brand"}}
+    {{template "navigation" "add-students"}}
+    {{template "account" .Staff}}
+  </header>
+  <main id="main-content" class="management-links" tabindex="-1">
+    <div class="management-page-heading">
+      <div>
+        <h1>Add students</h1>
+        <p class="management-page-description">Add students who enrolled outside customer links. They have no billing record and are listed under Existing students.</p>
+      </div>
+    </div>
+    <div class="student-add-panels">
+      <section class="management-panel" aria-labelledby="add-student-heading">
+        <div class="management-panel-heading">
+          <h2 id="add-student-heading">Add one student</h2>
+        </div>
+        <form class="management-settings-form student-add-form" method="post" action="/management/students" autocomplete="off">
+          <label for="add-name">Name</label>
+          <input id="add-name" name="name" type="text" required value="{{.Entry.Name}}"{{if .Errors.NameError}} aria-invalid="true" aria-describedby="add-name-error"{{end}}>
+          {{with .Errors.NameError}}<p id="add-name-error" role="alert">{{.}}</p>{{end}}
+
+          <label for="add-email">Email</label>
+          <input id="add-email" name="email" type="email" required value="{{.Entry.Email}}"{{if .Errors.EmailError}} aria-invalid="true" aria-describedby="add-email-error"{{end}}>
+          {{with .Errors.EmailError}}<p id="add-email-error" role="alert">{{.}}</p>{{end}}
+
+          <label for="add-pin">PIN</label>
+          <input id="add-pin" name="pin" type="text" inputmode="numeric" maxlength="6" required value="{{.Entry.Pin}}"{{if .Errors.PinError}} aria-invalid="true" aria-describedby="add-pin-error"{{end}}>
+          {{with .Errors.PinError}}<p id="add-pin-error" role="alert">{{.}}</p>{{end}}
+
+          <label for="add-group">Group</label>
+          <select id="add-group" name="group" required>
+            <option value=""{{if not .AddGroup}} selected{{end}}>Select a group</option>
+            {{range .Groups}}<option value="{{.}}"{{if eq . $.AddGroup}} selected{{end}}>{{.}}</option>{{end}}
+          </select>
+
+          {{with .AddError}}<p role="alert">{{.}}</p>{{end}}
+          <button type="submit" class="management-button-primary">Add student</button>
+        </form>
+        <div class="management-settings-footer">
+          <p role="status">{{with .Added}}Added <a href="/management/students/{{.ID}}">{{.Name}}</a> to {{.Group}}.{{end}}</p>
+        </div>
+      </section>
+      <section class="management-panel" aria-labelledby="import-roster-heading">
+        <div class="management-panel-heading">
+          <h2 id="import-roster-heading">Import a roster</h2>
+        </div>
+        <form class="management-settings-form student-add-form" method="post" action="/management/students/import" enctype="multipart/form-data">
+          <label for="roster-group">Group</label>
+          <select id="roster-group" name="group" required aria-describedby="roster-group-scope">
+            <option value=""{{if not .ImportGroup}} selected{{end}}>Select a group</option>
+            {{range .Groups}}<option value="{{.}}"{{if eq . $.ImportGroup}} selected{{end}}>{{.}}</option>{{end}}
+          </select>
+          <p id="roster-group-scope">Every student added from this file joins this group.</p>
+
+          <label for="roster-file">Roster file</label>
+          <input id="roster-file" name="roster" type="file" accept=".xlsx,.csv" required aria-describedby="roster-format{{if .ImportError}} roster-error{{end}}"{{if .ImportError}} aria-invalid="true"{{end}}>
+          <p id="roster-format">An .xlsx or .csv file whose first row is a header, then one student per row: last name, first name, student ID (the PIN), email. Rows with problems are skipped; download them, fix them, and upload that file.</p>
+          {{with .ImportError}}<p id="roster-error" role="alert">{{.}}</p>{{end}}
+          <button type="submit" class="management-button-primary">Import</button>
+        </form>
+      </section>
+    </div>
+    {{with .Imported}}
+    <section class="management-panel student-import-report" aria-labelledby="import-report-heading">
+      <div class="management-panel-heading">
+        <h2 id="import-report-heading">Import results</h2>
+        <p role="status">Added {{.Added}} {{plural .Added "student" "students"}} to {{$.ImportGroup}}.{{with .Rejected}} {{len .}} {{plural (len .) "row needs" "rows need"}} fixing.{{end}}</p>
+        {{with .FixFile}}<p><a href="{{.}}" download="students-to-fix.xlsx">Download rows to fix</a></p>{{end}}
+      </div>
+      {{with .Rejected}}
+      <div class="student-table-scroll"><table class="student-table" aria-label="Rows not added">
+        <thead>
+          <tr>
+            <th scope="col">Row</th>
+            <th scope="col">Name</th>
+            <th scope="col">Problems</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .}}
+          <tr>
+            <td>{{.Line}}</td>
+            <td>{{or .Name "—"}}</td>
+            <td>{{range $i, $p := .Problems}}{{if $i}} {{end}}{{$p}}{{end}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table></div>
+      {{end}}
+    </section>
+    {{end}}
+  </main>
+</body>
+</html>

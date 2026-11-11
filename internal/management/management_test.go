@@ -215,6 +215,7 @@ func (a *app) requireRegistry(t *testing.T, want ...links.Entry) {
 func writePaths(id string) []string {
 	return []string{
 		"/management/links", "/management/links/" + id + "/cancel", "/management/links/cancel", "/management/settings", "/management/program-start-date",
+		"/management/students", "/management/students/import",
 		"/management/students/1/fields/name", "/management/students/1/billing/reconcile", "/management/students/1/billing/reinstatement", "/management/students/1/billing/portal",
 	}
 }
@@ -388,6 +389,7 @@ func TestUnauthorizedRequestsCannotUseManagement(t *testing.T) {
 			"/management/trash",
 			"/management/settings",
 			"/management/students",
+			"/management/students/new",
 			"/management/students/1",
 			"/management/students/1/fields/name?edit=1",
 			"/management/students/1/fields/name",
@@ -830,6 +832,7 @@ func TestStoreFailuresAreServerErrors(t *testing.T) {
 		{"trash", http.MethodGet, "/management/trash", nil, nil},
 		{"students", http.MethodGet, "/management/students", nil, nil},
 		{"student", http.MethodGet, "/management/students/1", nil, nil},
+		{"add student", http.MethodPost, "/management/students", nil, url.Values{"name": {"Ana Torres"}, "email": {"ana@example.com"}, "pin": {"9999"}, "group": {"Básico"}}},
 		{"cancel", http.MethodPost, cancel, nil, nil},
 		{"htmx cancel", http.MethodPost, cancel, htmxHeader, nil},
 		{"program date", http.MethodPost, "/management/program-start-date", nil, url.Values{"program_start_date": {"2026-12-01"}}},

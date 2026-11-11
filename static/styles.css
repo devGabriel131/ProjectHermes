@@ -1139,13 +1139,41 @@ button.management-button-danger:enabled:hover {
   font-weight: 500;
 }
 
-.management .student-field-editor :is(input:not([type="hidden"]), select) {
+.management :is(.student-field-editor, .student-add-form) :is(input:not([type="hidden"]), select, textarea) {
   width: 100%;
   min-width: 0;
 }
 
 .management .student-field-editor :is(.student-validation-error, .student-field-actions) {
   grid-column: 2;
+}
+
+/* Wide screens put the two forms side by side; narrow screens stack them. */
+.management .student-add-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.management .student-add-panels > .management-panel + .management-panel {
+  margin-top: 0;
+}
+
+/* Import results fit the screen without sideways scrolling: Row stays as narrow as its
+   numbers, and Name and Problems share the rest and wrap. */
+.management .student-import-report .student-table {
+  min-width: 0;
+}
+
+.management .student-import-report .student-table :is(th, td) {
+  min-width: 0;
+  max-width: none;
+}
+
+.management .student-import-report .student-table :is(th, td):first-child {
+  width: 1%;
+  white-space: nowrap;
 }
 
 .management .student-field-actions {
