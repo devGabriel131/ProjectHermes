@@ -18,6 +18,7 @@ erDiagram
         int id PK "check: id = 1"
         int link_lifetime_days "check: 2..14"
         text program_start_date
+        text bootcamp_date "read by ProjectHephaestus"
         timestamptz updated_at
         string updated_by
     }
@@ -114,7 +115,7 @@ All foreign keys use `ON UPDATE RESTRICT, ON DELETE RESTRICT`. The `sessions` ta
 |---|---|---|---|
 | `users` | `internal/auth` | CLI commands (`user add`, `passwd`, `revoke`, `remove`) | Primary key `username`. Non-null `password_hash`, `auth_version`. |
 | `sessions` | `internal/auth` | SCS Postgres store via HTTP middleware | Primary key `token`. Index `sessions_expiry_idx` on `expiry`. |
-| `settings` | `internal/settings` | Staff via `POST /management/settings` and `POST /management/program-start-date` | Check `settings_single_row (id = 1)`. Check `link_lifetime_days_range (link_lifetime_days BETWEEN 2 AND 14)`. Primary key `id`. |
+| `settings` | `internal/settings` | Staff via `POST /management/settings`, `POST /management/program-start-date` and `POST /management/bootcamp-date` | Check `settings_single_row (id = 1)`. Check `link_lifetime_days_range (link_lifetime_days BETWEEN 2 AND 14)`. Primary key `id`. `bootcamp_date` (YYYY-MM-DD or empty) is read by ProjectHephaestus for its bootcamp employer letter: keep the column name. |
 | `links` | `internal/links` | Staff link create/cancel; customer drafts, autosave, submit, accept; `links.Enroll`; `billing.UpdateContact` | Primary key `token_hash`. Check `token_hash_size (octet_length(token_hash) = 32)`. Partial unique index `idx_link_pin (pin WHERE pin <> '')`. Non-null contact defaults. |
 | `students` | `internal/students` | Billing worker/funding transaction (`links.Enroll`); staff edits; billing worker and staff reinstatement (`is_active`) | Primary key `id`. Unique index and check `student_source_hash_size (octet_length(source_link_hash) = 32)`. Foreign key `source_link_hash` -> `links(token_hash)`. Partial unique index `idx_student_pin (pin WHERE pin <> '')`. Check `student_group_valid ("group" IN ('Básico', 'Regular'))`. Check `student_cohort_month (cohort ~ '^[0-9]{4}-(0[1-9]\|1[0-2])$')`. |
 | `billing_contracts` | `internal/billing` | Customer checkout start (`StartCheckout`); billing worker; staff edits (`TouchContract`); customer edits (`UpdateContact`/`touch`) | Primary key `id`. Unique index and check `contract_source_link_hash_size (octet_length(source_link_hash) = 32)`. Foreign key `source_link_hash` -> `links(token_hash)`. Unique index `reference`. Unique index `stripe_customer_id`. Checks `contract_installment_count (installment_count > 0)`, `contract_total_cents (total_cents > 0)`. |

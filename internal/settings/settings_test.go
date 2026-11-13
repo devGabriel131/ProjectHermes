@@ -152,3 +152,58 @@ func TestProgramStartDate(t *testing.T) {
 		requireSettings(t, "2028-02-29", MinLinkLifetimeDays, current.UpdatedBy)
 	})
 }
+
+// ProjectHephaestus reads bootcamp_date; a bootcamp write must keep the other
+// settings, and the other writes must keep the bootcamp date.
+func TestBootcampDate(t *testing.T) {
+	db := testdb.Open(t, &Settings{})
+	store := New(db)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	current := func(t *testing.T) Settings {
+		t.Helper()
+		got, err := store.Current(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	if err := store.SetBootcampDate(ctx, " 2026-12-05\n", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if got := current(t); got.BootcampDate != "2026-12-05" || got.LinkLifetimeDays != DefaultLinkLifetimeDays || got.ProgramStartDate != "" || got.UpdatedBy != "alice" {
+		t.Fatalf("first save = %+v", got)
+	}
+	if err := store.SetProgramStartDate(ctx, "2027-01-04", "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetLinkLifetimeDays(ctx, MaxLinkLifetimeDays, "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetBootcampDate(ctx, "2027-02-06", "carol"); err != nil {
+		t.Fatal(err)
+	}
+	saved := current(t)
+	if saved.BootcampDate != "2027-02-06" || saved.ProgramStartDate != "2027-01-04" || saved.LinkLifetimeDays != MaxLinkLifetimeDays || saved.UpdatedBy != "carol" {
+		t.Fatalf("after independent writes = %+v", saved)
+	}
+
+	for _, tc := range []struct {
+		name, raw, staff string
+		want             error
+	}{
+		{"empty", "", "dave", ErrBootcampDate},
+		{"impossible", "2027-02-29", "dave", ErrBootcampDate},
+		{"anonymous", "2027-03-06", "", errNoStaff},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := store.SetBootcampDate(ctx, tc.raw, tc.staff); !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+			if got := current(t); got != saved {
+				t.Fatalf("rejected write changed settings: before %+v, after %+v", saved, got)
+			}
+		})
+	}
+}

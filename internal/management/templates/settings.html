@@ -20,7 +20,7 @@
     <div class="management-page-heading">
       <div>
         <h1>Settings</h1>
-        <p class="management-page-description">Choose how long new, unfinished customer forms stay open.</p>
+        <p class="management-page-description">Choose how long new, unfinished customer forms stay open, and when the next bootcamp is.</p>
       </div>
     </div>
     <section class="management-panel management-settings-panel" aria-labelledby="link-lifetime-heading">
@@ -42,6 +42,23 @@
       <div class="management-settings-footer">
         <p role="status">{{.Notice}}</p>
         {{with .Current.UpdatedBy}}<p>Last changed by {{.}} on {{$.Current.UpdatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}.</p>{{end}}
+      </div>
+    </section>
+    <section class="management-panel management-settings-panel" aria-labelledby="bootcamp-heading">
+      <div class="management-panel-heading">
+        <h2 id="bootcamp-heading">Bootcamp date</h2>
+      </div>
+      <form class="management-settings-form" method="post" action="/management/bootcamp-date">
+        <label for="bootcamp-date">Next Bootcamp Militarizado</label>
+        <input id="bootcamp-date" name="bootcamp_date" type="date" value="{{.BootcampDate}}" required
+          aria-describedby="bootcamp-scope{{if .BootcampError}} bootcamp-error{{end}}"
+          {{if .BootcampError}}aria-invalid="true"{{end}}>
+        <p id="bootcamp-scope">Printed on the employer letter students download from Hephaestus. Once this date passes, students can't make the letter until a new date is saved.</p>
+        {{if .BootcampError}}<p id="bootcamp-error" role="alert">{{.BootcampError}}</p>{{end}}
+        <button type="submit" class="management-button-primary">Save</button>
+      </form>
+      <div class="management-settings-footer">
+        <p role="status">{{.BootcampNotice}}</p>
       </div>
     </section>
   </main>

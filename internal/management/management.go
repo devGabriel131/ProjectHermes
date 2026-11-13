@@ -37,7 +37,10 @@ type settingsData struct {
 	Current       settings.Settings
 	Min, Max      int
 	Error, Notice string
-	Staff         string
+	// BootcampDate is the date input's value: the saved date, or the rejected submission.
+	BootcampDate                  string
+	BootcampError, BootcampNotice string
+	Staff                         string
 }
 
 // render writes the named template with status. Responses are never cached,
@@ -234,6 +237,9 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 			return
 		}
 		data.Min, data.Max = settings.MinLinkLifetimeDays, settings.MaxLinkLifetimeDays
+		if data.BootcampError == "" {
+			data.BootcampDate = data.Current.BootcampDate
+		}
 		data.Staff = staff(r.Context())
 		render(w, r, page, status, "settings.html", data)
 	}
@@ -244,7 +250,35 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 		if r.URL.Query().Has("saved") {
 			data.Notice = "Saved."
 		}
+		if r.URL.Query().Has("bootcamp-date-saved") {
+			data.BootcampNotice = "Saved."
+		}
 		showSettings(ctx, w, r, http.StatusOK, data)
+	}))
+	mux.Handle("POST /management/bootcamp-date", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
+		parseErr := r.ParseForm()
+		values := r.PostForm["bootcamp_date"]
+		var data settingsData
+		if len(values) > 0 {
+			data.BootcampDate = values[0]
+		}
+		err := settings.ErrBootcampDate
+		if parseErr == nil && len(values) == 1 {
+			err = config.SetBootcampDate(ctx, values[0], staff(r.Context()))
+		}
+		switch {
+		case err == nil:
+			http.Redirect(w, r, "/management/settings?bootcamp-date-saved", http.StatusSeeOther)
+		case errors.Is(err, settings.ErrBootcampDate):
+			data.BootcampError = "Enter a valid date (YYYY-MM-DD)."
+			showSettings(ctx, w, r, http.StatusUnprocessableEntity, data)
+		default:
+			logging.RecordError(r, "save", err)
+			http.Error(w, "Could not save the bootcamp date. Please try again.", http.StatusInternalServerError)
+		}
 	}))
 	mux.Handle("POST /management/settings", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)

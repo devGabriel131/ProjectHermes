@@ -30,8 +30,9 @@ flowchart TD
 | `POST /management/links` | `index.html`, new link's URL on its row | `result` + `HX-Trigger` | Notice "Link created." |
 | `POST /management/links/{id}/cancel` | `index.html` | `result` + `HX-Trigger`; 204 when the ID names no link | Notice "Link canceled." or "Link can no longer be canceled." |
 | `POST /management/links/cancel` | `index.html` | `result` + `HX-Trigger` | Cancels every cancelable link. |
-| `GET /management/settings` | `settings.html` | same | `?saved` adds the notice "Saved." |
+| `GET /management/settings` | `settings.html` | same | `?saved` adds the lifetime notice "Saved."; `?bootcamp-date-saved` adds it under the bootcamp date. |
 | `POST /management/settings` | 303 to `/management/settings?saved`, or 422 `settings.html` | none | Ordinary form post; the link lifetime only. |
+| `POST /management/bootcamp-date` | 303 to `/management/settings?bootcamp-date-saved`, or 422 `settings.html` "Enter a valid date (YYYY-MM-DD)." | none | Ordinary form post. Saves `settings.bootcamp_date`, the next Bootcamp Militarizado, which ProjectHephaestus prints on its employer letter and treats as over once the day has passed. |
 | `GET /management/dashboard` | `dashboard.html` | `dashboard-content` | [Dashboard](dashboard.md). |
 | `GET /management/students` | `students.html` | `student-records` + `HX-Replace-Url` | Filters in [Students](students.md). |
 | `GET /management/students/{id}` | `students.html` (details page) | `student-detail` (dialog) | |
@@ -80,7 +81,7 @@ Every live region re-fetches itself on the `management-changed` event, which com
 
 | Surface | Limit |
 |---|---|
-| `POST /management/program-start-date` and `/management/settings` body | 1 KiB (`http.MaxBytesReader`) |
+| `POST /management/program-start-date`, `/management/bootcamp-date` and `/management/settings` body | 1 KiB (`http.MaxBytesReader`) |
 | `POST .../fields/{field}` body | 4 KiB; larger is 413 "This value is too large.", unreadable is 400 |
 | Handler database work | 5 s context per handler |
 | Billing actions (reconcile, reinstatement, portal, invoice) | No 5 s handler context. Each billing method bounds its own provider work with `providerBudget` (8 s, under the 10 s server write timeout) |
@@ -92,7 +93,7 @@ Other POST handlers read no body. `GET /management/events` clears its own write 
 
 - **Unpaginated.** `links.Store.List` returns every link, oldest first, and `list` filters by tab in Go; `students.Store.List` returns every matching student, newest first. Both carry `ponytail` ceilings; see [Go-live](../go-live.md).
 - **Pages with a stream.** Links, Trash, students list, student details and the dashboard load `management-live.js`. Settings loads only `settings.js`, login loads no script; neither opens a stream.
-- **Settings publish no event.** `settings.Store` has no `changed` callback, so a start date or lifetime write does not refresh other tabs.
+- **Settings publish no event.** `settings.Store` has no `changed` callback, so a start date, bootcamp date or lifetime write does not refresh other tabs.
 - **Auth is checked when the stream connects.** A tab signed out later keeps its open stream; the next event triggers a refresh, which the 401 plus `HX-Redirect` turns into the login page.
 
 ## Deliberate choices

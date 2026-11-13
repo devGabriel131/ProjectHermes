@@ -226,7 +226,7 @@ Only this browser's session row is deleted; other devices stay signed in. A sign
 |---|---|---|
 | Link created | `links.created_by` | `links.Store.Create` |
 | Link canceled (one or all) | `links.canceled_by`; the first cancellation's audit is kept | `Store.Cancel`, `Store.CancelAll` |
-| Link lifetime or program start date saved | `settings.updated_by` and `updated_at`, row-level: the last writer of either setting | `SetLinkLifetimeDays`, `SetProgramStartDate` |
+| Link lifetime, program start date or bootcamp date saved | `settings.updated_by` and `updated_at`, row-level: the last writer of any setting | `SetLinkLifetimeDays`, `SetProgramStartDate`, `SetBootcampDate` |
 | Reinstatement requested | `billing_suspensions.requested_by`; a repeated request keeps the first | `billing.Service.RequestReinstatement` |
 
 **Not attributed:** student field edits (`students.Store.UpdateField` takes no staff argument) and the Reconcile, portal and invoice billing actions. See [Go-live](go-live.md).
@@ -248,7 +248,7 @@ Only this browser's session row is deleted; other devices stay signed in. A sign
 - `main.go`: `main`, `run`, `newServer`, `SESSION_COOKIE_SECURE`
 - `main_wiring_integration_test.go`: `TestPublicCustomerIgnoresStaffSessions`, `TestCrossOriginWritesAreRejected`
 - `internal/links/links.go`: `Store.Create`, `Store.Cancel`, `Store.CancelAll`, `errNoStaff`, `CreatedBy`, `CanceledBy`
-- `internal/settings/settings.go`: `SetLinkLifetimeDays`, `SetProgramStartDate`, `UpdatedBy`
+- `internal/settings/settings.go`: `SetLinkLifetimeDays`, `SetProgramStartDate`, `SetBootcampDate`, `UpdatedBy`
 - `internal/billing/suspension.go`: `RequestReinstatement`, `errStaffRequired`
 - `internal/billing/models.go`: `RequestedBy`
 - `internal/students/students.go`: `UpdateField`

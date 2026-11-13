@@ -97,7 +97,7 @@ flowchart LR
 | `internal/logging` | JSON events, request correlation, slow-query summaries ([Observability](operations/observability.md)) |
 | `internal/management` | Staff pages and fragments ([Management overview](management/overview.md)) |
 | `internal/payments` | Plans, integer-cent installments, due-date schedules, money formatting |
-| `internal/settings` | The single settings row ([Agreement](domain/agreement.md)) |
+| `internal/settings` | The single settings row: link lifetime, program start date ([Agreement](domain/agreement.md)), bootcamp date |
 | `internal/students` | Student record, contact-field registry, municipalities ([Students](domain/students.md)) |
 | `internal/testdb` | One PostgreSQL schema per integration test ([Testing](testing.md)) |
 | `static/` | Embedded scripts, stylesheets, images, favicon (`//go:embed static`) |
@@ -132,7 +132,7 @@ All GET patterns also answer HEAD (`ServeMux` behavior). On the outer mux, a met
 | Pattern | Registered by |
 |---|---|
 | `GET /management/events` | `newServer` (`live.Feed`) |
-| `GET /management/{$}`, `GET /management/trash`, `POST /management/program-start-date`, `POST /management/links`, `POST /management/links/{id}/cancel`, `POST /management/links/cancel`, `GET`/`POST /management/settings` | `management.RegisterRoutes` |
+| `GET /management/{$}`, `GET /management/trash`, `POST /management/program-start-date`, `POST /management/bootcamp-date`, `POST /management/links`, `POST /management/links/{id}/cancel`, `POST /management/links/cancel`, `GET`/`POST /management/settings` | `management.RegisterRoutes` |
 | `GET /management/dashboard` | `registerDashboardRoutes` |
 | `GET /management/students`, `GET /management/students/{id}`, `GET`/`POST /management/students/{id}/fields/{field}`, `GET /management/students/{id}/billing`, `POST .../billing/reconcile`, `POST .../billing/reinstatement`, `GET .../billing/invoices/{obligation}`, `POST .../billing/portal` | `registerStudentRoutes` |
 

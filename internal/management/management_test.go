@@ -214,7 +214,7 @@ func (a *app) requireRegistry(t *testing.T, want ...links.Entry) {
 
 func writePaths(id string) []string {
 	return []string{
-		"/management/links", "/management/links/" + id + "/cancel", "/management/links/cancel", "/management/settings", "/management/program-start-date",
+		"/management/links", "/management/links/" + id + "/cancel", "/management/links/cancel", "/management/settings", "/management/program-start-date", "/management/bootcamp-date",
 		"/management/students", "/management/students/import",
 		"/management/students/1/fields/name", "/management/students/1/billing/reconcile", "/management/students/1/billing/reinstatement", "/management/students/1/billing/portal",
 	}
@@ -413,7 +413,7 @@ func TestUnauthorizedRequestsCannotUseManagement(t *testing.T) {
 			for _, mode := range modes {
 				t.Run(b.name+"/"+mode.name+path, func(t *testing.T) {
 					res, body := a.send(t, b.browser, http.MethodPost, path, url.Values{
-						"value": {"Unauthorized name"}, "lifetime": {"10"}, "program_start_date": {"2026-12-01"},
+						"value": {"Unauthorized name"}, "lifetime": {"10"}, "program_start_date": {"2026-12-01"}, "bootcamp_date": {"2026-12-05"},
 					}, mode.header)
 					if res.StatusCode != mode.status || res.Header.Get(mode.redirectHeader) != "/management/" {
 						t.Fatalf("status = %d, %s = %q; want %d to /management/",
@@ -433,8 +433,8 @@ func TestUnauthorizedRequestsCannotUseManagement(t *testing.T) {
 		}
 	}
 	current, err := settings.New(a.db).Current(t.Context())
-	if err != nil || current.ProgramStartDate != seeded.ProgramStartDate || !current.UpdatedAt.Equal(seeded.UpdatedAt) ||
-		current.LinkLifetimeDays != settings.DefaultLinkLifetimeDays {
+	if err != nil || current.ProgramStartDate != seeded.ProgramStartDate || current.BootcampDate != seeded.BootcampDate ||
+		!current.UpdatedAt.Equal(seeded.UpdatedAt) || current.LinkLifetimeDays != settings.DefaultLinkLifetimeDays {
 		t.Fatalf("unauthorized request changed settings: current=%+v, seeded=%+v, err=%v", current, seeded, err)
 	}
 }
@@ -836,6 +836,7 @@ func TestStoreFailuresAreServerErrors(t *testing.T) {
 		{"cancel", http.MethodPost, cancel, nil, nil},
 		{"htmx cancel", http.MethodPost, cancel, htmxHeader, nil},
 		{"program date", http.MethodPost, "/management/program-start-date", nil, url.Values{"program_start_date": {"2026-12-01"}}},
+		{"bootcamp date", http.MethodPost, "/management/bootcamp-date", nil, url.Values{"bootcamp_date": {"2026-12-05"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.form.Encode()))
@@ -1070,6 +1071,74 @@ func TestRegistryLoadsProgramSettingsOnlyForFullMainPage(t *testing.T) {
 				t.Fatalf("status=%d, want %d without date control: %s", w.Code, tc.status, body)
 			}
 		})
+	}
+}
+
+func TestBootcampDateSettings(t *testing.T) {
+	a := newApp(t)
+	admin := a.signIn(t, "admin")
+	config := settings.New(a.db)
+	if err := config.SetProgramStartDate(t.Context(), "2027-01-04", "admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, body := a.send(t, admin, http.MethodGet, "/management/settings", nil, nil)
+	if res.StatusCode != http.StatusOK || !strings.Contains(body, `action="/management/bootcamp-date"`) ||
+		!strings.Contains(body, `name="bootcamp_date" type="date" value="" required`) {
+		t.Fatalf("settings page must show empty bootcamp date form: status=%d: %s", res.StatusCode, body)
+	}
+
+	res, body = a.send(t, admin, http.MethodPost, "/management/bootcamp-date", url.Values{"bootcamp_date": {"2026-12-05"}}, nil)
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/management/settings?bootcamp-date-saved" {
+		t.Fatalf("save bootcamp date: status=%d, Location=%q: %s", res.StatusCode, res.Header.Get("Location"), body)
+	}
+	res, body = a.send(t, admin, http.MethodGet, "/management/settings?bootcamp-date-saved", nil, nil)
+	if res.StatusCode != http.StatusOK || !strings.Contains(body, `name="bootcamp_date" type="date" value="2026-12-05" required`) ||
+		!strings.Contains(body, `<p role="status">Saved.</p>`) || !strings.Contains(body, "Last changed by admin") {
+		t.Fatalf("saved settings page must confirm and show bootcamp date: status=%d: %s", res.StatusCode, body)
+	}
+
+	res, body = a.send(t, admin, http.MethodPost, "/management/settings", url.Values{"lifetime": {"10"}}, nil)
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save lifetime: status=%d: %s", res.StatusCode, body)
+	}
+	res, body = a.send(t, admin, http.MethodPost, "/management/bootcamp-date", url.Values{"bootcamp_date": {"2027-02-06"}}, nil)
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("update bootcamp date: status=%d: %s", res.StatusCode, body)
+	}
+	saved, err := config.Current(t.Context())
+	if err != nil || saved.BootcampDate != "2027-02-06" || saved.ProgramStartDate != "2027-01-04" || saved.LinkLifetimeDays != 10 {
+		t.Fatalf("independent writes overwrote settings: %+v, err=%v", saved, err)
+	}
+
+	for _, tc := range []struct {
+		name, query, body, attempted string
+	}{
+		{name: "missing"},
+		{name: "query is not posted", query: "?bootcamp_date=2027-03-06"},
+		{name: "empty", body: "bootcamp_date="},
+		{name: "invalid calendar date", body: "bootcamp_date=2026-02-30", attempted: "2026-02-30"},
+		{name: "duplicate", body: "bootcamp_date=2027-03-06&bootcamp_date=2027-03-07", attempted: "2027-03-06"},
+		{name: "malformed encoding", body: "bootcamp_date=2027-03-06&bad=%zz", attempted: "2027-03-06"},
+		{name: "body limit", body: "bootcamp_date=2027-03-06&padding=" + strings.Repeat("x", 1024)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, text := a.sendRaw(t, admin, http.MethodPost, "/management/bootcamp-date"+tc.query, tc.body, nil)
+			if res.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(text, `id="bootcamp-error" role="alert"`) ||
+				!strings.Contains(text, `name="bootcamp_date" type="date" value="`+tc.attempted+`" required`) {
+				t.Fatalf("invalid form must retain attempted date with error: status=%d: %s", res.StatusCode, text)
+			}
+			current, err := config.Current(t.Context())
+			if err != nil || current.BootcampDate != "2027-02-06" || current.ProgramStartDate != "2027-01-04" || current.LinkLifetimeDays != 10 {
+				t.Fatalf("invalid form changed saved settings: %+v, err=%v", current, err)
+			}
+		})
+	}
+
+	res, body = a.send(t, admin, http.MethodGet, "/management/settings", nil, nil)
+	if res.StatusCode != http.StatusOK || !strings.Contains(body, `name="bootcamp_date" type="date" value="2027-02-06" required`) ||
+		strings.Contains(body, `id="bootcamp-error"`) {
+		t.Fatalf("reload must show unchanged saved date without error: status=%d: %s", res.StatusCode, body)
 	}
 }
 
