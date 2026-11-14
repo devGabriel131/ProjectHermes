@@ -105,14 +105,19 @@ export const expect = (res, label, status, extra = {}) => verify(res, label, sta
 export const expectPlain = (res, label, status, extra = {}) => verify(res, label, status, extra, false);
 
 // Per-step latency (response time only, no think time) and journey failure counters.
-const S = Object.fromEntries(
-  ['welcome', 'forms', 'draft', 'submit', 'agreement', 'accept', 'payments'].map((n) => [n, new Trend(`step_${n}`, true)]),
+export const STEPS = Object.fromEntries(
+  ['welcome', 'start', 'forms', 'draft', 'submit', 'agreement', 'accept', 'payments'].map((n) => [n, new Trend(`step_${n}`, true)]),
 );
 const agreementDateMissing = new Counter('agreement_date_missing');
 
-// Walks one customer from the welcome page to the plan-selection page. Never POSTs /payments
-// (that calls Stripe). Returns true only if every step's checks passed.
-export function completeToPayments(token, idx, { think = true } = {}) {
+export function expectStep(trendName, res, label, status, extra = {}) {
+  STEPS[trendName].add(res.timings.duration);
+  return expect(res, label, status, extra);
+}
+
+// Walks a started enrollment from /forms to plan selection. Never POSTs /payments (that calls Stripe).
+// Returns true only if every step's checks passed.
+export function completeStarted(token, idx, { think = true } = {}) {
   const path = `/customer/${token}`;
   const form = formValues(idx);
   const pause = (lo, hi) => {
@@ -120,67 +125,84 @@ export function completeToPayments(token, idx, { think = true } = {}) {
   };
   const asset = (p) => spec('GET', p, { params: { responseType: 'none' } });
   let ok = true;
-  const step = (trend, res, label, status, extra) => {
-    trend.add(res.timings.duration);
-    ok = expect(res, label, status, extra) && ok;
+  const step = (trendName, res, label, status, extra) => {
+    ok = expectStep(trendName, res, label, status, extra) && ok;
   };
   const staticOk = (res, p) => {
     ok = expectPlain(res, `GET ${p}`, 200) && ok;
   };
 
-  // 1. welcome page + the assets it references (index.html welcome view)
-  const assets = ['/static/customer.css', '/static/logo-mark.webp', '/favicon.ico'];
-  const [welcome, ...rest] = http.batch([spec('GET', path), ...assets.map(asset)]);
-  step(S.welcome, welcome, 'GET /customer/:token', 200, { 'has welcome marker': has('Bienvenidos a Masterminds') });
-  rest.forEach((r, i) => staticOk(r, assets[i]));
-  if (!ok) return false;
-  pause(1, 3);
-
-  // 2. form page + its script
+  // 3. form page + its script
   const [forms, script] = http.batch([spec('GET', `${path}/forms`), asset('/static/customer.js')]);
-  step(S.forms, forms, 'GET /customer/:token/forms', 200, { 'has form marker': has('Agrega la información del estudiante') });
+  step('forms', forms, 'GET /customer/:token/forms', 200, { 'has form marker': has('Agrega la información del estudiante') });
   staticOk(script, '/static/customer.js');
   if (!ok) return false;
   pause(1, 3);
 
-  // 3. autosave on blur, one field per request
+  // 4. autosave on blur, one field per request
   for (const field of FIELDS) {
     const res = call('POST', `${path}/draft/${field}`, { body: encode({ [field]: form[field] }), htmx: true });
-    step(S.draft, res, 'POST /customer/:token/draft/:field', 200, { 'says Guardado.': has('Guardado.') });
+    step('draft', res, 'POST /customer/:token/draft/:field', 200, { 'says Guardado.': has('Guardado.') });
     pause(0.3, 1);
   }
   if (!ok) return false;
   pause(1, 3);
 
-  // 4. final submit: htmx answers 200 + HX-Redirect to the agreement
+  // 5. final submit: htmx answers 200 + HX-Redirect to the agreement
   const submit = call('POST', path, { body: encode(form), htmx: true });
-  step(S.submit, submit, 'POST /customer/:token', 200, { 'HX-Redirect ends /agreement': hdrEnds('HX-Redirect', '/agreement') });
+  step('submit', submit, 'POST /customer/:token', 200, { 'HX-Redirect ends /agreement': hdrEnds('HX-Redirect', '/agreement') });
   if (!ok) return false;
   pause(1, 3);
 
-  // 5. agreement page carries the program start date the customer must accept
+  // 6. agreement page carries the program start date the customer must accept
   const agreement = call('GET', `${path}/agreement`);
-  step(S.agreement, agreement, 'GET /customer/:token/agreement', 200, { 'has agreement marker': has('Revisa y acepta el acuerdo') });
+  step('agreement', agreement, 'GET /customer/:token/agreement', 200, { 'has agreement marker': has('Revisa y acepta el acuerdo') });
   const date = (/name="program_start_date"\s+value="([^"]*)"/.exec(String(agreement.body)) || [])[1];
   if (!date) agreementDateMissing.add(1);
   ok = check(agreement, { 'GET /customer/:token/agreement: program_start_date present': () => Boolean(date) }) && ok;
   if (!ok) return false;
   pause(1, 3);
 
-  // 6. accept terms (plain form post): 303 to payments
+  // 7. accept terms (plain form post): 303 to payments
   const accept = call('POST', `${path}/agreement`, { body: encode({ accept_terms: 'yes', program_start_date: date }) });
-  step(S.accept, accept, 'POST /customer/:token/agreement', 303, { 'Location ends /payments': hdrEnds('Location', '/payments') });
+  step('accept', accept, 'POST /customer/:token/agreement', 303, { 'Location ends /payments': hdrEnds('Location', '/payments') });
   if (!ok) return false;
   pause(1, 3);
 
-  // 7. plan selection
+  // 8. plan selection
   const payments = call('GET', `${path}/payments`);
-  step(S.payments, payments, 'GET /customer/:token/payments', 200, {
+  step('payments', payments, 'GET /customer/:token/payments', 200, {
     'has plan-selection marker': has('Elige tu plan de pago'),
     'lists Pago Único': has('Pago Único'),
   });
   return ok;
 }
+
+// Walks one customer from the welcome page to the plan-selection page. Never POSTs /payments
+// (that calls Stripe). Returns true only if every step's checks passed.
+export function completeToPayments(token, idx, { think = true } = {}) {
+  const path = `/customer/${token}`;
+  const asset = (p) => spec('GET', p, { params: { responseType: 'none' } });
+  let ok = true;
+
+  // 1. welcome page + the assets it references (index.html welcome view)
+  const assets = ['/static/customer.css', '/static/logo-mark.webp', '/favicon.ico'];
+  const [welcome, ...rest] = http.batch([spec('GET', path), ...assets.map(asset)]);
+  ok = expectStep('welcome', welcome, 'GET /customer/:token', 200, { 'has welcome marker': has('Bienvenidos a Masterminds') }) && ok;
+  rest.forEach((r, i) => {
+    ok = expectPlain(r, `GET ${assets[i]}`, 200) && ok;
+  });
+  if (!ok) return false;
+  if (think) sleep(1 + Math.random() * 2);
+
+  // 2. start enrollment session -> 303 to /forms + enrollment_session cookie
+  const started = call('POST', `${path}/start`);
+  ok = expectStep('start', started, 'POST /customer/:token/start', 303, { 'Location ends /forms': hdrEnds('Location', '/forms') }) && ok;
+  if (!ok) return false;
+
+  return completeStarted(token, idx, { think });
+}
+
 
 // handleSummary body: compact table on stdout, full JSON to OUT (default /tmp/k6/out/<script>.json;
 // the directory must exist).

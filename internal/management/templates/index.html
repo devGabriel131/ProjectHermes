@@ -30,11 +30,11 @@
       </div>
       {{if not .Trash}}
       <form id="create-link" action="/management/links" method="post"
-        hx-post="/management/links" hx-target="#link-tokens" hx-swap="beforeend"
+        hx-post="/management/links" hx-swap="none"
         hx-disabled-elt="button">
         <button type="submit" class="management-button-primary">
           <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-          Create &amp; copy link
+          Create link
         </button>
       </form>
       {{end}}
@@ -61,14 +61,10 @@
     <section class="management-panel" aria-labelledby="link-registry-heading">
       <div class="management-panel-heading">
         <h2 id="link-registry-heading">{{if .Trash}}Canceled and expired links{{else}}Link registry{{end}}</h2>
-        <p>{{if .Trash}}These links no longer open the customer form. Their data is kept.{{else}}Each URL is shown only once, right after you create it. Paid links stay here for 24 hours.{{end}}</p>
+        <p>{{if .Trash}}These links or enrollments no longer open. Their data is kept.{{else}}Share any active link with customers. Completed enrollments leave this page 24 hours after payment.{{end}}</p>
       </div>
       <p id="link-status" role="status">{{.Notice}}</p>
       <p id="link-refresh-error" role="status"></p>
-      {{/* A created link's URL and copy button wait here until a list refresh
-        moves them into their row. Placed before the list so a row's placeholders
-        resolve to these first. */}}
-      <div id="link-tokens" hidden></div>
       <ul id="generated-links" role="list" aria-label="Generated customer links"
         hx-get="{{if .Trash}}/management/trash{{else}}/management/{{end}}" hx-trigger="management-changed from:body">{{template "link-rows" .}}</ul>
       <div class="management-empty">
@@ -84,13 +80,6 @@
       </div>
       <div class="management-panel-footer">
         <p class="management-retention-note">{{if .Trash}}Links and their history are retained, not deleted.{{else}}Paid links leave this page after 24 hours; their information remains in Students. Canceled and expired unpaid links move to Trash.{{end}}</p>
-        {{if not .Trash}}
-        <form action="/management/links/cancel" method="post"
-          hx-post="/management/links/cancel" hx-swap="none" hx-disabled-elt="button"
-          hx-confirm="Cancel all unfinished links? Unfinished customer forms will no longer open. Completed submissions are kept.">
-          <button type="submit" class="management-button-danger">Cancel all unfinished links</button>
-        </form>
-        {{end}}
       </div>
     </section>
   </main>
@@ -99,32 +88,69 @@
 </html>
 
 {{define "link"}}
-<li class="management-link">
+<li class="management-link" id="link-row-{{.Link.ID}}">
   <div class="management-link-details">
     <div class="management-link-heading">
-      <strong{{if not .Name}} class="management-link-unnamed"{{end}}>{{or .Name "No name yet"}}</strong>
-      {{with .Phone}}<span class="management-link-phone">{{.}}</span>{{end}}
-      <span class="management-link-status" data-status="{{.Status}}">{{.Status}}</span>
+      <strong>{{.Link.Name}}</strong>
+      <span class="management-link-status" data-status="{{.Link.Status}}">{{.Link.Status}}</span>
+      <details class="management-link-rename" id="link-rename-{{.Link.ID}}">
+        <summary>Rename</summary>
+        <form class="management-link-rename-form" action="/management/links/{{.Link.ID}}/rename" method="post"
+          hx-post="/management/links/{{.Link.ID}}/rename" hx-swap="none" hx-disabled-elt="button">
+          <label class="visually-hidden" for="link-name-input-{{.Link.ID}}">Link name</label>
+          <input id="link-name-input-{{.Link.ID}}" name="name" type="text" value="{{.Link.Name}}" maxlength="100" required>
+          <button type="submit" class="management-button-primary">Save</button>
+        </form>
+      </details>
     </div>
     <div class="management-link-meta">
-      <span>Created <time datetime="{{.CreatedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.CreatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time>{{with .CreatedBy}} by {{.}}{{end}}</span>
-      {{- if eq .Status "Canceled"}}{{with .CanceledBy}}<span>Link canceled by {{.}}</span>{{end}}
+      <span>Created <time datetime="{{.Link.CreatedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.Link.CreatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time>{{with .Link.CreatedBy}} by {{.}}{{end}}</span>
+      {{- if eq .Link.Status "Canceled"}}{{with .Link.CanceledBy}}<span>Link canceled by {{.}}</span>{{end}}
       {{- else}}
-        {{- with .SubmittedAt}}<span>Submitted <time datetime="{{.UTC.Format "2006-01-02T15:04:05Z"}}">{{.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></span>{{end}}
-        {{- with .PaidAt}}<span>Paid <time datetime="{{.UTC.Format "2006-01-02T15:04:05Z"}}">{{.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></span>{{end}}
-        {{- if ne .Status "Finished"}}
-        <span>{{if eq .Status "Expired"}}Expired{{else}}Expires{{end}}
-        <time datetime="{{.ExpiresAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.ExpiresAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></span>{{end}}{{end}}
+      <span>{{if eq .Link.Status "Expired"}}Expired{{else}}Expires{{end}}
+      <time datetime="{{.Link.ExpiresAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.Link.ExpiresAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></span>{{end}}
+      <span>{{.Link.EnrollmentCount}} {{plural .Link.EnrollmentCount "enrollment" "enrollments"}}</span>
     </div>
-    {{template "link-url" .}}
+    <a id="link-url-{{.Link.ID}}" class="management-link-url" href="/customer/{{.Link.Token}}" target="_blank" rel="noopener noreferrer">/customer/{{.Link.Token}}</a>
+    {{- if .Enrollments}}
+    <details class="management-enrollments-tree" id="link-tree-{{.Link.ID}}">
+      <summary>{{len .Enrollments}} {{plural (len .Enrollments) "enrollment" "enrollments"}}</summary>
+      <ul class="management-enrollments" role="list">
+        {{- range .Enrollments}}
+        <li class="management-enrollment" id="enrollment-row-{{.ID}}">
+          <div class="management-enrollment-heading">
+            <strong{{if not .Name}} class="management-link-unnamed"{{end}}>{{or .Name "No name yet"}}</strong>
+            {{with .Phone}}<span class="management-link-phone">{{.}}</span>{{end}}
+            <span class="management-link-status" data-status="{{.Status}}">{{.Status}}</span>
+          </div>
+          <div class="management-link-meta">
+            <span>Started <time datetime="{{.CreatedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.CreatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></span>
+            {{- with .SubmittedAt}}<span>Submitted <time datetime="{{.UTC.Format "2006-01-02T15:04:05Z"}}">{{.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></span>{{end}}
+            {{- if .TermsAcceptedAt}}<span>Agreement accepted <time datetime="{{.TermsAcceptedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.TermsAcceptedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time>{{with .ProgramStartDate}} (start {{.}}){{end}}</span>{{end}}
+            {{- with .PaidAt}}<span>Paid <time datetime="{{.UTC.Format "2006-01-02T15:04:05Z"}}">{{.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></span>{{end}}
+            {{- if and .SubmittedAt (or (eq .Status "Awaiting payment") (eq .Status "Expired"))}}<span>{{if eq .Status "Expired"}}Expired{{else}}Expires{{end}} <time datetime="{{.ExpiresAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.ExpiresAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></span>{{end}}
+            {{- if eq .Status "Canceled"}}{{with .CanceledBy}}<span>Canceled by {{.}}</span>{{end}}{{end}}
+          </div>
+          {{- if .Cancelable}}
+          <form class="management-enrollment-cancel" action="/management/enrollments/{{.ID}}/cancel" method="post"
+            hx-post="/management/enrollments/{{.ID}}/cancel" hx-swap="none"
+            hx-disabled-elt="button" hx-confirm="{{if eq .Status "Expired"}}Clear this expired enrollment's PIN so it can be reused?{{else if eq .Status "Awaiting payment"}}Cancel this awaiting-payment enrollment and close any open checkout session?{{else}}Are you sure you want to cancel this enrollment?{{end}}">
+            <button id="enrollment-cancel-{{.ID}}" type="submit" class="management-button-danger">{{if eq .Status "Expired"}}Clear PIN{{else}}Cancel enrollment{{end}}</button>
+          </form>
+          {{- end}}
+        </li>
+        {{- end}}
+      </ul>
+    </details>
+    {{- end}}
   </div>
   <div class="management-link-actions">
-    {{- template "link-copy" .}}
-    {{- if .Cancelable}}
-    <form action="/management/links/{{.ID}}/cancel" method="post"
-      hx-post="/management/links/{{.ID}}/cancel" hx-swap="none"
-      hx-disabled-elt="button" hx-confirm="Are you sure you want to cancel this link? It will no longer open the customer form.">
-      <button id="link-cancel-{{.ID}}" type="submit" class="management-button-danger">Cancel link</button>
+    <button id="link-copy-{{.Link.ID}}" type="button" data-copy-link>Copy link</button>
+    {{- if .Link.Cancelable}}
+    <form action="/management/links/{{.Link.ID}}/cancel" method="post"
+      hx-post="/management/links/{{.Link.ID}}/cancel" hx-swap="none"
+      hx-disabled-elt="button" hx-confirm="Are you sure you want to cancel this link? New customers will not be able to start.">
+      <button id="link-cancel-{{.Link.ID}}" type="submit" class="management-button-danger">Cancel link</button>
     </form>
     {{- end -}}
   </div>
@@ -133,24 +159,9 @@
 
 {{define "link-rows"}}{{range .Links}}{{template "link" .}}{{end}}{{end}}
 
-{{/* A created link's one-time URL and copy button. Rows without the token
-  render hidden placeholders, and hx-preserve keeps the real ones in place
-  across list refreshes. */}}
-{{define "link-url"}}
-{{- if .Token}}<a id="link-url-{{.ID}}" class="management-link-url" href="/customer/{{.Token}}" target="_blank" rel="noopener noreferrer">/customer/{{.Token}}</a>
-{{- else}}<span id="link-url-{{.ID}}" hidden hx-preserve></span>{{end}}
-{{- end}}
-
-{{define "link-copy"}}
-{{- if .Token}}<button id="link-copy-{{.ID}}" type="button" data-copy-link>Copy link</button>
-{{- else}}<span id="link-copy-{{.ID}}" hidden hx-preserve></span>{{end}}
-{{- end}}
-
 {{define "result"}}
-{{range .Links}}{{template "link-url" .}}{{template "link-copy" .}}{{end}}
 <p id="link-status" hx-swap-oob="innerHTML">{{.Notice}}</p>
 {{end}}
-
 {{define "brand"}}
 <div class="management-brand" translate="no">
   <img src="/static/logo-mark.webp" alt="" width="320" height="314">

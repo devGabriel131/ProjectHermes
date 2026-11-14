@@ -326,6 +326,27 @@
   outline-offset: 4px;
 }
 
+.customer-secondary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.625rem 1.5rem;
+  border: 1.5px solid var(--field-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.customer-secondary:hover {
+  background: var(--teal-tint);
+}
+
 /* Welcome: the logo leads, then the road ahead and one clear action. */
 .customer-welcome main,
 .customer-not-found main {
@@ -394,6 +415,10 @@
 .welcome-roadmap span:not(.welcome-roadmap-icon) {
   color: var(--muted);
   font-size: 0.9375rem;
+}
+
+.welcome form {
+  width: 100%;
 }
 
 .welcome .customer-primary {

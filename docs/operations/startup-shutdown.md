@@ -55,7 +55,7 @@ Facts the diagram compresses:
 
 - The logger is built first, from the `RAILWAY_*` variables; only the web server logs to stdout ([Observability](observability.md)).
 - Ping and `AutoMigrate` share one 10 s context derived from the signal context. The slow-query summary is flushed right after the migration.
-- `AutoMigrate(models()...)` creates or alters every table: `auth.User`, `auth.Session`, `settings.Settings`, `links.Link`, `students.Student` and `billing.Models()`. There are no migration files ([Data model](../data-model.md)).
+- `migrate` detects the pre-reusable-links schema (`links.token_hash` without `enrollments`), drops `links` and the five core `billing_*` tables while preserving `users`, `sessions`, `settings`, `students`, and `billing_webhook_events`, and runs `AutoMigrate(models()...)` to create or alter every table: `auth.User`, `auth.Session`, `settings.Settings`, `links.Link`, `links.Enrollment`, `students.Student` and `billing.Models()`. There are no migration files ([Data model](../data-model.md)).
 - Cookie and Stripe settings are read only after the database is migrated, so a bad Stripe variable still leaves the schema migrated.
 - The worker goroutine starts before `net.Listen`; a `listen` failure unwinds through the deferred stop, which cancels and awaits it.
 - Any startup failure is logged by `main` after `run` returns, so deferred cleanup (including the final slow-query flush) happens first.
@@ -145,7 +145,7 @@ Details:
 
 ## Source
 
-- `main.go`: `main`, `run`, `serve`, `newServer`, `startupError`, `models`, `signalContext`, `cancelWorker`
+- `main.go`: `main`, `run`, `serve`, `newServer`, `startupError`, `models`, `migrate`, `signalContext`, `cancelWorker`
 - `internal/auth/http.go`: `New`, `Close`, `deleteExpiredSessions`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`
 - `internal/live/live.go`: `Feed.Close`, `writeTimeout`

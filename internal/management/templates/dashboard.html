@@ -100,9 +100,11 @@
     </div>
     <dl class="dashboard-stats">
       <div><dt>Links created</dt><dd>{{.LinksSent}}</dd></div>
+      <div><dt>Enrollments started</dt><dd>{{.EnrollmentsStarted}}</dd></div>
       <div><dt>Forms completed</dt><dd>{{.FormsCompleted}}</dd></div>
       <div><dt>Paid enrollments</dt><dd>{{.Billing.FundedRecently}}</dd></div>
-      <div><dt>Open links</dt><dd>{{.LinksWaiting}}<small>Waiting on a customer right now</small></dd></div>
+      <div><dt>Active links</dt><dd>{{.ActiveLinks}}<small>Accepting new enrollments now</small></dd></div>
+      <div><dt>In progress</dt><dd>{{.LinksWaiting}}<small>Customers filling out form now</small></dd></div>
     </dl>
   </section>
 </div>

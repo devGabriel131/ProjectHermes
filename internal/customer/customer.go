@@ -53,18 +53,23 @@ type pageData struct {
 	// Editing marks the contact form reopened after submit.
 	Editing         bool
 	ContactEditable bool
+	// Welcome state flags derived from the browser's enrollment session cookie.
+	HasEnrollment bool
+	Completed     bool
+	CanStartNew   bool
 }
 
 // site is the customer-facing handler set: one template set over the stores the pages read and write.
 type site struct {
-	page     *template.Template
-	links    *links.Store
-	roster   *students.Store
-	settings *settings.Store
-	billing  *billing.Service
+	page          *template.Template
+	links         *links.Store
+	roster        *students.Store
+	settings      *settings.Store
+	billing       *billing.Service
+	secureCookies bool
 }
 
-func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Store, configuration *settings.Store, biller *billing.Service) error {
+func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Store, configuration *settings.Store, biller *billing.Service, secureCookies bool) error {
 	page, err := template.New("index.html").Funcs(template.FuncMap{
 		"municipalities": students.MunicipalityOptions,
 		"trim":           strings.TrimSpace,
@@ -76,9 +81,10 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 		return err
 	}
 
-	s := &site{page: page, links: store, roster: roster, settings: configuration, billing: biller}
-	mux.Handle("GET /customer/{token}", withHeaders(s.view("welcome")))
-	mux.Handle("GET /customer/{token}/forms", withHeaders(s.view("form")))
+	s := &site{page: page, links: store, roster: roster, settings: configuration, billing: biller, secureCookies: secureCookies}
+	mux.Handle("GET /customer/{token}", withHeaders(s.welcome))
+	mux.Handle("POST /customer/{token}/start", withHeaders(s.start))
+	mux.Handle("GET /customer/{token}/forms", withHeaders(s.forms))
 	mux.Handle("POST /customer/{token}", withHeaders(s.submit))
 	mux.Handle("POST /customer/{token}/draft/{field}", withHeaders(s.draft))
 	mux.Handle("POST /customer/{token}/pin", withHeaders(s.checkPin))
@@ -90,6 +96,28 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 	mux.Handle("POST /customer/{token}/payments", withHeaders(s.payments))
 	mux.Handle("GET /payments/return", withHeaders(s.paymentReturn))
 	return nil
+}
+
+const sessionCookieName = "enrollment_session"
+
+func readSessionCookie(r *http.Request) string {
+	c, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return c.Value
+}
+
+func setSessionCookie(w http.ResponseWriter, linkToken, sessionToken string, secure bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    sessionToken,
+		Path:     "/customer/" + url.PathEscape(linkToken),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+		MaxAge:   30 * 24 * 60 * 60,
+	})
 }
 
 func htmx(r *http.Request) bool { return r.Header.Get("HX-Request") == "true" }
@@ -122,20 +150,31 @@ func (s *site) render(w http.ResponseWriter, r *http.Request, name string, data 
 	}
 }
 
-// found reports whether a link lookup produced a usable link; otherwise it has already rendered
-// the failure (500 for a database error, 404 for no link) with the named template.
-func (s *site) found(w http.ResponseWriter, r *http.Request, name string, data *pageData, link *links.Link, err error) bool {
+// resolveSession resolves the customer's enrollment session for inner routes.
+// Missing/unusable sessions redirect GET/HEAD to the welcome page when the link is still usable, and render 404 otherwise.
+func (s *site) resolveSession(w http.ResponseWriter, r *http.Request, name string, data *pageData, token string) (*links.Enrollment, bool) {
+	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
+	defer cancel()
+	sess, err := s.links.LookupSession(ctx, token, readSessionCookie(r))
 	switch {
 	case err != nil:
 		logging.RecordError(r, "lookup", err)
 		data.Error = "No pudimos abrir este enlace. Intenta de nuevo."
 		s.render(w, r, name, *data, http.StatusInternalServerError)
-	case link == nil:
+		return nil, false
+	case sess == nil:
 		s.render(w, r, name, *data, http.StatusNotFound)
+		return nil, false
+	case sess.Enrollment == nil || !sess.Usable:
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && sess.LinkUsable {
+			redirectCustomer(w, r, "/customer/"+url.PathEscape(token))
+			return nil, false
+		}
+		s.render(w, r, name, *data, http.StatusNotFound)
+		return nil, false
 	default:
-		return true
+		return sess.Enrollment, true
 	}
-	return false
 }
 
 // Redirects carry no contact data, including the HTMX submission response.
@@ -149,40 +188,107 @@ func redirectCustomer(w http.ResponseWriter, r *http.Request, target string) {
 	w.WriteHeader(http.StatusSeeOther)
 }
 
-// view serves the welcome and form pages. GET records a visit; HEAD only checks usability.
-// A submitted form never shows again: GET continues to the agreement, HEAD reports it usable.
-func (s *site) view(name string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token := r.PathValue("token")
-		data := pageData{Path: "/customer/" + url.PathEscape(token), View: name}
-		ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
-		defer cancel()
-		lookup := s.links.Lookup
-		if r.Method == http.MethodGet {
-			lookup = s.links.Open
-		}
-		link, err := lookup(ctx, token)
-		if !s.found(w, r, "index.html", &data, link, err) {
-			return
-		}
-		if link.SubmittedAt != nil {
-			if r.Method == http.MethodHead {
-				w.WriteHeader(http.StatusOK)
+// welcome serves the reusable link landing page without creating database rows.
+func (s *site) welcome(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "welcome"}
+	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
+	defer cancel()
+	sess, err := s.links.LookupSession(ctx, token, readSessionCookie(r))
+	if err != nil {
+		logging.RecordError(r, "lookup", err)
+		data.Error = "No pudimos abrir este enlace. Intenta de nuevo."
+		s.render(w, r, "index.html", data, http.StatusInternalServerError)
+		return
+	}
+	if sess == nil {
+		s.render(w, r, "index.html", data, http.StatusNotFound)
+		return
+	}
+	if sess.Enrollment != nil {
+		switch sess.EnrollmentStatus {
+		case links.AwaitingPayment:
+			if sess.Usable {
+				if r.Method == http.MethodHead {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				redirectCustomer(w, r, data.Path+"/agreement")
 				return
 			}
-			redirectCustomer(w, r, data.Path+"/agreement")
+		case links.Finished:
+			data.Completed = true
+			data.CanStartNew = sess.LinkUsable
+			s.render(w, r, "index.html", data, http.StatusOK)
+			return
+		case links.InProgress:
+			if sess.Usable {
+				data.HasEnrollment = true
+				s.render(w, r, "index.html", data, http.StatusOK)
+				return
+			}
+		}
+	}
+	if !sess.LinkUsable {
+		s.render(w, r, "index.html", data, http.StatusNotFound)
+		return
+	}
+	s.render(w, r, "index.html", data, http.StatusOK)
+}
+
+// start begins or resumes a browser's enrollment session on a reusable link and sets its cookie.
+func (s *site) start(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	path := "/customer/" + url.PathEscape(token)
+	data := pageData{Path: path, View: "welcome"}
+	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
+	defer cancel()
+	enrollment, newCookie, err := s.links.StartEnrollment(ctx, token, readSessionCookie(r))
+	if err != nil {
+		logging.RecordError(r, "start", err)
+		data.Error = "No pudimos abrir este enlace. Intenta de nuevo."
+		s.render(w, r, "index.html", data, http.StatusInternalServerError)
+		return
+	}
+	if enrollment == nil {
+		s.render(w, r, "index.html", data, http.StatusNotFound)
+		return
+	}
+	if newCookie != "" {
+		setSessionCookie(w, token, newCookie, s.secureCookies)
+	}
+	if enrollment.SubmittedAt != nil {
+		redirectCustomer(w, r, path+"/agreement")
+		return
+	}
+	redirectCustomer(w, r, path+"/forms")
+}
+
+// forms serves the contact form page for an active enrollment session.
+func (s *site) forms(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "form"}
+	link, ok := s.resolveSession(w, r, "index.html", &data, token)
+	if !ok {
+		return
+	}
+	if link.SubmittedAt != nil {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
 			return
 		}
-		data.Details = link.Details
-		s.render(w, r, "index.html", data, http.StatusOK)
+		redirectCustomer(w, r, data.Path+"/agreement")
+		return
 	}
+	data.Details = link.Details
+	s.render(w, r, "index.html", data, http.StatusOK)
 }
 
 // submit commits the final contact form and PIN and advances to the agreement. Valid input is written with
 // no prior lookup, so a database failure is recorded as a save failure; anything else observes
 // link usability and completion first. The HTMX request swaps in only the content section.
 func (s *site) submit(w http.ResponseWriter, r *http.Request) {
-	token := r.PathValue("token")
+	token, cookieToken := r.PathValue("token"), readSessionCookie(r)
 	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "form"}
 	name := "index.html"
 	if htmx(r) {
@@ -195,17 +301,17 @@ func (s *site) submit(w http.ResponseWriter, r *http.Request) {
 		data.Error = "No pudimos leer tu información. Intenta de nuevo."
 	} else if parsed, pin, ok := readSubmission(r.PostForm, &data); !ok {
 		status = http.StatusUnprocessableEntity
-	} else if allowed, err := s.links.SpendPinCheck(ctx, token); err != nil {
+	} else if allowed, err := s.links.SpendPinCheck(ctx, token, cookieToken); err != nil {
 		logging.RecordError(r, "save", err)
 		data.Error = "No pudimos guardar tu información. Intenta de nuevo."
 		s.render(w, r, name, data, http.StatusInternalServerError)
 		return
 	} else if !allowed {
-		// Out of PIN answers, or no usable open link: the lookup below tells which.
+		// Out of PIN answers, or no usable open enrollment: the lookup below tells which.
 		data.FieldErrors["pin"] = pinLimitMessage
 		status = http.StatusTooManyRequests
 	} else {
-		result, err := s.links.Submit(ctx, token, parsed, pin)
+		result, err := s.links.Submit(ctx, token, cookieToken, parsed, pin)
 		switch {
 		case err != nil:
 			logging.RecordError(r, "save", err)
@@ -216,7 +322,7 @@ func (s *site) submit(w http.ResponseWriter, r *http.Request) {
 			redirectCustomer(w, r, data.Path+"/agreement")
 			return
 		case result == links.PinTaken:
-			// Another submitted link or enrolled student holds the PIN: redraw below with what was typed.
+			// Another submitted enrollment or enrolled student holds the PIN: redraw below with what was typed.
 			data.FieldErrors["pin"] = pinTakenMessage
 			status = http.StatusUnprocessableEntity
 		default:
@@ -225,8 +331,8 @@ func (s *site) submit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	link, err := s.links.Lookup(ctx, token)
-	if !s.found(w, r, name, &data, link, err) {
+	link, ok := s.resolveSession(w, r, name, &data, token)
+	if !ok {
 		return
 	}
 	if link.SubmittedAt != nil {
@@ -243,7 +349,7 @@ func (s *site) submit(w http.ResponseWriter, r *http.Request) {
 // draft autosaves one field on blur. It answers only with status so it never redraws fields in use.
 // An unknown field is refused before the body is read or the database is touched.
 func (s *site) draft(w http.ResponseWriter, r *http.Request) {
-	token, key := r.PathValue("token"), r.PathValue("field")
+	token, key, cookieToken := r.PathValue("token"), r.PathValue("field"), readSessionCookie(r)
 	data := pageData{View: "save-status"}
 	field, known := students.FindField(key)
 	if !known {
@@ -262,7 +368,7 @@ func (s *site) draft(w http.ResponseWriter, r *http.Request) {
 		data.FieldErrors = map[string]string{key: fieldError(key)}
 		status = http.StatusUnprocessableEntity
 	} else {
-		result, err := s.links.SaveDraft(ctx, token, key, value)
+		result, err := s.links.SaveDraft(ctx, token, cookieToken, key, value)
 		switch {
 		case err != nil:
 			logging.RecordError(r, "save", err)
@@ -278,8 +384,8 @@ func (s *site) draft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	link, err := s.links.Lookup(ctx, token)
-	if !s.found(w, r, "save-status", &data, link, err) {
+	link, ok := s.resolveSession(w, r, "save-status", &data, token)
+	if !ok {
 		return
 	}
 	if link.SubmittedAt != nil {
@@ -305,15 +411,15 @@ func (s *site) edit(w http.ResponseWriter, r *http.Request) {
 	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "form", Editing: true}
 	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
 	defer cancel()
-	link, err := s.links.Lookup(ctx, token)
-	if !s.found(w, r, "index.html", &data, link, err) {
+	link, ok := s.resolveSession(w, r, "index.html", &data, token)
+	if !ok {
 		return
 	}
 	if link.SubmittedAt == nil {
 		redirectCustomer(w, r, data.Path+"/forms")
 		return
 	}
-	editable, err := s.billing.ContactEditable(ctx, link.TokenHash)
+	editable, err := s.billing.ContactEditable(ctx, link.ID)
 	if err != nil {
 		logging.RecordError(r, "load", err)
 		data.Error = "No pudimos abrir este enlace. Intenta de nuevo."
@@ -336,7 +442,7 @@ func (s *site) edit(w http.ResponseWriter, r *http.Request) {
 			redirectCustomer(w, r, data.Path+"/agreement")
 			return
 		} else {
-			err = s.billing.UpdateContact(ctx, link.TokenHash, parsed)
+			err = s.billing.UpdateContact(ctx, link.ID, parsed)
 			switch {
 			case errors.Is(err, billing.ErrContactLocked):
 				redirectCustomer(w, r, data.Path+"/payments")
@@ -399,14 +505,14 @@ func readSubmission(form url.Values, data *pageData) (parsed students.Details, p
 // it checks whether the PIN is held by a student or a submitted link, and the unique index decides at submit. It is a POST
 // so the PIN stays out of URLs and access logs.
 func (s *site) checkPin(w http.ResponseWriter, r *http.Request) {
-	token := r.PathValue("token")
+	token, cookieToken := r.PathValue("token"), readSessionCookie(r)
 	data := pageData{View: "pin-status"}
-	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
-	defer cancel()
-	link, err := s.links.Lookup(ctx, token)
-	if !s.found(w, r, "pin-status", &data, link, err) {
+	link, ok := s.resolveSession(w, r, "pin-status", &data, token)
+	if !ok {
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
+	defer cancel()
 	if link.SubmittedAt != nil {
 		locked(w, r)
 		return
@@ -426,7 +532,7 @@ func (s *site) checkPin(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, "pin-status", data, http.StatusUnprocessableEntity)
 		return
 	}
-	allowed, err := s.links.SpendPinCheck(ctx, token)
+	allowed, err := s.links.SpendPinCheck(ctx, token, cookieToken)
 	if err != nil {
 		logging.RecordError(r, "lookup", err)
 		data.Error = "No pudimos verificar el PIN. Intenta de nuevo."

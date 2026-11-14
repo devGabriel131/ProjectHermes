@@ -17,13 +17,15 @@ import (
 const dashboardWindow = 30 * 24 * time.Hour
 
 type dashboardData struct {
-	Staff          string
-	Days           int // The window, in days, for headings.
-	Students       students.Counts
-	LinksSent      int // Links created within the window, whatever became of them.
-	FormsCompleted int // Links whose customer submitted the form within the window, paid or not.
-	LinksWaiting   int // Links a customer can still fill in.
-	Billing        billing.Overview
+	Staff              string
+	Days               int // The window, in days, for headings.
+	Students           students.Counts
+	LinksSent          int // Reusable links created within the window, whatever became of them.
+	EnrollmentsStarted int // Customer enrollment sessions started within the window.
+	FormsCompleted     int // Enrollments whose customer submitted the form within the window, paid or not.
+	ActiveLinks        int // Reusable links still open to new enrollments right now.
+	LinksWaiting       int // Enrollments in progress right now.
+	Billing            billing.Overview
 }
 
 // NeedsAttention reports whether anything on the dashboard calls for staff action.
@@ -47,7 +49,7 @@ func registerDashboardRoutes(mux *http.ServeMux, store *links.Store, roster *stu
 		now := time.Now().UTC()
 		since := now.Add(-dashboardWindow)
 		data := dashboardData{Staff: staff(r.Context()), Days: int(dashboardWindow / (24 * time.Hour))}
-		entries, err := store.List(ctx)
+		groups, err := store.ListGroups(ctx)
 		if err == nil {
 			data.Students, err = roster.Count(ctx)
 		}
@@ -59,15 +61,23 @@ func registerDashboardRoutes(mux *http.ServeMux, store *links.Store, roster *stu
 			http.Error(w, "Could not load the dashboard. Please try again.", http.StatusInternalServerError)
 			return
 		}
-		for _, entry := range entries {
-			if entry.Cancelable() {
-				data.LinksWaiting++
-			}
-			if !entry.CreatedAt.Before(since) {
+		for _, g := range groups {
+			if !g.Link.CreatedAt.Before(since) {
 				data.LinksSent++
 			}
-			if entry.SubmittedAt != nil && !entry.SubmittedAt.Before(since) {
-				data.FormsCompleted++
+			if g.Link.Status == links.LinkActive {
+				data.ActiveLinks++
+			}
+			for _, entry := range g.Enrollments {
+				if entry.Status == links.InProgress {
+					data.LinksWaiting++
+				}
+				if !entry.CreatedAt.Before(since) {
+					data.EnrollmentsStarted++
+				}
+				if entry.SubmittedAt != nil && !entry.SubmittedAt.Before(since) {
+					data.FormsCompleted++
+				}
 			}
 		}
 		name := "dashboard.html"

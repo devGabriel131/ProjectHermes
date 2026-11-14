@@ -22,7 +22,7 @@ The deadline control works through `http.ResponseController`, which reaches the 
 
 | Publisher | Calls `Changed` after |
 |---|---|
-| links store | `Create`, `Open`, `AcceptTerms`, draft and submit saves (`saveResult`), `Cancel`, `CancelAll` |
+| links store | `CreateLink`, `RenameLink`, `StartEnrollment` (new enrollment), `AcceptTerms`, draft and submit saves (`saveResult`), `CancelLink`, `CancelEnrollment`, and `billing.Service.CancelEnrollment` (via `CancelEnrollmentTx` + `changed`) |
 | students store | `UpdateField` when the value actually changed (a normalized no-op notifies nobody) |
 | billing | `StartCheckout` attempt changes, `UpdateContact`, `requestFee`, `evaluateDeadlines`, `evaluateReactivation`, and worker writes that change stored state (`fund`, `moveAttempt`, `store`, `mark`, `reviewObligation`) |
 | settings store | **Never.** `settings.New(db)` takes no callback, so saving the link lifetime or program start date publishes no event. |
@@ -158,7 +158,7 @@ The feed is an in-process map of channels. A write handled by another process ne
 - `main.go`: `newServer`, `serve`, `RegisterOnShutdown`, `live.New`
 - `internal/auth/http.go`: `Require`
 - `internal/logging/http.go`: `statusWriter`, `Unwrap`
-- `internal/links/links.go`: `Store.Create`, `Store.Open`, `Store.AcceptTerms`, `saveResult`, `Store.Cancel`, `Store.CancelAll`
+- `internal/links/links.go`: `Store.CreateLink`, `Store.StartEnrollment`, `Store.AcceptTerms`, `saveResult`, `Store.CancelLink`, `Store.CancelEnrollment`
 - `internal/students/students.go`: `UpdateField`
 - `internal/billing/checkout.go`: `StartCheckout`
 - `internal/billing/contact.go`: `UpdateContact`

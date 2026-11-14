@@ -1,130 +1,130 @@
-# Links
+# Links and Enrollments
 
-A Link is the private, expiring URL staff hand to one customer; this page covers its token, its seven statuses, expiry, drafts, cancellation and how staff see it. The end-to-end story is in [Lifecycle](lifecycle.md); the customer's HTTP behavior is in [Customer flow](customer-flow.md); the Student a paid link becomes is in [Students](students.md).
+A `Link` is a reusable, expiring URL staff share with one or more prospective students; each browser that starts on that link gets its own `Enrollment` tied to a path-scoped session cookie. This page covers tokens, link and enrollment statuses, expiry, drafts, cancellation, and how staff see them. The end-to-end story is in [Lifecycle](lifecycle.md); the customer's HTTP behavior is in [Customer flow](customer-flow.md); the Student a paid enrollment becomes is in [Students](students.md).
 
-`links.Store` owns the `links` row from staff creation until payment, though `billing.UpdateContact` also writes its contact columns before payment ([Customer flow](customer-flow.md)). From then on the row is frozen history and billing only calls `links.Enroll` and `links.Usable` against it (see [Lifecycle](lifecycle.md)).
+`links.Store` owns `links` and `enrollments` from creation until payment, though `billing.UpdateContact` also writes an enrollment's contact columns before payment ([Customer flow](customer-flow.md)). Once paid, the enrollment is frozen history and billing only calls `links.Enroll` and `links.Usable` against it (see [Lifecycle](lifecycle.md)).
 
-## Token
+## Tokens and sessions
 
 | Rule | Detail |
 |---|---|
-| Generation | 32 bytes from `crypto/rand`, base64url without padding: a 43-character token. Shown to staff once, in `Entry.Token`, and never stored. |
-| Storage | `links.token_hash` (primary key) is the SHA-256 of the 43-character token text: 32 bytes, enforced by the `token_hash_size` check. A database leak yields no usable URL. |
-| Staff handle | `Entry.ID` is the lowercase hex of the digest. Staff cancel by ID and cannot recover the token from it. |
-| Wrong length | `tokenDigest` rejects any token whose length is not 43 before hashing. The result is the same as an unknown token. |
-| Unusable token | Unknown, malformed, canceled and expired tokens all render the same branded 404 (`not-found.html`, "Este enlace ya no es válido"). HTMX requests also get `HX-Refresh: true`. The response never says which case applied. |
+| Link token | 32 bytes from `crypto/rand`, base64url without padding: a 43-character token stored in `links.token` (unique, `token_length` check) so staff can copy the link any time while it remains visible. |
+| Session cookie | `StartEnrollment` generates a second 32-byte random token returned once to the browser as the `enrollment_session` cookie (HttpOnly, `SameSite=Lax`, scoped to `/customer/{token}`) and stores only its SHA-256 digest in `enrollments.session_hash` (`session_hash_size` check: 32 bytes). |
+| Per-link cap | `MaxLinkEnrollments` (100) bounds how many `enrollments` rows one `Link` can accumulate. Existing live unpaid sessions still resume when the cap is reached; new starts are refused. |
+| Wrong length | `validToken` / `tokenDigest` reject any link or cookie token whose length is not 43 before querying or hashing. |
+| Unusable link | Unknown, malformed, canceled, expired, or full links (for visitors without a live session) render the same branded 404 (`not-found.html`, "Este enlace ya no es válido"). HTMX requests also get `HX-Refresh: true`. |
 
 ## Statuses
 
-`Link.entry` derives the status on every read; it is never stored. The first matching rule wins:
+### Link status (`LinkStatus`)
+
+`Link.status` derives the reusable link's status on every read:
 
 | # | Status | Condition |
 |---|---|---|
-| 1 | Canceled | `canceled_at` set |
-| 2 | Finished | `paid_at` set (wins over expiry: an in-flight payment can fund after the link lapses) |
-| 3 | Awaiting payment | `submitted_at` set and now before `expires_at` |
-| 4 | Expired | now at or after `expires_at` (submitted-but-unpaid links included) |
-| 5 | In progress | any of the six contact columns is non-empty |
-| 6 | Opened | `opened_at` set |
-| 7 | Not opened | none of the above |
+| 1 | `Canceled` | `links.canceled_at` set |
+| 2 | `Expired` | now at or after `links.expires_at` |
+| 3 | `Active` | neither canceled nor expired |
+
+### Enrollment status (`Status`)
+
+`Enrollment.status` derives each child enrollment's progress on every read. The first matching rule wins:
+
+| # | Status | Condition |
+|---|---|---|
+| 1 | `Canceled` | `enrollments.canceled_at` set |
+| 2 | `Finished` | `enrollments.paid_at` set (wins over expiry: an in-flight payment can fund after the enrollment lapses) |
+| 3 | `Awaiting payment` | `enrollments.submitted_at` set and now before `enrollments.expires_at` (independent of parent link cancellation/expiry) |
+| 4 | `Canceled` | `enrollments.submitted_at` is nil and parent `links.canceled_at` set (inherits `links.canceled_by`) |
+| 5 | `Expired` | now at or after `links.expires_at` or `enrollments.expires_at` (submitted-but-unpaid enrollments past 168 h included) |
+| 6 | `In progress` | active unsubmitted enrollment |
 
 ```mermaid
 stateDiagram-v2
-    state "Not opened" as NotOpened
     state "In progress" as InProgress
     state "Awaiting payment" as AwaitingPayment
-    [*] --> NotOpened : staff Create
-    NotOpened --> Opened : first customer GET
-    NotOpened --> InProgress : draft saved
-    Opened --> InProgress : draft saved
-    InProgress --> Opened : every draft field cleared
-    NotOpened --> AwaitingPayment : Submit
-    Opened --> AwaitingPayment : Submit
+    [*] --> InProgress : customer POST /start
     InProgress --> AwaitingPayment : Submit
-    NotOpened --> Canceled : Cancel or CancelAll
-    Opened --> Canceled : Cancel or CancelAll
-    InProgress --> Canceled : Cancel or CancelAll
-    NotOpened --> Expired : expires_at passes
-    Opened --> Expired : expires_at passes
-    InProgress --> Expired : expires_at passes
+    InProgress --> Canceled : CancelEnrollment or CancelLink
+    InProgress --> Expired : link or enrollment expires_at passes
     AwaitingPayment --> Expired : 168 hours pass unpaid
     AwaitingPayment --> Finished : funding runs links.Enroll
-    Expired --> Finished : late funding of a submitted link
+    Expired --> Finished : late funding of a submitted enrollment
     Canceled --> [*]
     Finished --> [*]
 ```
 
-Clearing every draft field returns an In progress link to Opened, or to Not opened if the customer never loaded a page (a direct draft POST can write without a visit).
-
-Overlays computed on `Entry`, not extra statuses:
+Overlays computed on `LinkEntry` and `EnrollmentEntry`:
 
 | Overlay | Rule |
 |---|---|
-| Cancelable | Not opened, Opened or In progress (`Entry.Cancelable`) |
-| Trashed | Canceled or Expired (`Entry.Trashed`) |
-| Archived | Finished and `paid_at` at least 24 hours old (`Entry.Archived`) |
-| Customer access | `canceled_at IS NULL AND expires_at > now()` (`Usable`). A Finished link still returns the 404 once its 168 hours pass. |
+| `LinkEntry.Cancelable` | `LinkActive` |
+| `LinkEntry.Trashed` | `LinkCanceled` or `LinkExpired` |
+| `EnrollmentEntry.Cancelable` | `InProgress`, `AwaitingPayment`, or `Expired` while holding a PIN (`HasPin`) |
+| `EnrollmentEntry.Trashed` | `Canceled` or `Expired` |
+| `EnrollmentEntry.Archived` | `Finished` and `paid_at` at least 24 hours old |
+| Customer access (`Usable`) | `canceled_at IS NULL AND expires_at > now()`. For unsubmitted enrollments, both the enrollment and its parent link must satisfy `Usable`; once submitted, only the enrollment's own `Usable` governs. |
 
 ## Expiry
 
 | Moment | `expires_at` | Clock |
 |---|---|---|
-| `POST /management/links` | now plus the configured lifetime, 2 to 14 days, default 7 ([Agreement](agreement.md)) | application clock |
-| `Store.Submit` | `now() + interval '168 hours'`, replacing the initial value | database clock |
+| `POST /management/links` | `links.expires_at` = now plus configured lifetime, 2 to 14 days, default 7 ([Agreement](agreement.md)) | application clock |
+| `Store.StartEnrollment` | `enrollments.expires_at` copies the parent `links.expires_at` | parent link |
+| `Store.Submit` | `enrollments.expires_at = now() + interval '168 hours'`, replacing the initial value | database clock |
 | Agreement, `/edit`, payment | unchanged | none |
 | Customer access check (`Usable`) | `expires_at > now()` | database clock |
-| Staff status display (`Link.entry`) | compares against `time.Now()` | application clock |
+| Staff status display | compares against `time.Now()` | application clock |
 
-A link already issued keeps its own expiry when the lifetime setting changes. A missing expiry fails closed.
+Already-issued links and started enrollments keep their expiry when the lifetime setting changes.
 
-## First visit
+## Starting a session
 
-`Store.Open` sets `opened_at = now()` (guarded by `opened_at IS NULL`) and publishes a live event. Only `GET /customer/{token}` and `GET /customer/{token}/forms` call it. `HEAD` and every other route use `Store.Lookup`, which records nothing. A submitted link is never "opened" again: GET continues to the agreement.
+`Store.LookupSession` resolves `(linkToken, cookieToken)` read-only without writing any rows (`GET /customer/{token}` and `HEAD` never mutate the database). `Store.StartEnrollment` runs a transaction locking the `Link` row `FOR UPDATE`: if `cookieToken` matches an active unpaid (`InProgress` or `AwaitingPayment`) enrollment on that same link, it returns that existing enrollment without creating a new row or issuing a new cookie; otherwise, provided the link is usable and under `MaxLinkEnrollments`, it creates a new `Enrollment`, returns its fresh cookie token, and publishes a live event.
 
 ## Drafts
 
-`Store.SaveDraft` writes one column per call, for the six registry fields only (`students.FindField`). PIN and group are not draftable, so `/draft/pin` is an unknown field. The UPDATE requires a usable link with `submitted_at IS NULL` and `column <> value`: an unchanged value writes nothing and publishes nothing. Empty values are accepted, so a customer can clear a field. Drafts are validated with `required=false`: empty passes, non-empty must be valid ([Students](students.md)).
+`Store.SaveDraft` writes one column per call, for the six registry fields only (`students.FindField`). PIN and group are not draftable, so `/draft/pin` is an unknown field. The UPDATE requires an unsubmitted enrollment whose parent link and enrollment are both `Usable`, with `column <> value`: an unchanged value writes nothing and publishes nothing. Empty values are accepted, so a customer can clear a field. Drafts are validated with `required=false`: empty passes, non-empty must be valid ([Students](students.md)).
 
-`Store.SpendPinCheck` adds one to `pin_checks` on a usable, unsubmitted link while it is under `MaxPinChecks` (30) and reports whether it did. The customer PIN check and every valid final submit call it first, so one link can obtain at most 30 PIN availability answers. It publishes nothing.
+`Store.SpendPinCheck` adds one to `pin_checks` on a usable, unsubmitted enrollment while it is under `MaxPinChecks` (30) and reports whether it did. The customer PIN check and every valid final submit call it first, so one enrollment can obtain at most 30 PIN availability answers. It publishes nothing.
 
 ## Submit
 
-`Store.Submit` is one guarded `UPDATE links`: it writes the six contact columns and the PIN, sets `submitted_at = now()` and `expires_at = now() + 168 hours`. It creates no Student. The guards are: usable, not yet submitted, and no enrolled Student holding the PIN ([Students](students.md) covers the PIN rules). A replay on a submitted link changes nothing, so the deadline never moves. When the UPDATE touches no row, `saveResult` re-reads the link to separate "unusable" (404) from "already submitted" from "PIN held".
+`Store.Submit` is one guarded `UPDATE enrollments ... FROM links`: it writes the six contact columns and the PIN, sets `submitted_at = now()` and `expires_at = now() + 168 hours`. It creates no Student. The guards are: parent link and enrollment both `Usable`, not yet submitted, and no enrolled Student holding the PIN ([Students](students.md) covers the PIN rules). A replay on a submitted enrollment changes nothing, so the deadline never moves. When the UPDATE touches no row, `saveResult` re-reads the enrollment (checking active unsubmitted first, then active submitted regardless of parent link state) to separate "unusable" (404) from "already submitted" from "PIN held".
 
 ## Cancellation
 
-`Store.Cancel(id, staff)` and `Store.CancelAll(staff)` set `canceled_at` and `canceled_by`. They match only usable links with `submitted_at IS NULL`, so Awaiting payment, Finished, Expired and already-Canceled links never change and the first cancellation's audit survives. `Cancel` returns the stored entry either way; management reports "Link can no longer be canceled." when the status is not Canceled. Malformed or unknown IDs return nothing. A Canceled link keeps its draft for staff.
-
+- `Store.RenameLink(id, name, staff)` trims whitespace and updates `links.name` when changed, rejecting empty, over-100-rune, or control-character names with `ErrInvalidLinkName`.
+- `Store.CancelLink(id, staff)` sets `links.canceled_at` and `links.canceled_by` on an active link. New starts are blocked and unsubmitted child enrollments derive `Canceled`; already-submitted or paid enrollments keep their 168-hour window and independent lifecycle.
+- `Store.CancelEnrollment(id, staff)` sets `enrollments.canceled_at` and `enrollments.canceled_by` on a usable, unsubmitted enrollment whose parent link is still usable, leaving the parent link active for other customers. Staff enrollment cancellation goes through `billing.Service.CancelEnrollment`, which expires any open Stripe Checkout session (blocking in-flight payments) and calls `CancelEnrollmentTx(tx, id, staff)` to cancel `InProgress`/`AwaitingPayment` enrollments (clearing their PIN) or clear an `Expired` submission's PIN without changing its `Expired` status.
 ## Staff list
 
-`Store.List` returns every link oldest first, unpaginated. Management filters the result:
+`Store.ListGroups` returns every `Link` with its child `Enrollment`s (`LinkGroup`), oldest first, unpaginated. Management filters the result per tab:
 
 | Page | Shows |
 |---|---|
-| `/management/` (main list) | Not opened, Opened, In progress, Awaiting payment, and Finished links less than 24 hours past `paid_at` |
-| `/management/trash` | Canceled and Expired links, with their saved data |
-| neither | Archived links. The Student row on the Students page is the surviving record ([Students](../management/students.md)). |
+| `/management/` (main list) | Active links (with their `InProgress`, `AwaitingPayment`, and <24 h `Finished` enrollments), plus canceled/expired links that still have active `AwaitingPayment` or <24 h `Finished` enrollments |
+| `/management/trash` | Canceled and expired links and any `Canceled` or `Expired` enrollments |
+| neither | Archived `Finished` enrollments (24+ hours past `paid_at`) under trashed links. The Student row on the Students page is the surviving record ([Students](../management/students.md)). |
 
-A submitted link that lapses unpaid is Expired and moves to Trash. A late payment returns it to Finished, so it reappears on the main list for 24 hours.
-
-`links.Entry` is the staff projection: ID, Name, Phone, `CreatedAt`, `ExpiresAt`, `SubmittedAt`, `PaidAt`, the two audit names and Status. It carries no email, date of birth, municipality, gender or PIN, so the list cannot leak answers. `Token` is set only by `Create`.
+`EnrollmentEntry` carries ID, LinkID, Name, Phone, `CreatedAt`, `ExpiresAt`, `SubmittedAt`, `PaidAt`, `CanceledAt`, `CanceledBy`, `Status`, and `HasPin`—no email, date of birth, municipality, gender, or raw PIN.
 
 ## Audit
 
-`Create`, `Cancel` and `CancelAll` refuse an empty staff name, so no action is anonymous. `created_by` and `canceled_by` record the username supplied by `auth.Staff` ([Staff auth](../staff-auth.md)). An empty value means the action has not happened.
+`CreateLink`, `RenameLink`, `CancelLink`, `CancelEnrollment`, and `CancelEnrollmentTx` refuse an empty staff name (`errNoStaff`), so no action is anonymous. `created_by` and `canceled_by` record the username supplied by `auth.Staff` ([Staff auth](../staff-auth.md)).
 
 ## Deliberate choices
 
-- `Lookup` and `Open` stay separate: `HEAD` and every route except the two GET pages must not record a visit.
-- `saveResult` re-reads after zero rows, because the 404-before-409 precedence needs to tell an unusable link from a submitted one.
+- `LookupSession` and `StartEnrollment` stay separate: `GET /customer/{token}` and `HEAD` never create rows, preventing bots or link previews from consuming the 100-enrollment cap.
+- `saveResult` re-reads after zero rows, because the 404-before-409 precedence needs to tell an unusable enrollment from a submitted one, including submitted enrollments whose parent link was later canceled.
 - `Usable` is exported because billing applies it under row locks (`StartCheckout`, `UpdateContact`).
-- `Link.Student` looks unused but creates the `RESTRICT` foreign key from `students.source_link_hash` to the link that tests assert.
-- `Enroll` never checks `Usable`: money was collected, so a link that expired before payment still enrolls.
+- `Enrollment.Student` creates the `RESTRICT` foreign key from `students.enrollment_id`.
+- `Enroll` never checks `Usable`: money was collected, so an enrollment that expired before payment still enrolls.
 
 ## Source
 
-- `internal/links/links.go`: `Link`, `Status`, `NotOpened`, `AwaitingPayment`, `Finished`, `Entry`, `Entry.Cancelable`, `Entry.Archived`, `Entry.Trashed`, `Link.entry`, `Store.Create`, `Store.List`, `Store.Lookup`, `Store.Open`, `Store.SaveDraft`, `Store.Submit`, `Store.Cancel`, `Store.CancelAll`, `Enroll`, `Usable`, `tokenDigest`, `tokenBytes`, `saveResult`
-- `internal/customer/customer.go`: `view`, `render`
+- `internal/links/links.go`: `Link`, `Enrollment`, `LinkStatus`, `Status`, `LinkEntry`, `EnrollmentEntry`, `LinkGroup`, `Session`, `MaxLinkEnrollments`, `MaxPinChecks`, `ErrInvalidLinkName`, `Store.CreateLink`, `Store.RenameLink`, `Store.ListGroups`, `Store.LookupLink`, `Store.LookupSession`, `Store.StartEnrollment`, `Store.SaveDraft`, `Store.Submit`, `Store.SpendPinCheck`, `Store.AcceptTerms`, `Store.CancelLink`, `Store.CancelEnrollment`, `CancelEnrollmentTx`, `Enroll`, `Usable`, `tokenDigest`, `validToken`, `tokenBytes`, `saveResult`
+- `internal/customer/customer.go`: `welcome`, `start`, `resolveSession`, `render`
 - `internal/management/management.go`: `RegisterRoutes`
 - `internal/settings/settings.go`: `Settings.LinkLifetime`
 - `internal/students/fields.go`: `FindField`

@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -16,7 +15,6 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +37,7 @@ var htmxHeader = http.Header{"Hx-Request": {"true"}}
 var later = time.Now().Add(time.Hour)
 
 // unknownID is a well-formed management ID that names no link.
-var unknownID = strings.Repeat("00", sha256.Size)
+var unknownID = "999999"
 
 type app struct {
 	url   string
@@ -96,13 +94,21 @@ func newBiller(t *testing.T, db *gorm.DB) *billing.Service {
 			"livemode": false,
 		})
 	})
+	mux.HandleFunc("POST /v1/checkout/sessions/{id}/expire", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":             r.PathValue("id"),
+			"object":         "checkout.session",
+			"status":         "expired",
+			"payment_status": "unpaid",
+		})
+	})
 	return billingtest.New(t, db, mux)
 }
 
 // newApp wires routes like main.go: auth owns session middleware.
 func newApp(t *testing.T) *app {
 	t.Helper()
-	models := append([]any{&links.Link{}, &students.Student{}, &settings.Settings{}, &auth.User{}, &auth.Session{}}, billing.Models()...)
+	models := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}, &settings.Settings{}, &auth.User{}, &auth.Session{}}, billing.Models()...)
 	db := testdb.Open(t, models...)
 	store := links.New(db, nil)
 	log := logging.New(io.Discard)
@@ -181,13 +187,13 @@ func (a *app) sendRaw(t *testing.T, browser *http.Client, method, path, body str
 	return res, string(content)
 }
 
-func (a *app) list(t *testing.T) []links.Entry {
+func (a *app) list(t *testing.T) []links.LinkGroup {
 	t.Helper()
-	entries, err := a.store.List(t.Context())
+	groups, err := a.store.ListGroups(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return entries
+	return groups
 }
 
 func contactDetails(name string) students.Details {
@@ -196,57 +202,47 @@ func contactDetails(name string) students.Details {
 	}
 }
 
-// requireRegistry compares what List can return: never a token, and creation
-// times differ in precision from Create's.
-func (a *app) requireRegistry(t *testing.T, want ...links.Entry) {
+// requireRegistry compares link groups and their child enrollments without time precision noise.
+func (a *app) requireRegistry(t *testing.T, want ...links.LinkGroup) {
 	t.Helper()
-	listed := func(entries []links.Entry) []links.Entry {
-		out := make([]links.Entry, len(entries))
-		for i, e := range entries {
-			out[i] = links.Entry{ID: e.ID, Name: e.Name, Phone: e.Phone, Status: e.Status, CreatedBy: e.CreatedBy, CanceledBy: e.CanceledBy}
+	normalize := func(groups []links.LinkGroup) []links.LinkGroup {
+		out := make([]links.LinkGroup, len(groups))
+		for i, g := range groups {
+			out[i].Link = links.LinkEntry{
+				ID: g.Link.ID, Name: g.Link.Name, Token: g.Link.Token,
+				Status: g.Link.Status, CreatedBy: g.Link.CreatedBy, CanceledBy: g.Link.CanceledBy,
+				EnrollmentCount: g.Link.EnrollmentCount,
+			}
+			out[i].Enrollments = make([]links.EnrollmentEntry, len(g.Enrollments))
+			for j, e := range g.Enrollments {
+				out[i].Enrollments[j] = links.EnrollmentEntry{
+					ID: e.ID, LinkID: e.LinkID, Name: e.Name, Phone: e.Phone,
+					Status: e.Status, CanceledBy: e.CanceledBy,
+				}
+			}
 		}
 		return out
 	}
-	if got := a.list(t); !slices.Equal(listed(got), listed(want)) {
+	got := a.list(t)
+	if fmt.Sprintf("%+v", normalize(got)) != fmt.Sprintf("%+v", normalize(want)) {
 		t.Fatalf("registry = %+v, want %+v", got, want)
 	}
 }
 
-func writePaths(id string) []string {
+func writePaths(id uint64) []string {
 	return []string{
-		"/management/links", "/management/links/" + id + "/cancel", "/management/links/cancel", "/management/settings", "/management/program-start-date", "/management/bootcamp-date",
+		"/management/links", fmt.Sprintf("/management/links/%d/cancel", id), fmt.Sprintf("/management/links/%d/rename", id),
+		fmt.Sprintf("/management/enrollments/%d/cancel", id),
+		"/management/settings", "/management/program-start-date", "/management/bootcamp-date",
 		"/management/students", "/management/students/import",
 		"/management/students/1/fields/name", "/management/students/1/billing/reconcile", "/management/students/1/billing/reinstatement", "/management/students/1/billing/portal",
 	}
 }
 
-// createdToken returns the one customer URL token a creating response shows.
-func createdToken(t *testing.T, body string) string {
-	t.Helper()
-	if strings.Count(body, `href="/customer/`) != 1 {
-		t.Fatalf("creating response must show exactly one customer URL: %s", body)
-	}
-	_, rest, _ := strings.Cut(body, `href="/customer/`)
-	token, _, _ := strings.Cut(rest, `"`)
-	return token
-}
-
-// requireCreated checks an htmx create answers with its notice and one URL
-// whose elements carry the ids entry's row keeps across list refreshes, and
-// returns the URL's token.
-func requireCreated(t *testing.T, res *http.Response, body string, entry links.Entry) string {
-	t.Helper()
-	requireAcknowledged(t, res, body)
-	if !strings.Contains(body, `<a id="link-url-`+entry.ID+`"`) || !strings.Contains(body, `<button id="link-copy-`+entry.ID+`"`) {
-		t.Fatalf("created URL elements must match row %s: %s", entry.ID, body)
-	}
-	return createdToken(t, body)
-}
-
 // requirePage checks a full page lists exactly want, in order.
-func requirePage(t *testing.T, res *http.Response, body string, want []links.Entry) {
+func requirePage(t *testing.T, res *http.Response, body string, want []links.LinkGroup) {
 	t.Helper()
-	start, end := strings.Index(body, `<ul id="generated-links"`), strings.Index(body, "</ul>")
+	start, end := strings.Index(body, `<ul id="generated-links"`), strings.Index(body, "</ul>\n      <div class=\"management-empty\">")
 	if res.StatusCode != http.StatusOK || !strings.HasPrefix(body, "<!doctype html>") || start < 0 || end < start {
 		t.Fatalf("status = %d, want full management page: %s", res.StatusCode, body)
 	}
@@ -255,7 +251,7 @@ func requirePage(t *testing.T, res *http.Response, body string, want []links.Ent
 
 // requireRefresh checks an htmx list refresh is not a page, leaves the status
 // line alone, and has exactly want's rows, in order.
-func requireRefresh(t *testing.T, res *http.Response, body string, want []links.Entry) {
+func requireRefresh(t *testing.T, res *http.Response, body string, want []links.LinkGroup) {
 	t.Helper()
 	if res.StatusCode != http.StatusOK || strings.Contains(body, "<!doctype html>") || strings.Contains(body, `id="link-status"`) ||
 		strings.Contains(body, "management-program-settings") || strings.Contains(body, "program_start_date") {
@@ -290,69 +286,100 @@ func requireRegistryPrivacy(t *testing.T, body string, details students.Details)
 	}
 }
 
-// requireRows checks status, saved names and phones, audit history, one-time
-// URLs and their slots, and cancellation availability for exactly the expected rows.
-func requireRows(t *testing.T, html string, want []links.Entry) {
+// requireRows checks parent reusable links, permanent URLs, audit history, cancellation
+// availability, and child enrollments for exactly the expected groups.
+func requireRows(t *testing.T, html string, want []links.LinkGroup) {
 	t.Helper()
-	rows := strings.Split(html, `<li class="management-link">`)[1:]
+	rows := strings.Split(html, `<li class="management-link"`)[1:]
 	if len(rows) != len(want) {
 		t.Fatalf("rendered %d links, want %d: %s", len(rows), len(want), html)
 	}
-	for i, entry := range want {
+	for i, group := range want {
 		row := rows[i]
-		ok := strings.Contains(row, string(entry.Status)) && strings.Contains(row, entry.Name)
-		if entry.Phone != "" {
-			ok = ok && strings.Contains(row, `<span class="management-link-phone">`+escapedHTML(entry.Phone)+`</span>`)
-		}
-		ok = ok && !strings.Contains(row, "tel:")
-		cancelable := strings.Contains(row, `action="/management/links/`+entry.ID+`/cancel"`)
-		ok = ok && cancelable == entry.Cancelable()
-		// A refresh keeps a URL shown earlier only where the row has its slots.
-		ok = ok && strings.Contains(row, `id="link-url-`+entry.ID+`"`) && strings.Contains(row, `id="link-copy-`+entry.ID+`"`)
-		ok = ok && strings.Contains(row, "</time> by "+entry.CreatedBy) == (entry.CreatedBy != "")
-		ok = ok && strings.Contains(row, "canceled by "+entry.CanceledBy) == (entry.CanceledBy != "")
-		if entry.SubmittedAt != nil {
-			ok = ok && strings.Contains(row, `datetime="`+entry.SubmittedAt.UTC().Format(time.RFC3339)+`"`)
-		}
-		if entry.Status != links.Finished && entry.Status != links.Canceled {
-			ok = ok && strings.Contains(row, `datetime="`+entry.ExpiresAt.UTC().Format(time.RFC3339)+`"`)
-		}
-		if entry.Token == "" {
-			ok = ok && strings.Contains(row, `<span id="link-url-`+entry.ID+`" hidden hx-preserve></span>`) &&
-				strings.Contains(row, `<span id="link-copy-`+entry.ID+`" hidden hx-preserve></span>`) &&
-				!strings.Contains(row, "<a ") && !strings.Contains(row, "data-copy-link")
-		} else {
-			ok = ok && strings.Contains(row, `href="/customer/`+entry.Token+`"`) && strings.Contains(row, "data-copy-link")
-		}
+		link := group.Link
+		ok := strings.Contains(row, string(link.Status)) && strings.Contains(row, link.Name)
+		ok = ok && strings.Contains(row, fmt.Sprintf(`href="/customer/%s"`, link.Token))
+		ok = ok && strings.Contains(row, fmt.Sprintf(`id="link-url-%d"`, link.ID)) && strings.Contains(row, fmt.Sprintf(`id="link-copy-%d"`, link.ID))
+		ok = ok && strings.Contains(row, `data-copy-link`)
+		ok = ok && strings.Contains(row, fmt.Sprintf(`action="/management/links/%d/rename"`, link.ID))
+		ok = ok && strings.Contains(row, "</time> by "+link.CreatedBy) == (link.CreatedBy != "")
+		ok = ok && strings.Contains(row, "Link canceled by "+link.CanceledBy) == (link.Status == links.LinkCanceled && link.CanceledBy != "")
+		cancelable := strings.Contains(row, fmt.Sprintf(`action="/management/links/%d/cancel"`, link.ID))
+		ok = ok && cancelable == link.Cancelable()
 		if !ok {
-			t.Fatalf("row %d does not render %+v: %s", i, entry, row)
+			t.Fatalf("link row %d does not render %+v: %s", i, link, row)
+		}
+		hasTree := strings.Contains(row, fmt.Sprintf(`id="link-tree-%d"`, link.ID))
+		if hasTree != (len(group.Enrollments) > 0) {
+			t.Fatalf("link %d tree present = %v, enrollments = %d: %s", i, hasTree, len(group.Enrollments), row)
+		}
+		erows := strings.Split(row, `<li class="management-enrollment"`)[1:]
+		if len(erows) != len(group.Enrollments) {
+			t.Fatalf("link %d rendered %d enrollments, want %d: %s", i, len(erows), len(group.Enrollments), row)
+		}
+		for j, entry := range group.Enrollments {
+			erow := erows[j]
+			eok := strings.Contains(erow, string(entry.Status)) && strings.Contains(erow, entry.Name)
+			if entry.Phone != "" {
+				eok = eok && strings.Contains(erow, `<span class="management-link-phone">`+escapedHTML(entry.Phone)+`</span>`)
+			}
+			eok = eok && !strings.Contains(erow, "tel:")
+			eCancelable := strings.Contains(erow, fmt.Sprintf(`action="/management/enrollments/%d/cancel"`, entry.ID))
+			eok = eok && eCancelable == entry.Cancelable()
+			if entry.Cancelable() {
+				wantLabel := "Cancel enrollment"
+				if entry.Status == links.Expired {
+					wantLabel = "Clear PIN"
+				}
+				eok = eok && strings.Contains(erow, wantLabel)
+			}
+			eok = eok && strings.Contains(erow, "Canceled by "+entry.CanceledBy) == (entry.Status == links.Canceled && entry.CanceledBy != "")
+			if entry.SubmittedAt != nil {
+				eok = eok && strings.Contains(erow, `datetime="`+entry.SubmittedAt.UTC().Format(time.RFC3339)+`"`)
+			}
+			wantExpiry := entry.SubmittedAt != nil && (entry.Status == links.AwaitingPayment || entry.Status == links.Expired)
+			eok = eok && strings.Contains(erow, `datetime="`+entry.ExpiresAt.UTC().Format(time.RFC3339)+`"`) == wantExpiry
+			eok = eok && strings.Contains(erow, "Agreement accepted") == (entry.TermsAcceptedAt != nil)
+			if !eok {
+				t.Fatalf("enrollment %d.%d does not render %+v: %s", i, j, entry, erow)
+			}
 		}
 	}
 }
 
 func TestUnauthorizedRequestsCannotUseManagement(t *testing.T) {
 	a := newApp(t)
-	existing, err := a.store.Create(t.Context(), "seed", later)
+	existingLink, err := a.store.CreateLink(t.Context(), "seed", "", later)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved, err := a.store.Submit(t.Context(), existing.Token, contactDetails("Private student"), ""); err != nil || saved != links.Saved {
+	e, cookie, err := a.store.StartEnrollment(t.Context(), existingLink.Token, "")
+	if err != nil || e == nil {
+		t.Fatalf("start: %+v, %v", e, err)
+	}
+	if saved, err := a.store.Submit(t.Context(), existingLink.Token, cookie, contactDetails("Private student"), ""); err != nil || saved != links.Saved {
 		t.Fatalf("submit private student: saved=%v, err=%v", saved, err)
 	}
-	acceptAgreement(t, a, existing.Token)
+	acceptAgreement(t, a, existingLink.Token, cookie)
 	seeded, err := settings.New(a.db).Current(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	hash, _ := hex.DecodeString(existing.ID)
 	now := time.Now().UTC()
 	if err := a.db.WithContext(t.Context()).Transaction(func(tx *gorm.DB) error {
-		return links.Enroll(tx, hash, now)
+		return links.Enroll(tx, e.ID, now)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	existing.PaidAt = &now
-	existing.Name, existing.Phone, existing.Status = "Private student", contactDetails("").Phone, links.Finished
+	existing := links.LinkGroup{
+		Link: existingLink,
+		Enrollments: []links.EnrollmentEntry{{
+			ID: e.ID, LinkID: existingLink.ID, Name: "Private student",
+			Phone: contactDetails("").Phone, PaidAt: &now, Status: links.Finished,
+		}},
+	}
+	existing.Link.EnrollmentCount = 1
+	const privateStudentName = "Private student"
 	expired := a.signIn(t, "staff")
 	// Expiry is enforced from the session row, so moving it into the past needs no sleep.
 	if err := a.db.WithContext(t.Context()).Session(&gorm.Session{AllowGlobalUpdate: true}).
@@ -381,7 +408,7 @@ func TestUnauthorizedRequestsCannotUseManagement(t *testing.T) {
 			if res.StatusCode != http.StatusOK || !strings.Contains(body, `action="/management/login"`) {
 				t.Fatalf("status = %d, want sign-in form: %s", res.StatusCode, body)
 			}
-			if strings.Contains(body, existing.ID) || strings.Contains(body, existing.Token) {
+			if strings.Contains(body, existingLink.Token) {
 				t.Fatalf("sign-in page leaked link data: %s", body)
 			}
 		})
@@ -400,8 +427,8 @@ func TestUnauthorizedRequestsCannotUseManagement(t *testing.T) {
 				t.Run(b.name+"/"+mode.name+"/read"+path, func(t *testing.T) {
 					res, body := a.send(t, b.browser, http.MethodGet, path, nil, mode.header)
 					if res.StatusCode != mode.status || res.Header.Get(mode.redirectHeader) != "/management/" ||
-						strings.Contains(body, "<form") || strings.Contains(body, existing.ID) ||
-						strings.Contains(body, existing.Token) || strings.Contains(body, existing.Name) || strings.Contains(body, "student-details") ||
+						strings.Contains(body, "<form") ||
+						strings.Contains(body, existingLink.Token) || strings.Contains(body, privateStudentName) || strings.Contains(body, "student-details") ||
 						strings.Contains(body, "student-table") {
 						t.Fatalf("unauthorized management read: status=%d, %s=%q, body=%s",
 							res.StatusCode, mode.redirectHeader, res.Header.Get(mode.redirectHeader), body)
@@ -409,7 +436,7 @@ func TestUnauthorizedRequestsCannotUseManagement(t *testing.T) {
 				})
 			}
 		}
-		for _, path := range writePaths(existing.ID) {
+		for _, path := range writePaths(existingLink.ID) {
 			for _, mode := range modes {
 				t.Run(b.name+"/"+mode.name+path, func(t *testing.T) {
 					res, body := a.send(t, b.browser, http.MethodPost, path, url.Values{
@@ -420,12 +447,12 @@ func TestUnauthorizedRequestsCannotUseManagement(t *testing.T) {
 							res.StatusCode, mode.redirectHeader, res.Header.Get(mode.redirectHeader), mode.status)
 					}
 					// htmx would swap a returned sign-in form into the link list.
-					if strings.Contains(body, "<form") || strings.Contains(body, existing.Token) || strings.Contains(body, existing.Name) {
+					if strings.Contains(body, "<form") || strings.Contains(body, existingLink.Token) || strings.Contains(body, privateStudentName) {
 						t.Fatalf("unauthorized response body = %s", body)
 					}
 					a.requireRegistry(t, existing)
 					student, err := students.New(a.db, nil).Get(t.Context(), 1)
-					if err != nil || student == nil || student.Name != existing.Name {
+					if err != nil || student == nil || student.Name != privateStudentName {
 						t.Fatalf("unauthorized write changed student: student=%+v, err=%v", student, err)
 					}
 				})
@@ -443,48 +470,76 @@ func TestRegistrySeparatesTrash(t *testing.T) {
 	a := newApp(t)
 	staff := a.signIn(t, "staff")
 	past := time.Now().Add(-time.Minute)
-	var main, trash, all []links.Entry
+	mkToken := func(tag string) string {
+		return strings.ReplaceAll(fmt.Sprintf("%-43s", strings.ReplaceAll(tag, " ", "_")), " ", "0")[:43]
+	}
+
+	activeLink := links.Link{Name: "Active Reusable", Token: mkToken("active_link"), CreatedBy: "staff", ExpiresAt: later}
+	canceledLink := links.Link{Name: "Canceled Reusable", Token: mkToken("canceled_link"), CreatedBy: "staff", ExpiresAt: later, CanceledAt: &past, CanceledBy: "staff"}
+	expiredLink := links.Link{Name: "Expired Reusable", Token: mkToken("expired_link"), CreatedBy: "staff", ExpiresAt: past}
+	for _, l := range []*links.Link{&activeLink, &canceledLink, &expiredLink} {
+		if err := a.db.WithContext(t.Context()).Create(l).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var mainActive, trashActive, trashCanceled, trashExpired []links.EnrollmentEntry
 	for _, tc := range []struct {
 		name   string
-		row    links.Link
+		link   *links.Link
+		row    links.Enrollment
 		status links.Status
 		trash  bool
 	}{
-		{"not opened", links.Link{ExpiresAt: later}, links.NotOpened, false},
-		{"opened", links.Link{ExpiresAt: later, OpenedAt: &past}, links.Opened, false},
-		{"in progress", links.Link{ExpiresAt: later, Details: contactDetails("Draft")}, links.InProgress, false},
-		{"completed", links.Link{ExpiresAt: past.Add(7 * 24 * time.Hour), Details: contactDetails("Completed student"), SubmittedAt: &past, PaidAt: &past}, links.Finished, false},
-		{"expired draft", links.Link{ExpiresAt: past, Details: contactDetails("Expired draft")}, links.Expired, true},
-		{"canceled draft", links.Link{ExpiresAt: later, Details: contactDetails("Canceled draft"), CanceledAt: &past, CanceledBy: "staff"}, links.Canceled, true},
+		{"in progress", &activeLink, links.Enrollment{ExpiresAt: later, Details: contactDetails("Draft")}, links.InProgress, false},
+		{"completed", &activeLink, links.Enrollment{ExpiresAt: past.Add(7 * 24 * time.Hour), Details: contactDetails("Completed student"), SubmittedAt: &past, PaidAt: &past}, links.Finished, false},
+		{"expired draft", &activeLink, links.Enrollment{ExpiresAt: past, Details: contactDetails("Expired draft")}, links.Expired, true},
+		{"canceled draft", &canceledLink, links.Enrollment{ExpiresAt: later, Details: contactDetails("Canceled draft"), CanceledAt: &past, CanceledBy: "staff"}, links.Canceled, true},
+		{"expired link draft", &expiredLink, links.Enrollment{ExpiresAt: past, Details: contactDetails("Expired link draft")}, links.Expired, true},
 	} {
 		digest := sha256.Sum256([]byte(tc.name))
-		tc.row.TokenHash, tc.row.CreatedBy = digest[:], "staff"
+		tc.row.LinkID, tc.row.SessionHash = tc.link.ID, digest[:]
 		if err := a.db.WithContext(t.Context()).Create(&tc.row).Error; err != nil {
 			t.Fatal(err)
 		}
-		if tc.row.SubmittedAt != nil {
-			student := students.Student{SourceLinkHash: digest[:], Details: tc.row.Details, CreatedAt: *tc.row.SubmittedAt, Cohort: "2026-11"}
+		if tc.row.PaidAt != nil {
+			student := students.Student{EnrollmentID: &tc.row.ID, Details: tc.row.Details, CreatedAt: *tc.row.PaidAt, Cohort: "2026-11"}
 			if err := a.db.WithContext(t.Context()).Create(&student).Error; err != nil {
 				t.Fatal(err)
 			}
 		}
-		entry := links.Entry{
-			ID: fmt.Sprintf("%x", digest), Name: tc.row.Name, Phone: tc.row.Phone, Status: tc.status,
-			ExpiresAt: tc.row.ExpiresAt, SubmittedAt: tc.row.SubmittedAt, PaidAt: tc.row.PaidAt, CreatedBy: tc.row.CreatedBy, CanceledBy: tc.row.CanceledBy,
+		entry := links.EnrollmentEntry{
+			ID: tc.row.ID, LinkID: tc.link.ID, Name: tc.row.Name, Phone: tc.row.Phone, Status: tc.status,
+			ExpiresAt: tc.row.ExpiresAt, SubmittedAt: tc.row.SubmittedAt, PaidAt: tc.row.PaidAt, CanceledBy: tc.row.CanceledBy,
 		}
-		all = append(all, entry)
-		if tc.trash {
-			trash = append(trash, entry)
-		} else {
-			main = append(main, entry)
+		switch {
+		case tc.link == &activeLink && !tc.trash:
+			mainActive = append(mainActive, entry)
+		case tc.link == &activeLink && tc.trash:
+			trashActive = append(trashActive, entry)
+		case tc.link == &canceledLink:
+			trashCanceled = append(trashCanceled, entry)
+		case tc.link == &expiredLink:
+			trashExpired = append(trashExpired, entry)
 		}
+	}
+
+	activeEntry := links.LinkEntry{ID: activeLink.ID, Name: activeLink.Name, Token: activeLink.Token, Status: links.LinkActive, CreatedBy: "staff", EnrollmentCount: 3}
+	canceledEntry := links.LinkEntry{ID: canceledLink.ID, Name: canceledLink.Name, Token: canceledLink.Token, Status: links.LinkCanceled, CreatedBy: "staff", CanceledBy: "staff", EnrollmentCount: 1}
+	expiredEntry := links.LinkEntry{ID: expiredLink.ID, Name: expiredLink.Name, Token: expiredLink.Token, Status: links.LinkExpired, CreatedBy: "staff", EnrollmentCount: 1}
+
+	mainWant := []links.LinkGroup{{Link: activeEntry, Enrollments: mainActive}}
+	trashWant := []links.LinkGroup{
+		{Link: activeEntry, Enrollments: trashActive},
+		{Link: canceledEntry, Enrollments: trashCanceled},
+		{Link: expiredEntry, Enrollments: trashExpired},
 	}
 	for _, tc := range []struct {
 		name, path string
-		want       []links.Entry
+		want       []links.LinkGroup
 	}{
-		{"active and completed", "/management/", main},
-		{"canceled and expired", "/management/trash", trash},
+		{"active and completed", "/management/", mainWant},
+		{"canceled and expired", "/management/trash", trashWant},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res, body := a.send(t, staff, http.MethodGet, tc.path, nil, nil)
@@ -498,47 +553,55 @@ func TestRegistrySeparatesTrash(t *testing.T) {
 			requireRegistryPrivacy(t, body, contactDetails(""))
 		})
 	}
-	a.requireRegistry(t, all...)
+	a.requireRegistry(t,
+		links.LinkGroup{Link: activeEntry, Enrollments: append(mainActive, trashActive...)},
+		links.LinkGroup{Link: canceledEntry, Enrollments: trashCanceled},
+		links.LinkGroup{Link: expiredEntry, Enrollments: trashExpired},
+	)
 }
 
 func TestRegistryProjectsNewAndRefreshedRows(t *testing.T) {
 	a := newApp(t)
 	staff := a.signIn(t, "staff")
-	created, err := a.store.Create(t.Context(), "staff", later)
+	created, err := a.store.CreateLink(t.Context(), "staff", "Spring Cohort", later)
 	if err != nil {
+		t.Fatal(err)
+	}
+	e, cookie, err := a.store.StartEnrollment(t.Context(), created.Token, "")
+	if err != nil || e == nil {
 		t.Fatal(err)
 	}
 	details := contactDetails("Registry student")
 	details.Email, details.Municipality = "private.registry@example.com", "Loíza"
 	for _, field := range students.Fields() {
-		if saved, err := a.store.SaveDraft(t.Context(), created.Token, field.Key, valueOf(field, details)); err != nil || saved != links.Saved {
+		if saved, err := a.store.SaveDraft(t.Context(), created.Token, cookie, field.Key, valueOf(field, details)); err != nil || saved != links.Saved {
 			t.Fatalf("save registry fixture %s: saved=%v, err=%v", field.Key, saved, err)
 		}
 	}
 
-	// Ordinary creation renders the shared row alongside its one-time URL.
+	// Ordinary creation renders both links with their permanent URLs.
 	res, body := a.send(t, staff, http.MethodPost, "/management/links", nil, nil)
-	entries := a.list(t)
-	if len(entries) != 2 {
-		t.Fatalf("create left %d links, want 2", len(entries))
+	groups := a.list(t)
+	if len(groups) != 2 {
+		t.Fatalf("create left %d links, want 2", len(groups))
 	}
-	entries[1].Token = createdToken(t, body)
-	requirePage(t, res, body, entries)
+	requirePage(t, res, body, groups)
 	requireRegistryPrivacy(t, body, details)
 
-	// A later draft changes visible phone, while refresh keeps URL/copy slots.
-	if saved, err := a.store.SaveDraft(t.Context(), created.Token, "phone", "+17872345678"); err != nil || saved != links.Saved {
+	// A later draft changes visible phone on refresh.
+	if saved, err := a.store.SaveDraft(t.Context(), created.Token, cookie, "phone", "+17872345678"); err != nil || saved != links.Saved {
 		t.Fatalf("update registry phone: saved=%v, err=%v", saved, err)
 	}
 	res, body = a.send(t, staff, http.MethodGet, "/management/", nil, htmxHeader)
-	entries = a.list(t)
-	if entries[0].Phone != "+17872345678" {
-		t.Fatalf("refreshed phone = %q", entries[0].Phone)
+	groups = a.list(t)
+	if groups[0].Enrollments[0].Phone != "+17872345678" {
+		t.Fatalf("refreshed phone = %q", groups[0].Enrollments[0].Phone)
 	}
-	requireRefresh(t, res, body, entries)
+	requireRefresh(t, res, body, groups)
 	requireRegistryPrivacy(t, body, details)
 
-	res, body = a.send(t, staff, http.MethodPost, "/management/links/"+created.ID+"/cancel", nil, htmxHeader)
+	// Cancel enrollment moves child enrollment to Trash while keeping parent link active.
+	res, body = a.send(t, staff, http.MethodPost, fmt.Sprintf("/management/enrollments/%d/cancel", e.ID), nil, htmxHeader)
 	requireAcknowledged(t, res, body)
 	requireRegistryPrivacy(t, body, details)
 	trash := a.list(t)[:1]
@@ -551,13 +614,17 @@ func TestRegistryProjectsNewAndRefreshedRows(t *testing.T) {
 		}
 		requireRegistryPrivacy(t, body, details)
 	}
+
+	// HTMX link creation acknowledges and triggers refresh.
 	res, body = a.send(t, staff, http.MethodPost, "/management/links", nil, htmxHeader)
-	all := a.list(t)
-	requireCreated(t, res, body, all[len(all)-1])
+	requireAcknowledged(t, res, body)
 	requireRegistryPrivacy(t, body, details)
+	if len(a.list(t)) != 3 {
+		t.Fatalf("HTMX create left %d links, want 3", len(a.list(t)))
+	}
 }
 
-func TestRegistryArchivesPaidLinks(t *testing.T) {
+func TestRegistryArchivesPaidEnrollments(t *testing.T) {
 	a := newApp(t)
 	staff := a.signIn(t, "staff")
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -569,21 +636,24 @@ func TestRegistryArchivesPaidLinks(t *testing.T) {
 		{"Archived completion", 26 * time.Hour, 25 * time.Hour},
 		{"Expired completion", 10 * 24 * time.Hour, 8 * 24 * time.Hour},
 	} {
-		created, err := a.store.Create(t.Context(), "staff", later)
+		created, err := a.store.CreateLink(t.Context(), "staff", fixture.name, later)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if saved, err := a.store.Submit(t.Context(), created.Token, contactDetails(fixture.name), ""); err != nil || saved != links.Saved {
+		e, cookie, err := a.store.StartEnrollment(t.Context(), created.Token, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if saved, err := a.store.Submit(t.Context(), created.Token, cookie, contactDetails(fixture.name), ""); err != nil || saved != links.Saved {
 			t.Fatalf("submit %s: saved=%v, err=%v", fixture.name, saved, err)
 		}
-		acceptAgreement(t, a, created.Token)
+		acceptAgreement(t, a, created.Token, cookie)
 		paid := now.Add(-fixture.paidAge)
-		digest, _ := hex.DecodeString(created.ID)
 		if err := a.db.WithContext(t.Context()).Transaction(func(tx *gorm.DB) error {
-			if err := links.Enroll(tx, digest, paid); err != nil {
+			if err := links.Enroll(tx, e.ID, paid); err != nil {
 				return err
 			}
-			return tx.Model(&links.Link{}).Where("token_hash = ?", digest).
+			return tx.Model(&links.Enrollment{}).Where("id = ?", e.ID).
 				Updates(map[string]any{
 					"created_at": now.Add(-fixture.createdAge), "submitted_at": paid,
 					"paid_at":    paid,
@@ -593,26 +663,37 @@ func TestRegistryArchivesPaidLinks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	draft, err := a.store.Create(t.Context(), "staff", later)
+	draftLink, err := a.store.CreateLink(t.Context(), "staff", "Draft Link", later)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved, err := a.store.SaveDraft(t.Context(), draft.Token, "name", "Old unfinished form"); err != nil || saved != links.Saved {
+	draftE, draftCookie, err := a.store.StartEnrollment(t.Context(), draftLink.Token, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved, err := a.store.SaveDraft(t.Context(), draftLink.Token, draftCookie, "name", "Old unfinished form"); err != nil || saved != links.Saved {
 		t.Fatalf("save old draft: saved=%v, err=%v", saved, err)
 	}
-	if err := a.db.WithContext(t.Context()).Model(&links.Link{}).
-		Where("token_hash = decode(?, 'hex')", draft.ID).Update("created_at", now.Add(-28*24*time.Hour)).Error; err != nil {
+	if err := a.db.WithContext(t.Context()).Model(&links.Enrollment{}).
+		Where("id = ?", draftE.ID).Update("created_at", now.Add(-28*24*time.Hour)).Error; err != nil {
 		t.Fatal(err)
 	}
 
 	all := a.list(t)
-	byName := make(map[string]links.Entry, len(all))
-	for _, entry := range all {
-		byName[entry.Name] = entry
+	// On main, all 4 active links show up, with only Recent completion and Old unfinished form as visible enrollments.
+	mainWant := make([]links.LinkGroup, len(all))
+	byName := make(map[string]links.EnrollmentEntry)
+	for i, g := range all {
+		mainWant[i].Link = g.Link
+		for _, e := range g.Enrollments {
+			byName[e.Name] = e
+			if e.Name == "Recent completion" || e.Name == "Old unfinished form" {
+				mainWant[i].Enrollments = append(mainWant[i].Enrollments, e)
+			}
+		}
 	}
 	res, body := a.send(t, staff, http.MethodGet, "/management/", nil, nil)
-	// Old creation dates do not archive a recent completion or unfinished form.
-	requirePage(t, res, body, []links.Entry{byName["Recent completion"], byName["Old unfinished form"]})
+	requirePage(t, res, body, mainWant)
 	res, body = a.send(t, staff, http.MethodGet, "/management/trash", nil, nil)
 	requirePage(t, res, body, nil)
 	res, body = a.send(t, staff, http.MethodGet, "/management/students", nil, nil)
@@ -626,17 +707,14 @@ func TestRegistryArchivesPaidLinks(t *testing.T) {
 		}
 	}
 
-	// A cancel from an old page leaves archived finished rows out of the list
-	// it has the page refresh.
+	// Attempting to cancel archived finished enrollments leaves them untouched.
 	for _, name := range []string{"Archived completion", "Expired completion"} {
-		res, body = a.send(t, staff, http.MethodPost, "/management/links/"+byName[name].ID+"/cancel", nil, htmxHeader)
+		res, body = a.send(t, staff, http.MethodPost, fmt.Sprintf("/management/enrollments/%d/cancel", byName[name].ID), nil, htmxHeader)
 		requireAcknowledged(t, res, body)
 	}
 	res, body = a.send(t, staff, http.MethodGet, "/management/", nil, htmxHeader)
-	requireRefresh(t, res, body, []links.Entry{byName["Recent completion"], byName["Old unfinished form"]})
+	requireRefresh(t, res, body, mainWant)
 	a.requireRegistry(t, all...)
-	res, body = a.send(t, staff, http.MethodGet, "/management/trash", nil, nil)
-	requirePage(t, res, body, nil)
 	retained, err := students.New(a.db, nil).List(t.Context(), students.Filter{})
 	if err != nil || len(retained) != 3 {
 		t.Fatalf("stale cancel lost retained students: students=%+v, err=%v", retained, err)
@@ -647,168 +725,107 @@ func TestStaffShareLinkStatuses(t *testing.T) {
 	a := newApp(t)
 	admin := a.signIn(t, "admin")
 	worker := a.signIn(t, "worker")
-	cancel := func(t *testing.T, browser *http.Client, id string, header http.Header) (*http.Response, string) {
+	cancelLink := func(t *testing.T, browser *http.Client, id string, header http.Header) (*http.Response, string) {
 		t.Helper()
 		return a.send(t, browser, http.MethodPost, "/management/links/"+id+"/cancel", nil, header)
 	}
-	var firstToken, secondToken, thirdToken string
-	var entries []links.Entry
-
-	if !t.Run("creation full page and one-time tokens", func(t *testing.T) {
-		res, body := a.send(t, admin, http.MethodPost, "/management/links", nil, htmxHeader)
-		created := a.list(t)
-		if len(created) != 1 {
-			t.Fatalf("HTMX create left %d links, want 1", len(created))
-		}
-		firstToken = requireCreated(t, res, body, created[0])
-
-		res, body = a.send(t, admin, http.MethodPost, "/management/links", nil, nil)
-		secondToken = createdToken(t, body)
-		created = a.list(t)
-		if len(created) != 2 {
-			t.Fatalf("ordinary create left %d links, want 2", len(created))
-		}
-		created[1].Token = secondToken
-		requirePage(t, res, body, created)
-	}) {
-		return
+	cancelEnrollment := func(t *testing.T, browser *http.Client, id string, header http.Header) (*http.Response, string) {
+		t.Helper()
+		return a.send(t, browser, http.MethodPost, "/management/enrollments/"+id+"/cancel", nil, header)
 	}
 
-	if !t.Run("shared customer statuses", func(t *testing.T) {
-		if saved, err := a.store.Submit(t.Context(), firstToken, contactDetails("Ana Pérez"), ""); err != nil || saved != links.Saved {
-			t.Fatalf("submit name: saved=%v, err=%v", saved, err)
-		}
-		if link, err := a.store.Open(t.Context(), secondToken); err != nil || link == nil {
-			t.Fatalf("open link: link=%v, err=%v", link, err)
-		}
-		entries = a.list(t)
-		if entries[0].Status != links.AwaitingPayment || entries[0].Name != "Ana Pérez" || entries[1].Status != links.Opened {
-			t.Fatalf("submitted and opened customer statuses: %+v", entries)
-		}
-		for name, browser := range map[string]*http.Client{"admin": admin, "worker": worker} {
-			t.Run(name+" fresh page", func(t *testing.T) {
-				res, body := a.send(t, browser, http.MethodGet, "/management/", nil, nil)
-				requirePage(t, res, body, entries)
-			})
-		}
-		res, body := cancel(t, worker, entries[0].ID, nil)
-		a.requireRegistry(t, entries...)
-		requirePage(t, res, body, entries)
-	}) {
-		return
-	}
-
-	if !t.Run("canceled draft retained", func(t *testing.T) {
-		res, body := a.send(t, worker, http.MethodPost, "/management/links", nil, htmxHeader)
-		created := a.list(t)
-		if len(created) != 3 {
-			t.Fatalf("worker create left %d links, want 3", len(created))
-		}
-		thirdToken = requireCreated(t, res, body, created[2])
-		if link, err := a.store.Open(t.Context(), thirdToken); err != nil || link == nil {
-			t.Fatalf("open worker's link: link=%v, err=%v", link, err)
-		}
-		if saved, err := a.store.SaveDraft(t.Context(), secondToken, "name", "Retained draft"); err != nil || saved != links.Saved {
-			t.Fatalf("save draft: saved=%v, err=%v", saved, err)
-		}
-		entries = a.list(t)
-		if entries[1].Status != links.InProgress || entries[1].Name != "Retained draft" || entries[2].Status != links.Opened {
-			t.Fatalf("draft and unrelated customer statuses: %+v", entries)
-		}
-		entries[1].Status, entries[1].CanceledBy = links.Canceled, "worker"
-		res, body = cancel(t, worker, entries[1].ID, htmxHeader)
+	if res, body := a.send(t, admin, http.MethodPost, "/management/links", nil, htmxHeader); res.StatusCode != http.StatusOK {
+		t.Fatalf("htmx create: %d: %s", res.StatusCode, body)
+	} else {
 		requireAcknowledged(t, res, body)
-		a.requireRegistry(t, entries...)
-		res, body = a.send(t, admin, http.MethodGet, "/management/trash", nil, nil)
-		requirePage(t, res, body, entries[1:2])
-	}) {
-		return
+	}
+	if res, body := a.send(t, admin, http.MethodPost, "/management/links", nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("ordinary create: %d: %s", res.StatusCode, body)
+	} else {
+		requirePage(t, res, body, a.list(t))
+	}
+	groups := a.list(t)
+	if len(groups) != 2 {
+		t.Fatalf("created %d links, want 2", len(groups))
 	}
 
-	if !t.Run("first canceler audit preserved", func(t *testing.T) {
-		res, body := cancel(t, admin, entries[1].ID, htmxHeader)
-		requireAcknowledged(t, res, body)
-		a.requireRegistry(t, entries...)
-	}) {
-		return
+	// Two visitors start on link 1; visitor A submits, visitor B saves a draft.
+	e1A, c1A, err := a.store.StartEnrollment(t.Context(), groups[0].Link.Token, "")
+	if err != nil || e1A == nil {
+		t.Fatal(err)
+	}
+	if saved, err := a.store.Submit(t.Context(), groups[0].Link.Token, c1A, contactDetails("Ana Pérez"), ""); err != nil || saved != links.Saved {
+		t.Fatalf("submit: %v, %v", saved, err)
+	}
+	e1B, c1B, err := a.store.StartEnrollment(t.Context(), groups[0].Link.Token, "")
+	if err != nil || e1B == nil {
+		t.Fatal(err)
+	}
+	if saved, err := a.store.SaveDraft(t.Context(), groups[0].Link.Token, c1B, "name", "Retained draft"); err != nil || saved != links.Saved {
+		t.Fatalf("draft: %v, %v", saved, err)
 	}
 
-	if !t.Run("expired HTMX cancel leaves link uncanceled", func(t *testing.T) {
-		expired, err := a.store.Create(t.Context(), "admin", time.Now().Add(-time.Minute))
-		if err != nil {
-			t.Fatal(err)
-		}
-		expired.Token, expired.Status = "", links.Expired
-		entries = append(entries, expired)
-		res, body := cancel(t, worker, expired.ID, htmxHeader)
-		requireAcknowledged(t, res, body)
-		a.requireRegistry(t, entries...)
-	}) {
-		return
+	groups = a.list(t)
+	if groups[0].Enrollments[0].Status != links.AwaitingPayment || groups[0].Enrollments[1].Status != links.InProgress {
+		t.Fatalf("unexpected statuses: %+v", groups[0].Enrollments)
+	}
+	for _, browser := range []*http.Client{admin, worker} {
+		res, body := a.send(t, browser, http.MethodGet, "/management/", nil, nil)
+		requirePage(t, res, body, groups)
 	}
 
+	// Worker cancels submitted AwaitingPayment enrollment e1A and records worker as canceler.
+	res, body := cancelEnrollment(t, worker, fmt.Sprint(e1A.ID), nil)
+	groups[0].Enrollments[0].Status, groups[0].Enrollments[0].CanceledBy = links.Canceled, "worker"
+	a.requireRegistry(t, groups...)
+	requirePage(t, res, body, []links.LinkGroup{{Link: groups[0].Link, Enrollments: groups[0].Enrollments[1:2]}, groups[1]})
+	// Worker cancels draft enrollment e1B; first canceler audit is preserved when admin retries.
+	res, body = cancelEnrollment(t, worker, fmt.Sprint(e1B.ID), htmxHeader)
+	requireAcknowledged(t, res, body)
+	groups[0].Enrollments[1].Status, groups[0].Enrollments[1].CanceledBy = links.Canceled, "worker"
+	a.requireRegistry(t, groups...)
+
+	res, body = cancelEnrollment(t, admin, fmt.Sprint(e1B.ID), htmxHeader)
+	requireAcknowledged(t, res, body)
+	a.requireRegistry(t, groups...)
+
+	// Trash shows link 0 with both canceled enrollments e1A and e1B.
+	res, body = a.send(t, admin, http.MethodGet, "/management/trash", nil, nil)
+	requirePage(t, res, body, []links.LinkGroup{{Link: groups[0].Link, Enrollments: groups[0].Enrollments}})
+
+	// Canceling link 1 revokes link 1 and records admin as canceler; repeating preserves admin.
+	res, body = cancelLink(t, admin, fmt.Sprint(groups[1].Link.ID), htmxHeader)
+	requireAcknowledged(t, res, body)
+	groups[1].Link.Status, groups[1].Link.CanceledBy = links.LinkCanceled, "admin"
+	a.requireRegistry(t, groups...)
+
+	res, body = cancelLink(t, worker, fmt.Sprint(groups[1].Link.ID), htmxHeader)
+	requireAcknowledged(t, res, body)
+	a.requireRegistry(t, groups...)
+
+	// Unknown/malformed/raw-token cancel IDs return 204 for HTMX and unchanged main page for ordinary.
 	for _, tc := range []struct{ name, id string }{
 		{"unknown", unknownID},
 		{"malformed", "not-issued"},
-		{"raw customer token", thirdToken},
+		{"raw customer token", groups[0].Link.Token},
 	} {
 		t.Run(tc.name+" cancel ID", func(t *testing.T) {
-			if res, body := cancel(t, admin, tc.id, htmxHeader); res.StatusCode != http.StatusNoContent || body != "" {
-				t.Fatalf("HTMX: status = %d, want 204 so nothing is swapped: %s", res.StatusCode, body)
+			if res, body := cancelLink(t, admin, tc.id, htmxHeader); res.StatusCode != http.StatusNoContent || body != "" {
+				t.Fatalf("HTMX link cancel: %d, %s", res.StatusCode, body)
 			}
-			res, body := cancel(t, admin, tc.id, nil)
-			requirePage(t, res, body, []links.Entry{entries[0], entries[2]})
-			a.requireRegistry(t, entries...)
+			if res, body := cancelEnrollment(t, admin, tc.id, htmxHeader); res.StatusCode != http.StatusNoContent || body != "" {
+				t.Fatalf("HTMX enrollment cancel: %d, %s", res.StatusCode, body)
+			}
+			res, body := cancelLink(t, admin, tc.id, nil)
+			requirePage(t, res, body, []links.LinkGroup{{Link: groups[0].Link}})
 		})
 	}
-
-	if !t.Run("ordinary cancel all retains completed and earlier audit", func(t *testing.T) {
-		entries[2].Status, entries[2].CanceledBy = links.Canceled, "admin"
-		res, body := a.send(t, admin, http.MethodPost, "/management/links/cancel", nil, nil)
-		requirePage(t, res, body, entries[:1])
-		a.requireRegistry(t, entries...)
-		res, body = a.send(t, worker, http.MethodGet, "/management/trash", nil, nil)
-		requirePage(t, res, body, entries[1:])
-	}) {
-		return
-	}
-
-	t.Run("HTMX cancel all retains completed and earlier audit", func(t *testing.T) {
-		_, body := a.send(t, admin, http.MethodPost, "/management/links", nil, htmxHeader)
-		createdToken(t, body)
-		created := a.list(t)
-		if len(created) != len(entries)+1 {
-			t.Fatalf("create before cancel all left %d links, want %d", len(created), len(entries)+1)
-		}
-		newest := created[len(created)-1]
-		newest.Status, newest.CanceledBy = links.Canceled, "worker"
-		entries = append(entries, newest)
-		res, body := a.send(t, worker, http.MethodPost, "/management/links/cancel", nil, htmxHeader)
-		requireAcknowledged(t, res, body)
-		res, body = a.send(t, worker, http.MethodGet, "/management/", nil, htmxHeader)
-		requireRefresh(t, res, body, entries[:1])
-		a.requireRegistry(t, entries...)
-		res, body = a.send(t, worker, http.MethodGet, "/management/trash", nil, nil)
-		requirePage(t, res, body, entries[1:])
-		for i, want := range []struct{ createdBy, canceledBy string }{
-			{"admin", ""},
-			{"admin", "worker"},
-			{"worker", "admin"},
-			{"admin", ""},
-			{"admin", "worker"},
-		} {
-			if entries[i].CreatedBy != want.createdBy || entries[i].CanceledBy != want.canceledBy {
-				t.Errorf("link %d: created by %q, canceled by %q; want %q, %q",
-					i, entries[i].CreatedBy, entries[i].CanceledBy, want.createdBy, want.canceledBy)
-			}
-		}
-	})
 }
 
 // Database failures answer 500 with no list, row, or notice that htmx could
 // swap in as if the request had worked.
 func TestStoreFailuresAreServerErrors(t *testing.T) {
-	db := testdb.Open(t, &links.Link{}, &students.Student{})
+	db := testdb.Open(t, &links.Link{}, &links.Enrollment{}, &students.Student{})
 	failed := db.WithContext(t.Context()).Begin()
 	if err := failed.Rollback().Error; err != nil {
 		t.Fatal(err)
@@ -857,15 +874,15 @@ func TestStoreFailuresAreServerErrors(t *testing.T) {
 func TestSettingsLifetimeAppliesOnlyToNewLinks(t *testing.T) {
 	a := newApp(t)
 	admin := a.signIn(t, "admin")
-	create := func() links.Entry {
+	create := func() links.LinkEntry {
 		t.Helper()
 		if res, body := a.send(t, admin, http.MethodPost, "/management/links", nil, htmxHeader); res.StatusCode != http.StatusOK {
 			t.Fatalf("create: status = %d: %s", res.StatusCode, body)
 		}
-		entries := a.list(t)
-		return entries[len(entries)-1]
+		groups := a.list(t)
+		return groups[len(groups)-1].Link
 	}
-	requireLifetime := func(entry links.Entry, days int) {
+	requireLifetime := func(entry links.LinkEntry, days int) {
 		t.Helper()
 		want := time.Duration(days) * 24 * time.Hour
 		if got := entry.ExpiresAt.Sub(entry.CreatedAt); (got - want).Abs() > time.Second {
@@ -908,7 +925,7 @@ func TestSettingsLifetimeAppliesOnlyToNewLinks(t *testing.T) {
 	}
 
 	requireLifetime(create(), 10)
-	if already := a.list(t)[0]; already.ID != sent.ID {
+	if already := a.list(t)[0].Link; already.ID != sent.ID {
 		t.Fatalf("registry order changed: %+v", already)
 	} else {
 		requireLifetime(already, settings.DefaultLinkLifetimeDays) // Moving the slider never changes links already sent.
@@ -919,14 +936,19 @@ func TestProgramStartDateSavesWithoutChangingExistingEnrollment(t *testing.T) {
 	a := newApp(t)
 	admin := a.signIn(t, "admin")
 	config := settings.New(a.db)
-	pending, err := a.store.Create(t.Context(), "admin", later)
+	pending, err := a.store.CreateLink(t.Context(), "admin", "", later)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pendingBefore, err := a.store.Lookup(t.Context(), pending.Token)
-	if err != nil || pendingBefore == nil {
-		t.Fatalf("pending link: link=%+v, err=%v", pendingBefore, err)
+	_, pendingCookie, err := a.store.StartEnrollment(t.Context(), pending.Token, "")
+	if err != nil {
+		t.Fatal(err)
 	}
+	pendingSess, err := a.store.LookupSession(t.Context(), pending.Token, pendingCookie)
+	if err != nil || pendingSess == nil || pendingSess.Enrollment == nil {
+		t.Fatalf("pending enrollment: %+v, err=%v", pendingSess, err)
+	}
+	pendingBefore := pendingSess.Enrollment
 	saveDate := func(date string) {
 		t.Helper()
 		res, body := a.send(t, admin, http.MethodPost, "/management/program-start-date", url.Values{"program_start_date": {date}}, nil)
@@ -959,16 +981,20 @@ func TestProgramStartDateSavesWithoutChangingExistingEnrollment(t *testing.T) {
 		t.Fatalf("date save must retain lifetime and record staff: current=%+v, err=%v", current, err)
 	}
 
-	enrolled, err := a.store.Create(t.Context(), "admin", later)
+	enrolled, err := a.store.CreateLink(t.Context(), "admin", "", later)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved, err := a.store.Submit(t.Context(), enrolled.Token, contactDetails("Accepted student"), ""); err != nil || saved != links.Saved {
+	_, enrolledCookie, err := a.store.StartEnrollment(t.Context(), enrolled.Token, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved, err := a.store.Submit(t.Context(), enrolled.Token, enrolledCookie, contactDetails("Accepted student"), ""); err != nil || saved != links.Saved {
 		t.Fatalf("submit: saved=%v, err=%v", saved, err)
 	}
-	accepted, err := a.store.AcceptTerms(t.Context(), enrolled.Token, "2026-12-01")
+	accepted, err := a.store.AcceptTerms(t.Context(), enrolled.Token, enrolledCookie, "2026-12-01")
 	if err != nil || accepted == nil || accepted.TermsAcceptedAt == nil {
-		t.Fatalf("accept agreement: link=%+v, err=%v", accepted, err)
+		t.Fatalf("accept agreement: %+v, err=%v", accepted, err)
 	}
 	res, body := a.send(t, admin, http.MethodPost, "/management/settings", url.Values{"lifetime": {"10"}}, nil)
 	if res.StatusCode != http.StatusSeeOther {
@@ -984,15 +1010,23 @@ func TestProgramStartDateSavesWithoutChangingExistingEnrollment(t *testing.T) {
 	if err != nil || current.ProgramStartDate != "2027-01-15" || current.LinkLifetimeDays != 10 {
 		t.Fatalf("program date save changed lifetime: current=%+v, err=%v", current, err)
 	}
-	after, err := a.store.Lookup(t.Context(), enrolled.Token)
-	if err != nil || after == nil || after.ProgramStartDate != "2026-12-01" || after.TermsAcceptedAt == nil ||
-		!after.TermsAcceptedAt.Equal(*accepted.TermsAcceptedAt) || !after.ExpiresAt.Equal(accepted.ExpiresAt) || after.Details != accepted.Details {
-		t.Fatalf("settings changed accepted enrollment: link=%+v, err=%v", after, err)
+	afterSess, err := a.store.LookupSession(t.Context(), enrolled.Token, enrolledCookie)
+	if err != nil || afterSess == nil || afterSess.Enrollment == nil {
+		t.Fatalf("lookup after: %+v, err=%v", afterSess, err)
 	}
-	pendingAfter, err := a.store.Lookup(t.Context(), pending.Token)
-	if err != nil || pendingAfter == nil || !pendingAfter.ExpiresAt.Equal(pendingBefore.ExpiresAt) ||
+	after := afterSess.Enrollment
+	if after.ProgramStartDate != "2026-12-01" || after.TermsAcceptedAt == nil ||
+		!after.TermsAcceptedAt.Equal(*accepted.TermsAcceptedAt) || !after.ExpiresAt.Equal(accepted.ExpiresAt) || after.Details != accepted.Details {
+		t.Fatalf("settings changed accepted enrollment: %+v", after)
+	}
+	pendingAfterSess, err := a.store.LookupSession(t.Context(), pending.Token, pendingCookie)
+	if err != nil || pendingAfterSess == nil || pendingAfterSess.Enrollment == nil {
+		t.Fatalf("lookup pending after: %+v, err=%v", pendingAfterSess, err)
+	}
+	pendingAfter := pendingAfterSess.Enrollment
+	if !pendingAfter.ExpiresAt.Equal(pendingBefore.ExpiresAt) ||
 		pendingAfter.ProgramStartDate != "" || pendingAfter.TermsAcceptedAt != nil {
-		t.Fatalf("settings changed existing unfinished link: link=%+v, err=%v", pendingAfter, err)
+		t.Fatalf("settings changed existing unfinished enrollment: %+v", pendingAfter)
 	}
 	res, body = a.send(t, admin, http.MethodGet, "/management/settings", nil, nil)
 	if res.StatusCode != http.StatusOK || !strings.Contains(body, `value="10"`) {
@@ -1167,7 +1201,7 @@ func TestManagementBillingRoutes(t *testing.T) {
 	seedContract := func(student students.Student, funded *time.Time) billing.Contract {
 		t.Helper()
 		contract := billing.Contract{
-			SourceLinkHash: student.SourceLinkHash, Reference: rand.Text(), PlanID: "three", PlanName: planName,
+			EnrollmentID: *student.EnrollmentID, Reference: rand.Text(), PlanID: "three", PlanName: planName,
 			InstallmentCount: 3, TotalCents: 62500, FundedAt: funded,
 			StripeCustomerID:    ptr(fmt.Sprintf("cus_%d", student.ID)),
 			SyncedCustomerName:  student.Name,
@@ -1320,4 +1354,160 @@ func TestManagementBillingRoutes(t *testing.T) {
 	requireText("active row", rowOf(active.ID), false, "status-suspended")
 	requireText("suspended row", rowOf(suspended.ID), true, `<span class="status-badge status-suspended">Suspended</span>`)
 	requireText("suspended row", rowOf(suspended.ID), false, "status-active")
+}
+
+func TestRenameLinkAndBillingSafeCancelEndpoints(t *testing.T) {
+	a := newApp(t)
+	staff := a.signIn(t, "staff")
+	created, err := a.store.CreateLink(t.Context(), "staff", "Original", later)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Inline rename: valid HTMX, invalid 422, malformed 400, unknown 204.
+	res, body := a.send(t, staff, http.MethodPost, fmt.Sprintf("/management/links/%d/rename", created.ID), url.Values{"name": {"  October Cohort  "}}, htmxHeader)
+	requireAcknowledged(t, res, body)
+	if groups := a.list(t); groups[0].Link.Name != "October Cohort" {
+		t.Fatalf("renamed link = %q, want October Cohort", groups[0].Link.Name)
+	}
+	for _, tc := range []struct {
+		name, body string
+		status     int
+	}{
+		{"empty", "name=   ", http.StatusUnprocessableEntity},
+		{"too long", "name=" + strings.Repeat("x", 101), http.StatusUnprocessableEntity},
+		{"missing param", "other=1", http.StatusBadRequest},
+	} {
+		res, body = a.sendRaw(t, staff, http.MethodPost, fmt.Sprintf("/management/links/%d/rename", created.ID), tc.body, htmxHeader)
+		if res.StatusCode != tc.status {
+			t.Fatalf("rename %s: status=%d, want %d: %s", tc.name, res.StatusCode, tc.status, body)
+		}
+	}
+	if res, _ = a.send(t, staff, http.MethodPost, "/management/links/"+unknownID+"/rename", url.Values{"name": {"Missing"}}, htmxHeader); res.StatusCode != http.StatusNoContent {
+		t.Fatalf("unknown rename status=%d, want 204", res.StatusCode)
+	}
+
+	// 2. Billing-safe enrollment cancel:
+	// (a) AwaitingPayment with in-flight processing attempt returns 409 Conflict.
+	e1, c1, err := a.store.StartEnrollment(t.Context(), created.Token, "")
+	if err != nil || e1 == nil {
+		t.Fatal(err)
+	}
+	if saved, err := a.store.Submit(t.Context(), created.Token, c1, contactDetails("Processing Customer"), "123456"); err != nil || saved != links.Saved {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	contract1 := billing.Contract{EnrollmentID: e1.ID, Reference: rand.Text(), PlanID: "full", PlanName: "Pago Único", InstallmentCount: 1, TotalCents: 60000}
+	if err := a.db.Create(&contract1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := a.db.Create(&billing.CheckoutAttempt{ContractID: contract1.ID, Reference: rand.Text(), PlanID: "full", FirstAmountCents: 60000, State: "processing", CreationStartedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	res, body = a.send(t, staff, http.MethodPost, fmt.Sprintf("/management/enrollments/%d/cancel", e1.ID), nil, htmxHeader)
+	if res.StatusCode != http.StatusConflict || !strings.Contains(body, "payment is in progress") {
+		t.Fatalf("in-flight cancel: status=%d, body=%s", res.StatusCode, body)
+	}
+
+	// (b) AwaitingPayment with open session expires Stripe session, cancels enrollment, and frees PIN.
+	sessID := "cs_open_mgmt"
+	if err := a.db.Model(&billing.CheckoutAttempt{}).Where("contract_id = ?", contract1.ID).
+		Updates(map[string]any{"state": "open", "stripe_session_id": sessID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	res, body = a.send(t, staff, http.MethodPost, fmt.Sprintf("/management/enrollments/%d/cancel", e1.ID), nil, htmxHeader)
+	requireAcknowledged(t, res, body)
+	if !strings.Contains(body, "Enrollment canceled.") {
+		t.Fatalf("expected Enrollment canceled notice: %s", body)
+	}
+
+	// (c) Expired submission with PIN shows "Clear PIN" in Trash and clears PIN while staying Expired.
+	e2, c2, err := a.store.StartEnrollment(t.Context(), created.Token, "")
+	if err != nil || e2 == nil {
+		t.Fatal(err)
+	}
+	if saved, err := a.store.Submit(t.Context(), created.Token, c2, contactDetails("Expired Pin Customer"), "123456"); err != nil || saved != links.Saved {
+		t.Fatal(err)
+	}
+	if err := a.db.Model(&links.Enrollment{}).Where("id = ?", e2.ID).Update("expires_at", now.Add(-time.Minute)).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, trashBody := a.send(t, staff, http.MethodGet, "/management/trash", nil, nil)
+	if !strings.Contains(trashBody, "Clear PIN") || !strings.Contains(trashBody, fmt.Sprintf(`action="/management/enrollments/%d/cancel"`, e2.ID)) {
+		t.Fatalf("trash missing Clear PIN action for expired submission with PIN: %s", trashBody)
+	}
+	res, body = a.send(t, staff, http.MethodPost, fmt.Sprintf("/management/enrollments/%d/cancel", e2.ID), nil, htmxHeader)
+	requireAcknowledged(t, res, body)
+	if !strings.Contains(body, "Expired PIN cleared.") {
+		t.Fatalf("expected Expired PIN cleared notice: %s", body)
+	}
+	_, trashBody = a.send(t, staff, http.MethodGet, "/management/trash", nil, nil)
+	if strings.Contains(trashBody, "Clear PIN") {
+		t.Fatalf("trash kept Clear PIN button after PIN was cleared: %s", trashBody)
+	}
+}
+
+func TestDashboardCountsReusableLinksAndEnrollments(t *testing.T) {
+	a := newApp(t)
+	staff := a.signIn(t, "staff")
+	now := time.Now().UTC()
+
+	// 1 active recent link with 2 enrollments (1 InProgress, 1 Submitted+Paid), plus 1 expired recent link with 0 enrollments, plus 1 old active link.
+	activeLink, err := a.store.CreateLink(t.Context(), "staff", "Active", later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.store.CreateLink(t.Context(), "staff", "Expired", now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	oldLink, err := a.store.CreateLink(t.Context(), "staff", "Old", later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.db.Model(&links.Link{}).Where("id = ?", oldLink.ID).Update("created_at", now.Add(-40*24*time.Hour)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.store.StartEnrollment(t.Context(), activeLink.Token, ""); err != nil {
+		t.Fatal(err)
+	}
+	eSub, cSub, err := a.store.StartEnrollment(t.Context(), activeLink.Token, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved, err := a.store.Submit(t.Context(), activeLink.Token, cSub, contactDetails("Dashboard Student"), "556677"); err != nil || saved != links.Saved {
+		t.Fatal(err)
+	}
+	acceptAgreement(t, a, activeLink.Token, cSub)
+	if err := a.db.Transaction(func(tx *gorm.DB) error {
+		return links.Enroll(tx, eSub.ID, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.db.Create(&billing.Contract{
+		EnrollmentID: eSub.ID, Reference: rand.Text(), PlanID: "full", PlanName: "Pago Único",
+		InstallmentCount: 1, TotalCents: 60000, FundedAt: &now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	res, body := a.send(t, staff, http.MethodGet, "/management/dashboard", nil, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard GET status = %d: %s", res.StatusCode, body)
+	}
+	for _, want := range []string{
+		`<dt>Links created</dt><dd>2</dd>`,
+		`<dt>Enrollments started</dt><dd>2</dd>`,
+		`<dt>Forms completed</dt><dd>1</dd>`,
+		`<dt>Paid enrollments</dt><dd>1</dd>`,
+		`<dt>Active links</dt><dd>2<small>`,
+		`<dt>In progress</dt><dd>1<small>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing %s in %s", want, body)
+		}
+	}
+	res, frag := a.send(t, staff, http.MethodGet, "/management/dashboard", nil, htmxHeader)
+	if res.StatusCode != http.StatusOK || strings.Contains(frag, "<!doctype html>") || !strings.Contains(frag, `<dt>Links created</dt><dd>2</dd>`) {
+		t.Fatalf("dashboard HTMX fragment invalid: %d, %s", res.StatusCode, frag)
+	}
 }

@@ -14,12 +14,12 @@ func (Payment) TableName() string         { return "billing_payments" }
 func (Suspension) TableName() string      { return "billing_suspensions" }
 func (WebhookEvent) TableName() string    { return "billing_webhook_events" }
 
-// Contract is the financial agreement for an enrollment; it belongs to the Link, and the Student exists only once it is funded.
+// Contract is the financial agreement for an enrollment; it belongs to the Enrollment, and the Student exists only once it is funded.
 type Contract struct {
-	ID                  uint64      `gorm:"primaryKey"`
-	SourceLinkHash      []byte      `gorm:"not null;uniqueIndex;check:contract_source_link_hash_size,octet_length(source_link_hash) = 32"`
-	Link                *links.Link `gorm:"foreignKey:SourceLinkHash;references:TokenHash;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
-	Reference           string      `gorm:"not null;uniqueIndex"`
+	ID                  uint64            `gorm:"primaryKey"`
+	EnrollmentID        uint64            `gorm:"not null;uniqueIndex"`
+	Enrollment          *links.Enrollment `gorm:"foreignKey:EnrollmentID;references:ID;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
+	Reference           string            `gorm:"not null;uniqueIndex"`
 	PlanID              string      `gorm:"not null"`
 	PlanName            string      `gorm:"not null"`
 	InstallmentCount    int         `gorm:"not null;check:contract_installment_count,installment_count > 0"`

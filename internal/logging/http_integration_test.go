@@ -42,7 +42,7 @@ const (
 
 func TestCustomerRolledBackRequestsLogOnce(t *testing.T) {
 	fixture := newHTTPLoggingFixture(t)
-	entry := fixture.createLink(t)
+	entry, cookieToken := fixture.createAndStart(t)
 	tx := fixture.db.WithContext(t.Context()).Begin()
 	if tx.Error != nil {
 		t.Fatal(tx.Error)
@@ -51,6 +51,7 @@ func TestCustomerRolledBackRequestsLogOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := fixture.routes(t, links.New(tx, nil))
+	sessionCookie := &http.Cookie{Name: "enrollment_session", Value: cookieToken}
 	for _, tc := range []struct {
 		name, suffix, route string
 	}{
@@ -58,8 +59,8 @@ func TestCustomerRolledBackRequestsLogOnce(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			form := httpContactForm("Private rolled back name")
-			rec := serveHTTPLogging(t, handler, http.MethodPost, "/customer/"+entry.Token+tc.suffix, form, nil)
-			private := append(httpContactValues(form), entry.Token, entry.ID, httpUsername)
+			rec := serveHTTPLogging(t, handler, http.MethodPost, "/customer/"+entry.Token+tc.suffix, form, sessionCookie)
+			private := append(httpContactValues(form), entry.Token, cookieToken, httpUsername)
 			fixture.requireFailure(t, rec, httpFailure{
 				method: http.MethodPost, route: tc.route,
 				stage: "save", kind: "transaction_done",
@@ -73,27 +74,27 @@ func TestCustomerRolledBackRequestsLogOnce(t *testing.T) {
 
 func TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging(t *testing.T) {
 	fixture := newHTTPLoggingFixture(t)
-	entry := fixture.createLink(t)
+	entry, cookieToken := fixture.createAndStart(t)
 	originalDetails := httpContactDetails("Private original student")
-	if saved, err := fixture.store.Submit(t.Context(), entry.Token, originalDetails, ""); err != nil || saved != links.Saved {
+	if saved, err := fixture.store.Submit(t.Context(), entry.Token, cookieToken, originalDetails, ""); err != nil || saved != links.Saved {
 		t.Fatalf("enroll student: result = %v, error = %v", saved, err)
 	}
 	const programStart = "2026-11-10"
 	if err := settings.New(fixture.db).SetProgramStartDate(t.Context(), programStart, "staff"); err != nil {
 		t.Fatal(err)
 	}
-	if accepted, err := fixture.store.AcceptTerms(t.Context(), entry.Token, programStart); err != nil || accepted == nil {
+	if accepted, err := fixture.store.AcceptTerms(t.Context(), entry.Token, cookieToken, programStart); err != nil || accepted == nil {
 		t.Fatalf("accept agreement: link=%+v, err=%v", accepted, err)
 	}
-	source := fixture.link(t, entry.Token)
+	source := fixture.enrollment(t, entry.Token, cookieToken)
 	now := time.Now().UTC()
 	if err := fixture.db.WithContext(t.Context()).Transaction(func(tx *gorm.DB) error {
-		return links.Enroll(tx, source.TokenHash, now)
+		return links.Enroll(tx, source.ID, now)
 	}); err != nil {
 		t.Fatalf("enroll student: %v", err)
 	}
 	var original students.Student
-	if err := fixture.db.WithContext(t.Context()).Where("source_link_hash = ?", source.TokenHash).Take(&original).Error; err != nil {
+	if err := fixture.db.WithContext(t.Context()).Where("enrollment_id = ?", source.ID).Take(&original).Error; err != nil {
 		t.Fatal(err)
 	}
 	user := fixture.createUser(t)
@@ -114,7 +115,7 @@ func TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging(t *testing.T) {
 	fixture.requireQuiet(t)
 	cookieDigest := sha256.Sum256([]byte(cookie.Value))
 	private := []string{httpUsername, httpPassword, user.PasswordHash, user.AuthVersion, cookie.Value, hex.EncodeToString(cookieDigest[:]),
-		entry.Token, entry.ID, originalDetails.Name, originalDetails.Email, originalDetails.Phone, originalDetails.Municipality,
+		entry.Token, originalDetails.Name, originalDetails.Email, originalDetails.Phone, originalDetails.Municipality,
 		"Rejected by database", "reject_test_student_name", "unavailable_students"}
 	path := fmt.Sprintf("/management/students/%d/fields/name", original.ID)
 	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE students ADD CONSTRAINT reject_test_student_name CHECK (name <> 'Rejected by database')").Error; err != nil {
@@ -188,9 +189,9 @@ func TestSignInCommitFailureLogsActualStatusWithoutCredentials(t *testing.T) {
 
 func TestAgreementFailuresLogOnceWithoutContactData(t *testing.T) {
 	fixture := newHTTPLoggingFixture(t)
-	entry := fixture.createLink(t)
+	entry, cookieToken := fixture.createAndStart(t)
 	details := httpContactDetails("Private agreement student")
-	if result, err := fixture.store.Submit(t.Context(), entry.Token, details, ""); err != nil || result != links.Saved {
+	if result, err := fixture.store.Submit(t.Context(), entry.Token, cookieToken, details, ""); err != nil || result != links.Saved {
 		t.Fatalf("submit: %v, %v", result, err)
 	}
 	const date = "2027-02-28"
@@ -199,13 +200,14 @@ func TestAgreementFailuresLogOnceWithoutContactData(t *testing.T) {
 	}
 	handler := fixture.routes(t, fixture.store)
 	path := "/customer/" + entry.Token
-	private := []string{details.Name, details.Email, details.Phone, details.Municipality, entry.Token, entry.ID,
+	sessionCookie := &http.Cookie{Name: "enrollment_session", Value: cookieToken}
+	private := []string{details.Name, details.Email, details.Phone, details.Municipality, entry.Token, cookieToken,
 		httpUsername, "reject_agreement", "unavailable_settings"}
-	before := fixture.link(t, entry.Token)
+	before := fixture.enrollment(t, entry.Token, cookieToken)
 	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE settings RENAME TO unavailable_settings").Error; err != nil {
 		t.Fatal(err)
 	}
-	rec := serveHTTPLogging(t, handler, http.MethodGet, path+"/agreement", nil, nil)
+	rec := serveHTTPLogging(t, handler, http.MethodGet, path+"/agreement", nil, sessionCookie)
 	fixture.requireFailure(t, rec, httpFailure{
 		method: http.MethodGet, route: "GET /customer/{token}/agreement",
 		stage: "load", kind: "database", sqlstate: "42P01",
@@ -214,23 +216,23 @@ func TestAgreementFailuresLogOnceWithoutContactData(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.out.Reset()
-	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE links ADD CONSTRAINT reject_agreement CHECK (terms_accepted_at IS NULL)").Error; err != nil {
+	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE enrollments ADD CONSTRAINT reject_agreement CHECK (terms_accepted_at IS NULL)").Error; err != nil {
 		t.Fatal(err)
 	}
 	consent := url.Values{"accept_terms": {"yes"}, "program_start_date": {date}}
-	rec = serveHTTPLogging(t, handler, http.MethodPost, path+"/agreement", consent, nil)
+	rec = serveHTTPLogging(t, handler, http.MethodPost, path+"/agreement", consent, sessionCookie)
 	fixture.requireFailure(t, rec, httpFailure{
 		method: http.MethodPost, route: "POST /customer/{token}/agreement",
 		stage: "save", kind: "database", sqlstate: "23514",
 	}, private...)
-	if after := fixture.link(t, entry.Token); !reflect.DeepEqual(after, before) {
+	if after := fixture.enrollment(t, entry.Token, cookieToken); !reflect.DeepEqual(after, before) {
 		t.Fatal("failed agreement changed contact or consent")
 	}
-	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE links DROP CONSTRAINT reject_agreement").Error; err != nil {
+	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE enrollments DROP CONSTRAINT reject_agreement").Error; err != nil {
 		t.Fatal(err)
 	}
 	fixture.out.Reset()
-	rec = serveHTTPLogging(t, handler, http.MethodPost, path+"/agreement", consent, nil)
+	rec = serveHTTPLogging(t, handler, http.MethodPost, path+"/agreement", consent, sessionCookie)
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != path+"/payments" || rec.Body.Len() != 0 {
 		t.Fatal("agreement retry did not advance quietly")
 	}
@@ -275,7 +277,7 @@ func newHTTPLoggingFixture(t *testing.T) *httpLoggingFixture {
 	t.Helper()
 	fixture := &httpLoggingFixture{}
 	fixture.log = logging.New(&fixture.out)
-	models := append([]any{&auth.User{}, &auth.Session{}, &links.Link{}, &students.Student{}, &settings.Settings{}}, billing.Models()...)
+	models := append([]any{&auth.User{}, &auth.Session{}, &links.Link{}, &links.Enrollment{}, &students.Student{}, &settings.Settings{}}, billing.Models()...)
 	db := testdb.Open(t, models...)
 	fixture.db = db.Session(&gorm.Session{Logger: logging.NewDBLogger(fixture.log)})
 	fixture.store = links.New(fixture.db, nil)
@@ -300,28 +302,32 @@ func (fixture *httpLoggingFixture) routes(t *testing.T, store *links.Store) http
 	root := http.NewServeMux()
 	manager.RegisterRoutes(root)
 	root.Handle("/management/", manager.Require(logging.Routes(child)))
-	if err := customer.RegisterRoutes(root, store, students.New(fixture.db, nil), settings.New(fixture.db), biller); err != nil {
+	if err := customer.RegisterRoutes(root, store, students.New(fixture.db, nil), settings.New(fixture.db), biller, false); err != nil {
 		t.Fatal(err)
 	}
 	return logging.Requests(fixture.log, http.NewCrossOriginProtection().Handler(logging.Routes(root)))
 }
 
-func (fixture *httpLoggingFixture) createLink(t *testing.T) links.Entry {
+func (fixture *httpLoggingFixture) createAndStart(t *testing.T) (links.LinkEntry, string) {
 	t.Helper()
-	entry, err := fixture.store.Create(t.Context(), httpUsername, time.Now().Add(time.Hour))
+	entry, err := fixture.store.CreateLink(t.Context(), httpUsername, "", time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return entry
+	started, cookieToken, err := fixture.store.StartEnrollment(t.Context(), entry.Token, "")
+	if err != nil || started == nil {
+		t.Fatalf("start enrollment: %v, %v", started, err)
+	}
+	return entry, cookieToken
 }
 
-func (fixture *httpLoggingFixture) link(t *testing.T, token string) links.Link {
+func (fixture *httpLoggingFixture) enrollment(t *testing.T, linkToken, cookieToken string) links.Enrollment {
 	t.Helper()
-	link, err := fixture.store.Lookup(t.Context(), token)
-	if err != nil || link == nil {
-		t.Fatalf("read source link: present = %t, error = %v", link != nil, err)
+	sess, err := fixture.store.LookupSession(t.Context(), linkToken, cookieToken)
+	if err != nil || sess == nil || sess.Enrollment == nil {
+		t.Fatalf("read source enrollment: present = %t, error = %v", sess != nil && sess.Enrollment != nil, err)
 	}
-	return *link
+	return *sess.Enrollment
 }
 
 func (fixture *httpLoggingFixture) createUser(t *testing.T) auth.User {

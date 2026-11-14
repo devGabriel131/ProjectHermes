@@ -17,12 +17,12 @@ import (
 func (s *site) agreement(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "agreement", FieldErrors: make(map[string]string)}
-	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
-	defer cancel()
-	link, err := s.links.Lookup(ctx, token)
-	if !s.found(w, r, "index.html", &data, link, err) {
+	link, ok := s.resolveSession(w, r, "index.html", &data, token)
+	if !ok {
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
+	defer cancel()
 	if link.SubmittedAt == nil {
 		redirectCustomer(w, r, data.Path+"/forms")
 		return
@@ -31,7 +31,7 @@ func (s *site) agreement(w http.ResponseWriter, r *http.Request) {
 		redirectCustomer(w, r, data.Path+"/payments")
 		return
 	}
-	editable, err := s.billing.ContactEditable(ctx, link.TokenHash)
+	editable, err := s.billing.ContactEditable(ctx, link.ID)
 	if err != nil {
 		logging.RecordError(r, "load", err)
 		data.Error = "No pudimos abrir este enlace. Intenta de nuevo."
@@ -70,7 +70,7 @@ func (s *site) agreement(w http.ResponseWriter, r *http.Request) {
 				status = http.StatusUnprocessableEntity
 				data.FieldErrors["accept_terms"] = "Debes aceptar los términos para continuar."
 			default:
-				accepted, err := s.links.AcceptTerms(ctx, token, r.PostForm.Get("program_start_date"))
+				accepted, err := s.links.AcceptTerms(ctx, token, readSessionCookie(r), r.PostForm.Get("program_start_date"))
 				switch {
 				case errors.Is(err, links.ErrProgramStartChanged):
 					if !loadAgreementDate() {

@@ -259,7 +259,7 @@ func registerStudentRoutes(mux *http.ServeMux, roster *students.Store, biller *b
 				notFound(w)
 				return
 			default:
-				biller.TouchContract(ctx, record.SourceLinkHash)
+				biller.TouchContract(ctx, record.EnrollmentID)
 				if !partial {
 					path := "/management/students/" + strconv.FormatUint(record.ID, 10) + "?saved=" + url.QueryEscape(field.Key)
 					http.Redirect(w, r, path, http.StatusSeeOther)

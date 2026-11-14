@@ -48,11 +48,11 @@ stateDiagram-v2
 
 ## `StartCheckout`
 
-`StartCheckout(ctx, sourceLinkHash, planID)` creates or resumes the single hosted first-payment attempt for a Link. It runs `beginCheckout`, one transaction that locks the Link, then the Contract, then the active attempt (all `FOR UPDATE`), and persists the new attempt before any Session call. Rows are checked in this order:
+`StartCheckout(ctx, enrollmentID, planID)` creates or resumes the single hosted first-payment attempt for an Enrollment. It runs `beginCheckout`, one transaction that locks the Enrollment, then the Contract, then the active attempt (all `FOR UPDATE`), and persists the new attempt before any Session call. Rows are checked in this order:
 
 | Condition | Outcome |
 |---|---|
-| Hash is not 32 bytes, or the Link is unusable, unsubmitted or has no accepted terms | `ErrUnavailable` |
+| ID is 0 or overflows `BIGINT`, or the Enrollment is unusable, unsubmitted or has no accepted terms | `ErrUnavailable` |
 | Unknown plan ID | `payments.ErrUnknownPlan` (the handler validates the plan first) |
 | No contract yet | Contract and one tuition obligation per installment are created from the plan, with `next_sync_at` one minute ahead; a new attempt follows |
 | Funded, same plan | `Funded` |
@@ -76,7 +76,7 @@ sequenceDiagram
 
   C->>H: POST /customer/{token}/payments with payment_plan
   H->>B: StartCheckout with an 8 s budget
-  B->>DB: transaction, lock Link then Contract then active attempt
+  B->>DB: transaction, lock Enrollment then Contract then active attempt
   alt contract funded
     B-->>H: Funded, or ErrPlanLocked for another plan
   else open attempt for the same plan
@@ -152,7 +152,7 @@ sequenceDiagram
 
 - **Metadata keys:** `tuition_contract` (contract reference), `tuition_obligation` (the first obligation's reference), `tuition_attempt` (attempt reference). The Session itself carries none; they ride on the generated invoice and, for installment plans, the PaymentIntent.
 - **Card only for installments:** later invoices charge the saved card, so installment Sessions skip the payment-method configuration and take cards only; Apple Pay, Google Pay and Link ride on card. The code comment says Stripe rejects an allow-list together with a payment-method configuration `[EXTERNAL]`. Klarna therefore exists only on the single payment. The dashboard side is in [Stripe setup](../operations/stripe-setup.md).
-- **Stripe Customer:** created inside the locking transaction, once per enrollment, from the Link's name and email, with `preferred_locales` `es-419`, metadata `tuition_contract` and the idempotency key `tuition:<contract reference>:customer`. The worker keeps name and email in sync later ([Worker](worker.md)).
+- **Stripe Customer:** created inside the locking transaction, once per enrollment, from the Enrollment's name and email, with `preferred_locales` `es-419`, metadata `tuition_contract` and the idempotency key `tuition:<contract reference>:customer`. The worker keeps name and email in sync later ([Worker](worker.md)).
 - **Return URLs** are token-free; see [Customer flow](../domain/customer-flow.md) for the page.
 
 ## Budgets and idempotency
@@ -182,7 +182,7 @@ An empty or unknown `session_id` is `ErrUnavailable` (the page answers 404). `?c
 ## Deliberate choices
 
 - **The attempt is saved as `creating` before the Stripe call**, and its outcome is written through the detached `persistCtx`. A result lost to a timeout or disconnect stays recoverable by the worker (`resumeCreate`); `TestCheckoutCreateResumes` proves it.
-- **The Stripe Customer is created while the Link and Contract locks are held** (a `ponytail:` comment in `beginCheckout`). Concurrent starts share one Customer and the stable key makes a retry safe; move it after commit if lock waits ever matter.
+- **The Stripe Customer is created while the Enrollment and Contract locks are held** (a `ponytail:` comment in `beginCheckout`). Concurrent starts share one Customer and the stable key makes a retry safe; move it after commit if lock waits ever matter.
 - **Two state sets, not one.** Active blocks a new attempt; in flight blocks contact edits because money may be moving. `open` and `creating` are active but not in flight.
 - **An unresolved `Expire` stays `expiring`** and reports `Pending`, so a possibly paid old quote is never replaced by a new one.
 - **A mismatched Session keeps its ID but not its URL**, so nobody can pay it while staff and webhooks can still find it.

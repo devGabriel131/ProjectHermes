@@ -6,7 +6,7 @@ import http from 'k6/http';
 import exec from 'k6/execution';
 import { check } from 'k6';
 import {
-  PLANS, OFFSET, baseOptions, call, completeToPayments, customerHeaderChecks, encode, expect, has, intEnv, loadTokens, spec,
+  ORIGIN, PLANS, OFFSET, baseOptions, call, completeToPayments, customerHeaderChecks, encode, expect, has, intEnv, loadTokens, spec,
   summarize, target, tokenAt,
 } from './lib.js';
 
@@ -62,6 +62,7 @@ function settle(token, responses) {
 }
 
 export default function () {
+  http.cookieJar().clear(ORIGIN);
   const it = exec.scenario.iterationInTest;
   if (it === 0) returnPageCases();
 

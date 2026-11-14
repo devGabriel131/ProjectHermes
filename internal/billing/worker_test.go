@@ -400,14 +400,15 @@ func TestFundingSchedulesLaterInvoicesOnce(t *testing.T) {
 	paidAt := time.Date(2026, time.November, 15, 4, 0, 0, 0, time.UTC)
 	mock := newWorkerMockServer(paidAt, 20834)
 
-	allModels := append([]any{&links.Link{}, &students.Student{}}, billing.Models()...)
+	allModels := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)
 	db := testdb.Open(t, allModels...)
 
 	tokenHash := make([]byte, 32)
 	rand.Read(tokenHash)
 	now := time.Now().UTC()
-	link := links.Link{
-		TokenHash: tokenHash,
+	link := links.Enrollment{
+		LinkID:      seedLink(t, db),
+		SessionHash: tokenHash,
 		Details: students.Details{
 			Name:  "Test Student",
 			Email: "test@example.com",
@@ -422,7 +423,7 @@ func TestFundingSchedulesLaterInvoicesOnce(t *testing.T) {
 	contractRef := rand.Text()
 	cusID := "cus_worker_test"
 	contract := billing.Contract{
-		SourceLinkHash:   tokenHash,
+		EnrollmentID:     link.ID,
 		Reference:        contractRef,
 		PlanID:           "three",
 		PlanName:         "Plan de 3 Pagos Mensuales",
@@ -499,7 +500,7 @@ func TestFundingSchedulesLaterInvoicesOnce(t *testing.T) {
 	svc.DrainForTest(t.Context())
 
 	var enrolledStudent students.Student
-	if err := db.Where("source_link_hash = ?", tokenHash).Take(&enrolledStudent).Error; err != nil {
+	if err := db.Where("enrollment_id = ?", link.ID).Take(&enrolledStudent).Error; err != nil {
 		t.Fatalf("enrolled student: %v", err)
 	}
 	if enrolledStudent.Name != link.Name || enrolledStudent.Email != link.Email || enrolledStudent.Phone != link.Phone {
@@ -562,14 +563,15 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 	mock := newWorkerMockServer(paidAt, 20834)
 	secret := billingtest.Config().WebhookSecret
 
-	allModels := append([]any{&links.Link{}, &students.Student{}}, billing.Models()...)
+	allModels := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)
 	db := testdb.Open(t, allModels...)
 
 	tokenHash := make([]byte, 32)
 	rand.Read(tokenHash)
 	now := time.Now().UTC()
-	link := links.Link{
-		TokenHash: tokenHash,
+	link := links.Enrollment{
+		LinkID:      seedLink(t, db),
+		SessionHash: tokenHash,
 		Details: students.Details{
 			Name:  "Recurring Student",
 			Email: "recurring@example.com",
@@ -584,7 +586,7 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 	contractRef := rand.Text()
 	cusID := "cus_worker_test"
 	contract := billing.Contract{
-		SourceLinkHash:   tokenHash,
+		EnrollmentID:     link.ID,
 		Reference:        contractRef,
 		PlanID:           "three",
 		PlanName:         "Plan de 3 Pagos Mensuales",
@@ -802,14 +804,15 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 func TestRefundsAndFraudSignalsSurfaceWithoutWebhook(t *testing.T) {
 	paidAt := time.Date(2026, time.November, 15, 4, 0, 0, 0, time.UTC)
 	mock := newWorkerMockServer(paidAt, 60000)
-	allModels := append([]any{&links.Link{}, &students.Student{}}, billing.Models()...)
+	allModels := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)
 	db := testdb.Open(t, allModels...)
 
 	tokenHash := make([]byte, 32)
 	rand.Read(tokenHash)
 	now := time.Now().UTC()
-	link := links.Link{
-		TokenHash: tokenHash,
+	link := links.Enrollment{
+		LinkID:      seedLink(t, db),
+		SessionHash: tokenHash,
 		Details: students.Details{
 			Name:  "Financial Student",
 			Email: "fin@example.com",
@@ -821,7 +824,7 @@ func TestRefundsAndFraudSignalsSurfaceWithoutWebhook(t *testing.T) {
 	}
 	mustCreate(t, db, &link)
 	student := students.Student{
-		SourceLinkHash: tokenHash,
+		EnrollmentID: &link.ID,
 		Details:        link.Details,
 		IsActive:       true,
 		Cohort:         "2026-11",
@@ -829,7 +832,7 @@ func TestRefundsAndFraudSignalsSurfaceWithoutWebhook(t *testing.T) {
 	mustCreate(t, db, &student)
 	cusID := "cus_worker_test"
 	contract := billing.Contract{
-		SourceLinkHash:   tokenHash,
+		EnrollmentID:     link.ID,
 		Reference:        rand.Text(),
 		PlanID:           "full",
 		PlanName:         "Pago Único",
@@ -943,7 +946,7 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 	paidAt := time.Date(2026, time.November, 15, 4, 0, 0, 0, time.UTC)
 	mock := newWorkerMockServer(paidAt, 20834)
 
-	allModels := append([]any{&links.Link{}, &students.Student{}}, billing.Models()...)
+	allModels := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)
 	db := testdb.Open(t, allModels...)
 
 	svc := billingtest.New(t, db, mock.mux)
@@ -954,23 +957,24 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 	setupStudent := func(name, email string) (students.Student, billing.Contract) {
 		tokenHash := make([]byte, 32)
 		rand.Read(tokenHash)
-		link := links.Link{
-			TokenHash: tokenHash,
-			Details:   students.Details{Name: name, Email: email},
-			CreatedAt: now, SubmittedAt: &now, PaidAt: &now,
-			ExpiresAt: now.Add(7 * 24 * time.Hour),
+		link := links.Enrollment{
+			LinkID:      seedLink(t, db),
+			SessionHash: tokenHash,
+			Details:     students.Details{Name: name, Email: email},
+			CreatedAt:   now, SubmittedAt: &now, PaidAt: &now,
+			ExpiresAt:   now.Add(7 * 24 * time.Hour),
 		}
 		mustCreate(t, db, &link)
 		student := students.Student{
-			SourceLinkHash: tokenHash,
-			Details:        link.Details,
-			IsActive:       true,
-			Cohort:         "2026-11",
+			EnrollmentID: &link.ID,
+			Details:      link.Details,
+			IsActive:     true,
+			Cohort:       "2026-11",
 		}
 		mustCreate(t, db, &student)
 		cusID := "cus_worker_" + rand.Text()[:8]
 		contract := billing.Contract{
-			SourceLinkHash:   tokenHash,
+			EnrollmentID:     link.ID,
 			Reference:        rand.Text(),
 			PlanID:           "three",
 			PlanName:         "Plan de 3 Pagos Mensuales",
@@ -1227,11 +1231,11 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 
 func TestWorkerSyncsCustomerContact(t *testing.T) {
 	mock := newMockStripeServer()
-	db, svc, tokenHash, _ := setupTestEnvironment(t, mock)
+	db, svc, enrollmentID, _ := setupTestEnvironment(t, mock)
 	ctx := context.Background()
 
 	// Start checkout creates the customer in Stripe and stamps synced columns
-	res, err := svc.StartCheckout(ctx, tokenHash, "three")
+	res, err := svc.StartCheckout(ctx, enrollmentID, "three")
 	if err != nil {
 		t.Fatalf("StartCheckout: %v", err)
 	}
@@ -1240,7 +1244,7 @@ func TestWorkerSyncsCustomerContact(t *testing.T) {
 	}
 
 	var c billing.Contract
-	if err := db.Where("source_link_hash = ?", tokenHash).Take(&c).Error; err != nil {
+	if err := db.Where("enrollment_id = ?", enrollmentID).Take(&c).Error; err != nil {
 		t.Fatalf("take contract: %v", err)
 	}
 	if c.StripeCustomerID == nil || *c.StripeCustomerID == "" {
@@ -1251,7 +1255,7 @@ func TestWorkerSyncsCustomerContact(t *testing.T) {
 	}
 
 	// 1. Unchanged contact => drain produces 0 customer updates
-	svc.TouchContract(ctx, tokenHash)
+	svc.TouchContract(ctx, &enrollmentID)
 	svc.DrainForTest(ctx)
 	mock.with(func() {
 		if len(mock.customerUpdates) != 0 {
@@ -1261,10 +1265,10 @@ func TestWorkerSyncsCustomerContact(t *testing.T) {
 
 	// 2. Customer changes email on the link before funding
 	// Contract is unfunded, but customer syncs durable to Stripe from the Link
-	if err := db.Model(&links.Link{}).Where("token_hash = ?", tokenHash).Update("email", "maria.updated@example.com").Error; err != nil {
+	if err := db.Model(&links.Enrollment{}).Where("id = ?", enrollmentID).Update("email", "maria.updated@example.com").Error; err != nil {
 		t.Fatalf("update link: %v", err)
 	}
-	svc.TouchContract(ctx, tokenHash)
+	svc.TouchContract(ctx, &enrollmentID)
 	// One worker drain records exactly one customer update with new email
 	svc.DrainForTest(ctx)
 	var updates []customerUpdate
@@ -1288,10 +1292,10 @@ func TestWorkerSyncsCustomerContact(t *testing.T) {
 	}
 
 	// 3. Mock fails update => contract stamp stays old and next drain succeeds
-	if err := db.Model(&links.Link{}).Where("token_hash = ?", tokenHash).Update("name", "Maria Rivera").Error; err != nil {
+	if err := db.Model(&links.Enrollment{}).Where("id = ?", enrollmentID).Update("name", "Maria Rivera").Error; err != nil {
 		t.Fatalf("update link name: %v", err)
 	}
-	svc.TouchContract(ctx, tokenHash)
+	svc.TouchContract(ctx, &enrollmentID)
 	mock.with(func() {
 		mock.customerUpdateError = true
 	})
@@ -1309,7 +1313,7 @@ func TestWorkerSyncsCustomerContact(t *testing.T) {
 	mock.with(func() {
 		mock.customerUpdateError = false
 	})
-	svc.TouchContract(ctx, tokenHash)
+	svc.TouchContract(ctx, &enrollmentID)
 	svc.DrainForTest(ctx)
 
 	// Next drain succeeded

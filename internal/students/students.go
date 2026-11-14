@@ -24,8 +24,8 @@ type Details struct {
 
 type Student struct {
 	ID             uint64 `gorm:"primaryKey"`
-	// SourceLinkHash is nil for students staff add (Add), who have no customer link.
-	SourceLinkHash []byte `gorm:"uniqueIndex;check:student_source_hash_size,octet_length(source_link_hash) = 32"`
+	// EnrollmentID is nil for students staff add (Add), who have no customer enrollment.
+	EnrollmentID *uint64 `gorm:"uniqueIndex"`
 	Details
 	CreatedAt time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 	IsActive  bool      `gorm:"not null;default:true"`
@@ -149,14 +149,14 @@ func (s *Store) Get(ctx context.Context, id uint64) (*Student, error) {
 
 const pinTakenMessage = "That PIN is already in use."
 
-// heldPins reports which of the given pins are held by a Student or a submitted Link still awaiting payment.
+// heldPins reports which of the given pins are held by a Student or a submitted Enrollment still awaiting payment.
 // links imports this package, so the table is queried by name without importing links.
 func heldPins(db *gorm.DB, pins []string) (map[string]bool, error) {
 	if len(pins) == 0 {
 		return map[string]bool{}, nil
 	}
 	var found []string
-	err := db.Raw("SELECT pin FROM students WHERE pin IN ? UNION SELECT pin FROM links WHERE pin IN ?", pins, pins).Scan(&found).Error
+	err := db.Raw("SELECT pin FROM students WHERE pin IN ? UNION SELECT pin FROM enrollments WHERE pin IN ?", pins, pins).Scan(&found).Error
 	if err != nil {
 		return nil, err
 	}

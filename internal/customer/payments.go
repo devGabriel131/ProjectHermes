@@ -24,10 +24,8 @@ type planView struct {
 func (s *site) payments(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "payments", FieldErrors: make(map[string]string)}
-	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
-	defer cancel()
-	link, err := s.links.Lookup(ctx, token)
-	if !s.found(w, r, "index.html", &data, link, err) {
+	link, ok := s.resolveSession(w, r, "index.html", &data, token)
+	if !ok {
 		return
 	}
 	if link.SubmittedAt == nil {
@@ -57,7 +55,7 @@ func (s *site) payments(w http.ResponseWriter, r *http.Request) {
 				data.FieldErrors["payment_plan"] = "Selecciona una de las tres opciones de pago."
 			default:
 				// StartCheckout bounds its own provider work; the request context only carries disconnects.
-				result, err := s.billing.StartCheckout(r.Context(), link.TokenHash, data.PaymentPlan)
+				result, err := s.billing.StartCheckout(r.Context(), link.ID, data.PaymentPlan)
 				switch {
 				case errors.Is(err, billing.ErrUnavailable):
 					s.render(w, r, "index.html", data, http.StatusNotFound)
@@ -85,7 +83,7 @@ func (s *site) payments(w http.ResponseWriter, r *http.Request) {
 
 	summaryCtx, cancelSummary := context.WithTimeout(r.Context(), dbTimeout)
 	defer cancelSummary()
-	summary, err := s.billing.ForLink(summaryCtx, link.TokenHash)
+	summary, err := s.billing.ForEnrollment(summaryCtx, link.ID)
 	switch {
 	case errors.Is(err, billing.ErrUnavailable):
 		s.render(w, r, "index.html", data, http.StatusNotFound)

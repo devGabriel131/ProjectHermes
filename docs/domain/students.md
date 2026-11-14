@@ -40,26 +40,26 @@ The customer enters the PIN once, on the final submit. It is never drafted, so a
 
 ```mermaid
 flowchart TD
-    A["Customer types a PIN"] --> B["POST /customer/{token}/pin: ParsePin, then pinHeld (students and links)"]
+    A["Customer types a PIN"] --> B["POST /customer/{token}/pin: ParsePin, then heldPins (students and enrollments)"]
     B -->|"held"| B1["422 pin-status: Este PIN ya está en uso. Elige otro."]
     B -->|"free"| B2["200 PIN disponible. Nothing is saved"]
     A --> C["POST /customer/{token}: Store.Submit"]
     B2 --> C
     C -->|"ParsePin fails"| C1["422 on the form"]
-    C -->|"an enrolled Student holds it (NOT EXISTS students)"| C2["PinTaken: 422, link stays unsubmitted"]
-    C -->|"a submitted link holds it (idx_link_pin)"| C2
-    C -->|"free"| D["links.pin = PIN and submitted_at set"]
+    C -->|"an enrolled Student holds it (NOT EXISTS students)"| C2["PinTaken: 422, enrollment stays unsubmitted"]
+    C -->|"a submitted enrollment holds it (idx_enrollment_pin)"| C2
+    C -->|"free"| D["enrollments.pin = PIN and submitted_at set"]
     D --> E["billing fund transaction: links.Enroll"]
-    E --> F["students.pin = PIN, links.pin = empty"]
+    E --> F["students.pin = PIN, enrollments.pin = empty"]
     F -->|"idx_student_pin violation (residual race)"| G["transaction rolls back, worker retries the contract"]
     F --> H["Staff UpdateField: pinHeld, then idx_student_pin: 422 That PIN is already in use."]
 ```
 
 | Refusal point | What it checks | Authority |
 |---|---|---|
-| `/pin` | `pinHeld`: a Student or any link holds the PIN | advisory; customer-facing warning only |
-| `Store.Submit` | `AND NOT EXISTS (SELECT 1 FROM students WHERE pin = ? AND pin <> '')` plus `idx_link_pin` | binding for submitted links and enrolled Students |
-| `Store.UpdateField` (staff) | `pinHeld`, then a unique violation on `idx_student_pin` | binding; both become the same 422 message |
+| `/pin` | `heldPins`: a Student or any enrollment holds the PIN | advisory; customer-facing warning only |
+| `Store.Submit` | `AND NOT EXISTS (SELECT 1 FROM students WHERE pin = ? AND pin <> '')` plus `idx_enrollment_pin` | binding for submitted enrollments and enrolled Students |
+| `Store.UpdateField` (staff) | `heldPins`, then a unique violation on `idx_student_pin` | binding; both become the same 422 message |
 | `links.Enroll` | `idx_student_pin` at funding | last resort |
 
 A `Submit` racing a concurrent `Enroll` can still see the PIN free under READ COMMITTED; funding then fails on `idx_student_pin` and the contract retries without creating a Student ([Go-live](../go-live.md)). The code marks the upgrade path: one PIN-reservation table or an advisory lock.
@@ -69,15 +69,15 @@ A `Submit` racing a concurrent `Enroll` can still see the PIN free under READ CO
 | Column | Rule |
 |---|---|
 | `id` | Primary key. `Store.Get` returns nothing for 0 or any ID above `BIGINT`. |
-| `source_link_hash` | Unique and a `RESTRICT` foreign key to `links.token_hash`: one Student per link, and the link cannot be deleted or rekeyed. |
-| six contact columns | Copied from the Link at enrollment. After that the Student is canonical and staff edit it; the Link keeps its last pre-payment snapshot. |
-| `created_at` | The payment instant: `links.paid_at` and `billing_contracts.funded_at`. |
+| `enrollment_id` | Nullable unique `RESTRICT` foreign key to `enrollments.id`: one Student per enrollment, and the enrollment cannot be deleted or rekeyed; `NULL` for staff-added students. |
+| six contact columns | Copied from the Enrollment at enrollment. After that the Student is canonical and staff edit it; the Enrollment keeps its last pre-payment snapshot. |
+| `created_at` | The payment instant: `enrollments.paid_at` and `billing_contracts.funded_at`. |
 | `is_active` | Default true. Billing flips it on suspension and reactivation ([Suspension](../billing/suspension.md)). Nothing in this package writes it. |
-| `pin` | Moved from the Link by `Enroll`. |
+| `pin` | Moved from the Enrollment by `Enroll`. |
 | `group` | The column default `Básico`: `Enroll` never sets it. Staff change it afterwards. |
-| `cohort` | `left(program_start_date, 7)` of the Link's accepted agreement snapshot, `YYYY-MM`. The `student_cohort_month` check enforces the shape. No edit reaches it, so it stays the start month after a promotion. `CohortLabel` renders it as "November 2026". |
+| `cohort` | `left(program_start_date, 7)` of the Enrollment's accepted agreement snapshot, `YYYY-MM`, or `''` for staff-added students. The `student_cohort_valid` check enforces the shape. No edit reaches it, so it stays the start month after a promotion. `CohortLabel` renders it as "November 2026". |
 
-`links.Enroll(tx, hash, paidAt)` runs inside billing's funding transaction, which already holds the Link row lock. It inserts the Student from the submitted, unpaid link, then sets `links.paid_at` and clears `links.pin`. It fails the transaction if the link is not submitted or is already paid. It ignores `Usable`, so a link that expired before payment still enrolls. The Student outlives the link: `Store.List` returns every retained student regardless of link access. See [Lifecycle](lifecycle.md) for the surrounding sequence.
+`links.Enroll(tx, enrollmentID, paidAt)` runs inside billing's funding transaction, which already holds the Enrollment row lock. It inserts the Student from the submitted, unpaid enrollment, then sets `enrollments.paid_at` and clears `enrollments.pin`. It fails the transaction if the enrollment is not submitted or is already paid. It ignores `Usable`, so an enrollment that expired before payment still enrolls. The Student outlives the enrollment: `Store.List` returns every retained student regardless of enrollment access. See [Lifecycle](lifecycle.md) for the surrounding sequence.
 
 ## Staff field edit
 
@@ -93,13 +93,13 @@ A write publishes a live event. Management then calls `TouchContract` so the con
 ## Deliberate choices
 
 - `Fields()` and `StaffFields()` stay separate so PIN and group stay undraftable: `/draft/pin` returns 404 because `FindField` does not know it.
-- `pinHeld` queries `links` by table name because `links` imports this package; importing `links` back would be a cycle.
+- `heldPins` queries `enrollments` by table name because `links` imports this package; importing `links` back would be a cycle.
 - The Puerto Rico zone is defined here (`puertoRico`) and in `payments`. Importing `payments` would couple contact validation to plan math for one line.
-- The partial indexes (`where pin <> ''`) let unsubmitted links and PIN-less rows coexist, and let the store accept an empty PIN in tests.
+- The partial indexes (`where pin <> ''`) let unsubmitted enrollments and PIN-less rows coexist, and let the store accept an empty PIN in tests.
 
 ## Source
 
-- `internal/students/students.go`: `Details`, `Student`, `CohortLabel`, `Store.List`, `Store.Get`, `Store.PinTaken`, `Store.UpdateField`, `pinHeld`, `pinIndex`, `IsUniqueViolation`, `ErrUnknownField`
+- `internal/students/students.go`: `Details`, `Student`, `CohortLabel`, `Store.List`, `Store.Get`, `Store.PinTaken`, `Store.UpdateField`, `heldPins`, `pinIndex`, `IsUniqueViolation`, `ErrUnknownField`
 - `internal/students/fields.go`: `Fields`, `StaffFields`, `FindField`, `FindStaffField`, `pinField`, `groupField`, `puertoRico`, `ParseName`, `ParseEmail`, `ParsePhone`, `ParseDateOfBirth`, `ParseGender`, `ParseGroup`, `ParsePin`, `ValidationError`
 - `internal/students/municipalities.go`: `MunicipalityOptions`, `ParseMunicipality`
 - `internal/links/links.go`: `Enroll`, `Store.Submit`, `pinIndex`

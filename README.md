@@ -1,6 +1,6 @@
 # ProjectHermes
 
-Enrollment, agreement, and tuition-payment web application. Staff manage customer links, student records, and billing settings; customers use private per-person links to submit contact information, accept agreements, and pay tuition through Stripe.
+Enrollment, agreement, and tuition-payment web application. Staff manage customer links, student records, and billing settings; customers open a reusable link that staff share; each browser gets its own private enrollment session to submit contact information, accept the agreement, and pay tuition through Stripe.
 
 ## Status
 
@@ -26,7 +26,7 @@ Go 1.27, PostgreSQL 17 via GORM, Stripe Go SDK v87, Argon2id, and HTMX.
 |---|---|---|
 | Index & conventions | [docs/README.md](docs/README.md) | Full 29-page catalog, reading order, and documentation conventions |
 | Architecture | [docs/architecture.md](docs/architecture.md) | Package graph, middleware pipeline, mounted route table |
-| Data model | [docs/data-model.md](docs/data-model.md) | 11 PostgreSQL tables, ER diagram, DB-enforced constraints |
+| Data model | [docs/data-model.md](docs/data-model.md) | 12 PostgreSQL tables, ER diagram, DB-enforced constraints |
 | Domain | [docs/domain/lifecycle.md](docs/domain/lifecycle.md) | Vocabulary, links lifecycle, customer forms, student registry |
 | Billing | [docs/billing/overview.md](docs/billing/overview.md) | Hosted Checkout, one-off invoices, leased worker, suspension rules |
 | Management | [docs/management/overview.md](docs/management/overview.md) | Staff interface, student roster, live SSE feed, frontend scripts |

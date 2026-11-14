@@ -5,6 +5,7 @@ package billing_test
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -213,17 +214,34 @@ func (m *mockStripeServer) with(f func()) {
 // setupTestEnvironment seeds a Link and, only so staff-keyed entry points (ForStudent, ReconcileStudent)
 // can reach the contract, a Student. Production creates the Student at funding (links.Enroll), so a
 // contract never has one before funding.
-func setupTestEnvironment(t *testing.T, mock *mockStripeServer) (*gorm.DB, *billing.Service, []byte, uint64) {
+func seedLink(t *testing.T, db *gorm.DB) uint64 {
 	t.Helper()
-	allModels := append([]any{&links.Link{}, &students.Student{}}, billing.Models()...)
+	var b [32]byte
+	rand.Read(b[:])
+	l := links.Link{
+		Name:      "2026-11-01",
+		Token:     base64.RawURLEncoding.EncodeToString(b[:]),
+		CreatedBy: "staff",
+		ExpiresAt: time.Now().UTC().Add(7 * 24 * time.Hour),
+	}
+	if err := db.Create(&l).Error; err != nil {
+		t.Fatalf("create test parent link: %v", err)
+	}
+	return l.ID
+}
+
+func setupTestEnvironment(t *testing.T, mock *mockStripeServer) (*gorm.DB, *billing.Service, uint64, uint64) {
+	t.Helper()
+	allModels := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)
 	db := testdb.Open(t, allModels...)
 
 	tokenHash := make([]byte, 32)
 	rand.Read(tokenHash)
 
 	now := time.Now().UTC()
-	link := links.Link{
-		TokenHash: tokenHash,
+	link := links.Enrollment{
+		LinkID:      seedLink(t, db),
+		SessionHash: tokenHash,
 		Details: students.Details{
 			Name:         "Maria Santos",
 			Email:        "maria@example.com",
@@ -231,7 +249,6 @@ func setupTestEnvironment(t *testing.T, mock *mockStripeServer) (*gorm.DB, *bill
 			Municipality: "Ponce",
 		},
 		CreatedAt:        now,
-		OpenedAt:         &now,
 		SubmittedAt:      &now,
 		TermsAcceptedAt:  &now,
 		ProgramStartDate: "2026-11-01",
@@ -242,7 +259,7 @@ func setupTestEnvironment(t *testing.T, mock *mockStripeServer) (*gorm.DB, *bill
 	}
 
 	student := students.Student{
-		SourceLinkHash: tokenHash,
+		EnrollmentID: &link.ID,
 		Details:        link.Details,
 		CreatedAt:      now,
 		IsActive:       true,
@@ -254,32 +271,29 @@ func setupTestEnvironment(t *testing.T, mock *mockStripeServer) (*gorm.DB, *bill
 
 	svc := billingtest.New(t, db, mock.mux)
 
-	return db, svc, tokenHash, student.ID
+	return db, svc, link.ID, student.ID
 }
 
 func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 	mock := newMockStripeServer()
 
-	db, svc, tokenHash, _ := setupTestEnvironment(t, mock)
+	db, svc, enrollmentID, _ := setupTestEnvironment(t, mock)
 
 	// 1. Invalid or expired source/consent cannot start payment
 	t.Run("invalid_source_rejected", func(t *testing.T) {
-		shortHash := []byte("short")
-		_, err := svc.StartCheckout(context.Background(), shortHash, "three")
+		_, err := svc.StartCheckout(context.Background(), 0, "three")
 		if err != billing.ErrUnavailable {
-			t.Fatalf("expected ErrUnavailable for short hash, got %v", err)
+			t.Fatalf("expected ErrUnavailable for zero id, got %v", err)
 		}
 
-		randomHash := make([]byte, 32)
-		rand.Read(randomHash)
-		_, err = svc.StartCheckout(context.Background(), randomHash, "three")
+		_, err = svc.StartCheckout(context.Background(), 999999, "three")
 		if err != billing.ErrUnavailable {
-			t.Fatalf("expected ErrUnavailable for unknown hash, got %v", err)
+			t.Fatalf("expected ErrUnavailable for unknown id, got %v", err)
 		}
 	})
 
 	t.Run("unknown_plan_rejected", func(t *testing.T) {
-		_, err := svc.StartCheckout(context.Background(), tokenHash, "invalid_plan")
+		_, err := svc.StartCheckout(context.Background(), enrollmentID, "invalid_plan")
 		if err != payments.ErrUnknownPlan {
 			t.Fatalf("expected ErrUnknownPlan, got %v", err)
 		}
@@ -296,7 +310,7 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
-				results[idx], errs[idx] = svc.StartCheckout(context.Background(), tokenHash, "three")
+				results[idx], errs[idx] = svc.StartCheckout(context.Background(), enrollmentID, "three")
 			}(i)
 		}
 		wg.Wait()
@@ -312,7 +326,7 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 
 		// Verify database state: exactly 1 contract, 1 active attempt, 3 obligations
 		var contractCount int64
-		db.Model(&billing.Contract{}).Where("source_link_hash = ?", tokenHash).Count(&contractCount)
+		db.Model(&billing.Contract{}).Where("enrollment_id = ?", enrollmentID).Count(&contractCount)
 		if contractCount != 1 {
 			t.Fatalf("expected 1 contract, got %d", contractCount)
 		}
@@ -342,7 +356,7 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 
 	// 3. Replay with same plan returns the existing open attempt URL without a second charge attempt
 	t.Run("same_plan_replay", func(t *testing.T) {
-		res, err := svc.StartCheckout(context.Background(), tokenHash, "three")
+		res, err := svc.StartCheckout(context.Background(), enrollmentID, "three")
 		if err != nil {
 			t.Fatalf("unexpected error on replay: %v", err)
 		}
@@ -363,8 +377,9 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 		otherHash := make([]byte, 32)
 		rand.Read(otherHash)
 		now := time.Now().UTC()
-		link := links.Link{
-			TokenHash: otherHash,
+		link := links.Enrollment{
+			LinkID:      seedLink(t, db),
+			SessionHash: otherHash,
 			Details: students.Details{
 				Name:  "Carlos Gomez",
 				Email: "carlos@example.com",
@@ -376,7 +391,7 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 		}
 		db.Create(&link)
 		student := students.Student{
-			SourceLinkHash: otherHash,
+			EnrollmentID: &link.ID,
 			Details:        link.Details,
 			IsActive:       true,
 			Cohort:         "2026-11",
@@ -387,7 +402,7 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 		mock.createSessionError = true
 		mock.mu.Unlock()
 
-		res, err := svc.StartCheckout(context.Background(), otherHash, "full")
+		res, err := svc.StartCheckout(context.Background(), link.ID, "full")
 		if err != nil {
 			t.Fatalf("expected nil error (graceful pending), got %v", err)
 		}
@@ -413,9 +428,9 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 	// 5. Funded contract cannot pay first installment twice
 	t.Run("funded_cannot_repay", func(t *testing.T) {
 		now := time.Now().UTC()
-		db.Model(&billing.Contract{}).Where("source_link_hash = ?", tokenHash).Update("funded_at", &now)
+		db.Model(&billing.Contract{}).Where("enrollment_id = ?", enrollmentID).Update("funded_at", &now)
 		// Same plan -> returns Funded: true without creating attempts
-		res, err := svc.StartCheckout(context.Background(), tokenHash, "three")
+		res, err := svc.StartCheckout(context.Background(), enrollmentID, "three")
 		if err != nil {
 			t.Fatalf("unexpected error for funded contract replay: %v", err)
 		}
@@ -424,7 +439,7 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 		}
 
 		// Different plan -> ErrPlanLocked
-		_, err = svc.StartCheckout(context.Background(), tokenHash, "six")
+		_, err = svc.StartCheckout(context.Background(), enrollmentID, "six")
 		if err != billing.ErrPlanLocked {
 			t.Fatalf("expected ErrPlanLocked, got %v", err)
 		}
@@ -434,10 +449,10 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 func TestPlanChangeExpiresPreviousSession(t *testing.T) {
 	mock := newMockStripeServer()
 
-	db, svc, tokenHash, _ := setupTestEnvironment(t, mock)
+	db, svc, enrollmentID, _ := setupTestEnvironment(t, mock)
 
 	// 1. Initial checkout with "three" plan
-	res1, err := svc.StartCheckout(context.Background(), tokenHash, "three")
+	res1, err := svc.StartCheckout(context.Background(), enrollmentID, "three")
 	if err != nil {
 		t.Fatalf("initial checkout: %v", err)
 	}
@@ -446,7 +461,7 @@ func TestPlanChangeExpiresPreviousSession(t *testing.T) {
 	}
 
 	// 2. Change plan to "six"
-	res2, err := svc.StartCheckout(context.Background(), tokenHash, "six")
+	res2, err := svc.StartCheckout(context.Background(), enrollmentID, "six")
 	if err != nil {
 		t.Fatalf("plan change to six: %v", err)
 	}
@@ -461,7 +476,7 @@ func TestPlanChangeExpiresPreviousSession(t *testing.T) {
 
 	// Verify contract updated to six
 	var contract billing.Contract
-	if err := db.Where("source_link_hash = ?", tokenHash).First(&contract).Error; err != nil {
+	if err := db.Where("enrollment_id = ?", enrollmentID).First(&contract).Error; err != nil {
 		t.Fatalf("find contract: %v", err)
 	}
 	if contract.PlanID != "six" || contract.InstallmentCount != 6 {
@@ -491,7 +506,7 @@ func TestPlanChangeExpiresPreviousSession(t *testing.T) {
 		mock.mu.Unlock()
 
 		// Attempting to change to "full" when Stripe session says it was paid
-		res, err := svc.StartCheckout(context.Background(), tokenHash, "full")
+		res, err := svc.StartCheckout(context.Background(), enrollmentID, "full")
 		if err != nil {
 			t.Fatalf("start checkout: %v", err)
 		}
@@ -500,7 +515,7 @@ func TestPlanChangeExpiresPreviousSession(t *testing.T) {
 		}
 
 		// Verify contract remains on "six"
-		db.Where("source_link_hash = ?", tokenHash).First(&contract)
+		db.Where("enrollment_id = ?", enrollmentID).First(&contract)
 		if contract.PlanID != "six" {
 			t.Fatalf("expected contract to remain 'six', got %s", contract.PlanID)
 		}
@@ -510,19 +525,19 @@ func TestPlanChangeExpiresPreviousSession(t *testing.T) {
 func TestSummaryAndReturnStatus(t *testing.T) {
 	mock := newMockStripeServer()
 
-	db, svc, tokenHash, studentID := setupTestEnvironment(t, mock)
+	db, svc, enrollmentID, studentID := setupTestEnvironment(t, mock)
 
 	// Summary before contract creation: returns nil, nil
-	summary, err := svc.ForLink(context.Background(), tokenHash)
+	summary, err := svc.ForEnrollment(context.Background(), enrollmentID)
 	if err != nil {
-		t.Fatalf("ForLink error: %v", err)
+		t.Fatalf("ForEnrollment error: %v", err)
 	}
 	if summary != nil {
 		t.Fatalf("expected nil summary before checkout, got %+v", summary)
 	}
 
 	// Start checkout
-	res, err := svc.StartCheckout(context.Background(), tokenHash, "three")
+	res, err := svc.StartCheckout(context.Background(), enrollmentID, "three")
 	if err != nil {
 		t.Fatalf("StartCheckout: %v", err)
 	}
@@ -601,10 +616,10 @@ func TestCheckoutCreateResumes(t *testing.T) {
 
 	t.Run("unknown_create_is_replayed", func(t *testing.T) {
 		mock := newMockStripeServer()
-		db, svc, tokenHash, studentID := setupTestEnvironment(t, mock)
+		db, svc, enrollmentID, studentID := setupTestEnvironment(t, mock)
 
 		mock.with(func() { mock.createSessionError = true })
-		res, err := svc.StartCheckout(ctx, tokenHash, "three")
+		res, err := svc.StartCheckout(ctx, enrollmentID, "three")
 		if err != nil || !res.Pending {
 			t.Fatalf("expected pending without error, got %+v, %v", res, err)
 		}
@@ -628,7 +643,7 @@ func TestCheckoutCreateResumes(t *testing.T) {
 			}
 		})
 
-		res, err = svc.StartCheckout(ctx, tokenHash, "three")
+		res, err = svc.StartCheckout(ctx, enrollmentID, "three")
 		if err != nil || res.URL != *a.CheckoutURL {
 			t.Fatalf("expected stored URL %q, got %+v, %v", *a.CheckoutURL, res, err)
 		}
@@ -639,10 +654,10 @@ func TestCheckoutCreateResumes(t *testing.T) {
 
 	t.Run("landed_create_is_adopted", func(t *testing.T) {
 		mock := newMockStripeServer()
-		db, svc, tokenHash, studentID := setupTestEnvironment(t, mock)
+		db, svc, enrollmentID, studentID := setupTestEnvironment(t, mock)
 
 		mock.with(func() { mock.createSessionLoseResponse = true })
-		res, err := svc.StartCheckout(ctx, tokenHash, "three")
+		res, err := svc.StartCheckout(ctx, enrollmentID, "three")
 		if err != nil || !res.Pending {
 			t.Fatalf("expected pending without error, got %+v, %v", res, err)
 		}
@@ -672,10 +687,10 @@ func TestCheckoutCreateResumes(t *testing.T) {
 
 	t.Run("expired_key_fails_and_frees_contract", func(t *testing.T) {
 		mock := newMockStripeServer()
-		db, svc, tokenHash, studentID := setupTestEnvironment(t, mock)
+		db, svc, enrollmentID, studentID := setupTestEnvironment(t, mock)
 
 		mock.with(func() { mock.createSessionError = true })
-		res, err := svc.StartCheckout(ctx, tokenHash, "three")
+		res, err := svc.StartCheckout(ctx, enrollmentID, "three")
 		if err != nil || !res.Pending {
 			t.Fatalf("expected pending without error, got %+v, %v", res, err)
 		}
@@ -701,7 +716,7 @@ func TestCheckoutCreateResumes(t *testing.T) {
 			t.Fatalf("expected no replay past the key window, got %d create requests", got-before)
 		}
 
-		res, err = svc.StartCheckout(ctx, tokenHash, "three")
+		res, err = svc.StartCheckout(ctx, enrollmentID, "three")
 		if err != nil || res.URL == "" {
 			t.Fatalf("expected a fresh checkout URL, got %+v, %v", res, err)
 		}

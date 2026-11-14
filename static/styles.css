@@ -593,11 +593,10 @@ button.management-button-danger:enabled:hover {
   background: currentColor;
 }
 
-.management-link-status:is([data-status="Opened"], [data-status="In progress"]) {
+.management-link-status:is([data-status="Active"], [data-status="In progress"]) {
   --tone: var(--brand);
   --tone-tint: var(--brand-tint);
 }
-
 .management-link-status[data-status="Awaiting payment"],
 .management .status-badge[data-tone="warn"] {
   --tone: var(--warn);
@@ -623,13 +622,131 @@ button.management-button-danger:enabled:hover {
   --tone-tint: var(--danger-tint);
 }
 
-/* A narrow list stacks each row: name and status, then phone, history, URL and actions. */
+/* Inline rename and expandable enrollment tree inside each link row. */
+.management-link-rename {
+  grid-area: 1 / 2;
+  justify-self: start;
+}
+
+.management-link-rename summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.25rem;
+  padding: 0 0.5rem;
+  border-radius: var(--radius);
+  color: var(--brand);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+
+.management-link-rename summary::-webkit-details-marker {
+  display: none;
+}
+
+.management-link-rename summary:hover {
+  background: var(--brand-tint);
+}
+
+.management-link-rename-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.375rem;
+}
+
+.management-link-rename-form input {
+  box-sizing: border-box;
+  min-width: 12rem;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.management-enrollments-tree {
+  grid-column: 1 / -1;
+  margin-top: 0.625rem;
+}
+
+.management-enrollments-tree summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--brand);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.management-enrollments-tree summary::-webkit-details-marker {
+  display: none;
+}
+
+.management-enrollments-tree summary::before {
+  content: "▸";
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.management-enrollments-tree[open] > summary::before {
+  content: "▾";
+}
+.management-enrollments {
+  margin: 0.5rem 0 0;
+  padding: 0 0 0 1rem;
+  border-left: 2px solid var(--line);
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.management-enrollment {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.125rem 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--sunken);
+}
+
+.management-enrollment-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+}
+
+.management-enrollment .management-link-phone,
+.management-enrollment .management-link-status {
+  grid-area: auto;
+}
+
+.management-enrollment .management-link-meta {
+  grid-area: auto;
+  grid-column: 1;
+}
+
+.management-enrollment-cancel {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
+/* A narrow list stacks each row: name and status, then rename, history, URL and actions. */
 @container (max-width: 52rem) {
   .management-link {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .management-link-phone {
+  .management-link-rename {
     grid-area: 2 / 1 / auto / span 2;
   }
 
@@ -648,6 +765,17 @@ button.management-button-danger:enabled:hover {
   .management-link-actions {
     grid-area: 5 / 1 / auto / span 2;
     justify-content: flex-start;
+    margin-top: 0.375rem;
+  }
+
+  .management-enrollment {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .management-enrollment-cancel {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
     margin-top: 0.375rem;
   }
 }

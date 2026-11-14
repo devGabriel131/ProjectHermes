@@ -3,7 +3,6 @@ package billing
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -39,11 +38,11 @@ type checkoutStep struct {
 	attempt  CheckoutAttempt // new "creating" attempt
 }
 
-// StartCheckout creates or resumes the single hosted first-payment attempt for the
-// enrollment behind sourceLinkHash. Before funding it may switch plans, but only after
-// the previous plan's open Session is confirmed expired.
-func (s *Service) StartCheckout(ctx context.Context, sourceLinkHash []byte, planID string) (CheckoutResult, error) {
-	if len(sourceLinkHash) != sha256.Size {
+// StartCheckout creates or resumes the single hosted first-payment attempt for
+// enrollmentID. Before funding it may switch plans, but only after the previous
+// plan's open Session is confirmed expired.
+func (s *Service) StartCheckout(ctx context.Context, enrollmentID uint64, planID string) (CheckoutResult, error) {
+	if !validID(enrollmentID) {
 		return CheckoutResult{}, ErrUnavailable
 	}
 	plan, ok := payments.Find(planID)
@@ -56,7 +55,7 @@ func (s *Service) StartCheckout(ctx context.Context, sourceLinkHash []byte, plan
 	// Each pass claims at most one stale open attempt; a competing start can only
 	// create another by winning a race, and callCtx bounds the retries.
 	for {
-		step, err := s.beginCheckout(callCtx, sourceLinkHash, plan)
+		step, err := s.beginCheckout(callCtx, enrollmentID, plan)
 		if err != nil {
 			return CheckoutResult{}, err
 		}
@@ -80,24 +79,24 @@ func (s *Service) StartCheckout(ctx context.Context, sourceLinkHash []byte, plan
 	}
 }
 
-// beginCheckout runs the locked decision transaction: Link, then Contract, then attempt.
+// beginCheckout runs the locked decision transaction: Enrollment, then Contract, then attempt.
 // It persists the new attempt's identity before any Checkout call is made.
-func (s *Service) beginCheckout(ctx context.Context, hash []byte, plan payments.Plan) (step checkoutStep, err error) {
+func (s *Service) beginCheckout(ctx context.Context, enrollmentID uint64, plan payments.Plan) (step checkoutStep, err error) {
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var link links.Link
+		var link links.Enrollment
 		if err := require(firstRow(tx.Clauses(forUpdate).Scopes(links.Usable), &link,
-			"token_hash = ? AND submitted_at IS NOT NULL AND terms_accepted_at IS NOT NULL", hash)); err != nil {
+			"id = ? AND submitted_at IS NOT NULL AND terms_accepted_at IS NOT NULL", enrollmentID)); err != nil {
 			return err
 		}
 		var contract Contract
-		exists, err := firstRow(tx.Clauses(forUpdate), &contract, "source_link_hash = ?", hash)
+		exists, err := firstRow(tx.Clauses(forUpdate), &contract, "enrollment_id = ?", enrollmentID)
 		if err != nil {
 			return err
 		}
 		if !exists {
 			syncGrace := time.Now().UTC().Add(1 * time.Minute)
 			contract = Contract{
-				SourceLinkHash:   hash,
+				EnrollmentID:     enrollmentID,
 				Reference:        rand.Text(),
 				PlanID:           plan.ID,
 				PlanName:         plan.Name,
@@ -130,10 +129,9 @@ func (s *Service) beginCheckout(ctx context.Context, hash []byte, plan payments.
 				case open && attempt.PlanID == plan.ID && attempt.CheckoutURL != nil:
 					step.done = &CheckoutResult{URL: *attempt.CheckoutURL}
 				case open && attempt.PlanID != plan.ID && attempt.StripeSessionID != nil:
-					if err := tx.Model(&CheckoutAttempt{}).Where("id = ?", attempt.ID).Update("state", "expiring").Error; err != nil {
+					if err := claimExpiringAttempt(tx, &attempt); err != nil {
 						return err
 					}
-					attempt.State = "expiring"
 					step.expire = &attempt
 				default:
 					step.done = &CheckoutResult{Pending: true}

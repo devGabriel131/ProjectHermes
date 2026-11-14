@@ -78,9 +78,23 @@
   {{if .Error}}
   <p class="customer-callout" role="alert">{{template "icon-alert"}}<span>{{.Error}}</span></p>
   <a class="customer-primary" href="{{.Path}}">Volver a intentar</a>
+  {{else if .Completed}}
+  <p class="customer-callout" role="status">{{template "icon-check"}}<span>Tu matrícula ya fue completada.</span></p>
+  <a class="customer-primary" href="{{.Path}}/payments">Ver mi plan de pago</a>
+  {{if .CanStartNew}}
+  <form method="post" action="{{.Path}}/start">
+    <button class="customer-secondary" type="submit">Comenzar nueva matrícula</button>
+  </form>
+  <p class="customer-note"><span>Al comenzar una nueva matrícula, este navegador ya no mostrará el plan de pago de la matrícula anterior.</span></p>
+  {{end}}
+  {{else if .HasEnrollment}}
+  <a class="customer-primary" href="{{.Path}}/forms">Continuar</a>
+  <p class="customer-note">{{template "icon-check"}}<span>Tu información se guarda automáticamente. Si sales, vuelve a este enlace desde este mismo dispositivo y navegador para continuar.</span></p>
   {{else}}
-  <a class="customer-primary" href="{{.Path}}/forms">Comenzar</a>
-  <p class="customer-note">{{template "icon-check"}}<span>Tu información se guarda automáticamente. Si sales, continúa con este mismo enlace.</span></p>
+  <form method="post" action="{{.Path}}/start">
+    <button class="customer-primary" type="submit">Comenzar</button>
+  </form>
+  <p class="customer-note">{{template "icon-check"}}<span>Tu información se guarda automáticamente. Si sales, vuelve a este enlace desde este mismo dispositivo y navegador para continuar.</span></p>
   {{end}}
 </div>
 {{else}}

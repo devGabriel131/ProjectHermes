@@ -17,8 +17,11 @@ import (
 
 	"projecthermes/internal/auth"
 	"projecthermes/internal/billing/billingtest"
+	"projecthermes/internal/links"
 	"projecthermes/internal/live"
 	"projecthermes/internal/logging"
+	"projecthermes/internal/settings"
+	"projecthermes/internal/students"
 	"projecthermes/internal/testdb"
 )
 
@@ -84,6 +87,7 @@ func TestCrossOriginWritesAreRejected(t *testing.T) {
 		sameOrigin int
 	}{
 		{"management write", "/management/links", http.StatusOK},
+		{"customer start", "/customer/" + unknownToken + "/start", http.StatusNotFound},
 		{"customer post", "/customer/" + unknownToken, http.StatusNotFound},
 		{"login", "/management/login", http.StatusUnauthorized},
 	}
@@ -120,7 +124,7 @@ func newTestServer(t *testing.T) (http.Handler, *gorm.DB) {
 		t.Fatal(err)
 	}
 	t.Cleanup(authentication.Close)
-	server, err := newServer("127.0.0.1:0", db, feed, authentication, billingtest.New(t, db, nil), log)
+	server, err := newServer("127.0.0.1:0", db, feed, authentication, billingtest.New(t, db, nil), false, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +148,63 @@ func signInStaff(t *testing.T, db *gorm.DB, handler http.Handler) *http.Cookie {
 		t.Fatalf("sign in: status %d, cookies %v", rec.Code, cookies)
 	}
 	return cookies[0]
+}
+
+func TestLegacySchemaReset(t *testing.T) {
+	t.Parallel()
+	// Open a bare schema with only auth + settings, then create legacy links/students/billing_contracts.
+	db := testdb.Open(t, &auth.User{}, &auth.Session{}, &settings.Settings{})
+	ctx := t.Context()
+	if err := db.WithContext(ctx).Create(&auth.User{Username: "staff", PasswordHash: "h", AuthVersion: "v1"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.WithContext(ctx).Create(&settings.Settings{ID: 1, LinkLifetimeDays: 10, ProgramStartDate: "2026-11-01"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE links (token_hash bytea PRIMARY KEY, name text NOT NULL DEFAULT '')`,
+		`CREATE TABLE students (id bigserial PRIMARY KEY, source_link_hash bytea UNIQUE REFERENCES links(token_hash), name text NOT NULL DEFAULT '', email text NOT NULL DEFAULT '', pin text NOT NULL DEFAULT '', "group" text NOT NULL DEFAULT 'Básico', cohort text NOT NULL)`,
+		`CREATE TABLE billing_contracts (id bigserial PRIMARY KEY, source_link_hash bytea NOT NULL UNIQUE REFERENCES links(token_hash))`,
+		`INSERT INTO links (token_hash, name) VALUES (decode(repeat('aa', 32), 'hex'), 'Legacy')`,
+		`INSERT INTO students (source_link_hash, name, email, pin, "group", cohort) VALUES (decode(repeat('aa', 32), 'hex'), 'Legacy Student', 'legacy@example.com', '123456', 'Regular', '2026-11')`,
+		`INSERT INTO billing_contracts (source_link_hash) VALUES (decode(repeat('aa', 32), 'hex'))`,
+	} {
+		if err := db.WithContext(ctx).Exec(stmt).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := migrate(ctx, db, logging.New(io.Discard)); err != nil {
+		t.Fatalf("legacy migrate failed: %v", err)
+	}
+	// Idempotent on subsequent boots.
+	if err := migrate(ctx, db, logging.New(io.Discard)); err != nil {
+		t.Fatalf("second migrate failed: %v", err)
+	}
+
+	// Staff accounts, settings, and students survived; legacy links reset to new schema.
+	var kept students.Student
+	if err := db.WithContext(ctx).Take(&kept, 1).Error; err != nil || kept.Name != "Legacy Student" ||
+		kept.Email != "legacy@example.com" || kept.Pin != "123456" || kept.Group != "Regular" || kept.EnrollmentID != nil {
+		t.Fatalf("legacy student not preserved: %+v, err=%v", kept, err)
+	}
+	// ProjectHephaestus keys its tables on students.id, so a new student must not reuse a legacy ID.
+	added := students.Student{Details: students.Details{Name: "New"}}
+	if err := db.WithContext(ctx).Create(&added).Error; err != nil || added.ID != 2 {
+		t.Fatalf("new student ID = %d, want 2, err=%v", added.ID, err)
+	}
+	var user auth.User
+	if err := db.WithContext(ctx).Where("username = ?", "staff").Take(&user).Error; err != nil {
+		t.Fatalf("staff account lost during legacy reset: %v", err)
+	}
+	s, err := settings.New(db).Current(ctx)
+	if err != nil || s.LinkLifetimeDays != 10 {
+		t.Fatalf("settings lost during legacy reset: %+v, err=%v", s, err)
+	}
+	var count int64
+	if err := db.WithContext(ctx).Model(&links.Link{}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("expected empty new links table, count=%d, err=%v", count, err)
+	}
 }
 
 // send serves one request in memory, with cookie and form when given.

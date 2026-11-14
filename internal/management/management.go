@@ -24,7 +24,7 @@ import (
 var templates embed.FS
 
 type pageData struct {
-	Links              []links.Entry
+	Links              []links.LinkGroup
 	Notice             string
 	Staff              string
 	Trash              bool
@@ -79,26 +79,25 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 	registerDashboardRoutes(mux, store, roster, biller, staff, page)
 
 	// list renders a tab's registry as a full page, or as just its rows for an
-	// htmx refresh. created shows its one-time URL on its row after an
-	// ordinary create form.
-	list := func(ctx context.Context, w http.ResponseWriter, r *http.Request, status int, data pageData, created *links.Entry) {
-		var err error
-		if data.Links, err = store.List(ctx); err != nil {
+	// htmx refresh.
+	list := func(ctx context.Context, w http.ResponseWriter, r *http.Request, status int, data pageData) {
+		groups, err := store.ListGroups(ctx)
+		if err != nil {
 			logging.RecordError(r, "list", err)
 			http.Error(w, "Could not load links. Please try again.", http.StatusInternalServerError)
 			return
 		}
 		now := time.Now()
-		data.Links = slices.DeleteFunc(data.Links, func(e links.Entry) bool {
-			return e.Trashed() != data.Trash || !data.Trash && e.Archived(now)
-		})
-		if created != nil {
-			for i := range data.Links {
-				if data.Links[i].ID == created.ID {
-					data.Links[i].Token = created.Token
-				}
+		filtered := make([]links.LinkGroup, 0, len(groups))
+		for _, g := range groups {
+			g.Enrollments = slices.DeleteFunc(g.Enrollments, func(e links.EnrollmentEntry) bool {
+				return e.Trashed() != data.Trash || (!data.Trash && e.Archived(now))
+			})
+			if g.Link.Trashed() == data.Trash || len(g.Enrollments) > 0 {
+				filtered = append(filtered, g)
 			}
 		}
+		data.Links = filtered
 		name := "link-rows"
 		if !htmx(r) || status != http.StatusOK {
 			name = "index.html"
@@ -118,9 +117,7 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 		render(w, r, page, status, name, data)
 	}
 
-	// acknowledge answers an htmx action with its notice, plus any created
-	// link's one-time URL, and has the page refresh its list. Only refreshes
-	// write rows, so a slower, older render never overwrites a newer one.
+	// acknowledge answers an htmx action with its notice and has the page refresh its list.
 	acknowledge := func(w http.ResponseWriter, r *http.Request, data pageData) {
 		w.Header().Set("HX-Trigger", "management-changed")
 		render(w, r, page, http.StatusOK, "result", data)
@@ -133,12 +130,12 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 		if r.URL.Query().Has("program-start-date-saved") {
 			data.ProgramStartNotice = "Fecha de comienzo guardada."
 		}
-		list(ctx, w, r, http.StatusOK, data, nil)
+		list(ctx, w, r, http.StatusOK, data)
 	}))
 	mux.Handle("GET /management/trash", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		list(ctx, w, r, http.StatusOK, pageData{Trash: true}, nil)
+		list(ctx, w, r, http.StatusOK, pageData{Trash: true})
 	}))
 	mux.Handle("POST /management/program-start-date", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -159,7 +156,7 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 			http.Redirect(w, r, "/management/?program-start-date-saved", http.StatusSeeOther)
 		case errors.Is(err, settings.ErrProgramStartDate):
 			data.ProgramStartError = "Ingresa una fecha válida en formato AAAA-MM-DD."
-			list(ctx, w, r, http.StatusUnprocessableEntity, data, nil)
+			list(ctx, w, r, http.StatusUnprocessableEntity, data)
 		default:
 			logging.RecordError(r, "save", err)
 			http.Error(w, "Could not save the program start date. Please try again.", http.StatusInternalServerError)
@@ -169,9 +166,8 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		current, err := config.Current(ctx)
-		var created links.Entry
 		if err == nil {
-			created, err = store.Create(ctx, staff(r.Context()), time.Now().Add(current.LinkLifetime()))
+			_, err = store.CreateLink(ctx, staff(r.Context()), "", time.Now().Add(current.LinkLifetime()))
 		}
 		if err != nil {
 			logging.RecordError(r, "create", err)
@@ -181,16 +177,19 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 
 		data := pageData{Notice: "Link created."}
 		if htmx(r) {
-			data.Links = []links.Entry{created}
 			acknowledge(w, r, data)
 			return
 		}
-		list(ctx, w, r, http.StatusOK, data, &created)
+		list(ctx, w, r, http.StatusOK, data)
 	}))
 	mux.Handle("POST /management/links/{id}/cancel", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		canceled, err := store.Cancel(ctx, r.PathValue("id"), staff(r.Context()))
+		var canceled *links.LinkEntry
+		var err error
+		if id, ok := pathID(r, "id"); ok {
+			canceled, err = store.CancelLink(ctx, id, staff(r.Context()))
+		}
 		if err != nil {
 			logging.RecordError(r, "cancel", err)
 			http.Error(w, "Could not cancel this link. Please try again.", http.StatusInternalServerError)
@@ -198,12 +197,12 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 		}
 
 		data := pageData{Notice: "Link canceled."}
-		if canceled != nil && canceled.Status != links.Canceled {
+		if canceled == nil || canceled.Status != links.LinkCanceled {
 			data.Notice = "Link can no longer be canceled."
 		}
 		switch {
 		case !htmx(r):
-			list(ctx, w, r, http.StatusOK, data, nil)
+			list(ctx, w, r, http.StatusOK, data)
 		case canceled == nil:
 			// The ID names no link, so there is nothing to report.
 			w.WriteHeader(http.StatusNoContent)
@@ -211,21 +210,77 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 			acknowledge(w, r, data)
 		}
 	}))
-	mux.Handle("POST /management/links/cancel", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /management/links/{id}/rename", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		if err := store.CancelAll(ctx, staff(r.Context())); err != nil {
-			logging.RecordError(r, "cancel_all", err)
-			http.Error(w, "Could not cancel links. Please try again.", http.StatusInternalServerError)
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
+		parseErr := r.ParseForm()
+		values := r.PostForm["name"]
+		if parseErr != nil || len(values) != 1 {
+			if htmx(r) {
+				http.Error(w, "Could not read the link name.", http.StatusBadRequest)
+				return
+			}
+			list(ctx, w, r, http.StatusBadRequest, pageData{Notice: "Could not read the link name."})
 			return
 		}
-
-		data := pageData{Notice: "All unfinished links canceled."}
-		if htmx(r) {
-			acknowledge(w, r, data)
-			return
+		var renamed *links.LinkEntry
+		var err error
+		if id, ok := pathID(r, "id"); ok {
+			renamed, err = store.RenameLink(ctx, id, values[0], staff(r.Context()))
 		}
-		list(ctx, w, r, http.StatusOK, data, nil)
+		switch {
+		case errors.Is(err, links.ErrInvalidLinkName):
+			if htmx(r) {
+				http.Error(w, "Enter a link name (up to 100 characters).", http.StatusUnprocessableEntity)
+				return
+			}
+			list(ctx, w, r, http.StatusUnprocessableEntity, pageData{Notice: "Enter a link name (up to 100 characters)."})
+		case err != nil:
+			logging.RecordError(r, "rename", err)
+			http.Error(w, "Could not rename this link. Please try again.", http.StatusInternalServerError)
+		case !htmx(r):
+			notice := "Link renamed."
+			if renamed == nil {
+				notice = "Link can no longer be renamed."
+			}
+			list(ctx, w, r, http.StatusOK, pageData{Notice: notice})
+		case renamed == nil:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			acknowledge(w, r, pageData{Notice: "Link renamed."})
+		}
+	}))
+	mux.Handle("POST /management/enrollments/{id}/cancel", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var (
+			canceled *links.EnrollmentEntry
+			changed  bool
+			err      error
+		)
+		if id, ok := pathID(r, "id"); ok {
+			canceled, changed, err = biller.CancelEnrollment(r.Context(), id, staff(r.Context()))
+		}
+		switch {
+		case errors.Is(err, billing.ErrCancelBlocked):
+			if htmx(r) {
+				http.Error(w, "Cannot cancel while a payment is in progress.", http.StatusConflict)
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer cancel()
+			list(ctx, w, r, http.StatusConflict, pageData{Notice: "Cannot cancel while a payment is in progress."})
+		case err != nil:
+			logging.RecordError(r, "cancel", err)
+			http.Error(w, "Could not cancel this enrollment. Please try again.", http.StatusInternalServerError)
+		case !htmx(r):
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer cancel()
+			list(ctx, w, r, http.StatusOK, cancelEnrollmentNotice(canceled, changed))
+		case canceled == nil:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			acknowledge(w, r, cancelEnrollmentNotice(canceled, changed))
+		}
 	}))
 
 	// showSettings renders the settings page with the saved values.
@@ -304,3 +359,13 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 	}))
 	return nil
 }
+func cancelEnrollmentNotice(canceled *links.EnrollmentEntry, changed bool) pageData {
+	if canceled == nil || !changed {
+		return pageData{Notice: "Enrollment can no longer be canceled."}
+	}
+	if canceled.Status == links.Expired {
+		return pageData{Notice: "Expired PIN cleared."}
+	}
+	return pageData{Notice: "Enrollment canceled."}
+}
+

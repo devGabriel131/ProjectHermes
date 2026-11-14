@@ -78,6 +78,7 @@ The fake is whatever handler a test supplies: billing worker and checkout tests 
 | `TestRoutesAreMounted` | `/` redirects to `/management/`; `/static/styles.css` and `/favicon.ico` are public; `/static/` answers 404; `/management/events` requires sign-in; `POST /webhooks/stripe` bypasses sign-in and rejects unsigned events with 400; every response carries the site CSP, `nosniff` and HSTS |
 | `TestPublicCustomerIgnoresStaffSessions` | with the `sessions` table made unavailable, `HEAD /customer/{token}` for an unknown token still answers 404 with the customer headers, an empty body, no `Vary: Cookie` and no cookie, while `/management/` answers 500 |
 | `TestCrossOriginWritesAreRejected` | management, customer and login `POST`s with cross-site `Sec-Fetch-Site` or foreign `Origin` get 403; without either header they reach their handlers |
+| `TestLegacySchemaReset` | legacy `links.token_hash` schema without `enrollments` resets via `migrate` while preserving `users` and `settings`, and subsequent runs are idempotent |
 
 Helpers: `newTestServer` builds the handler, `signInStaff` stores an account as the CLI does and signs in through the real form, `send` serves one request in memory. The route table itself is documented in [Architecture](architecture.md).
 
@@ -100,7 +101,7 @@ Tests do not prove randomness statistically. No test proves these browser checks
 
 ## Load tests
 
-`loadtest/` holds three k6 scripts (`journey.js`, `safety.js`, `checkout.js`) and shared helpers; usage, token files and slices are in [loadtest/README.md](../loadtest/README.md). Two facts matter here:
+`loadtest/` holds four k6 scripts (`journey.js`, `capacity.js`, `safety.js`, `checkout.js`) and shared helpers; usage, token files and slices are in [loadtest/README.md](../loadtest/README.md). Two facts matter here:
 
 - "No test calls Stripe" holds for Go tests only. `checkout.js` creates **real Stripe sandbox Checkout Sessions** through the app it targets.
 - `BASE_URL` is required by `loadtest/lib.js`; a run without it fails instead of picking a host ([Railway](operations/railway.md)).
@@ -111,12 +112,11 @@ Tests do not prove randomness statistically. No test proves these browser checks
 |---|---|---|
 | Student list filters | the handler's parsing of `?status`, `?cohort` and `?group` (valid values kept, unknown values ignored) | the `students.Filter` query itself is tested in `internal/students` |
 | `HX-Replace-Url` | the header `GET /management/students` sets so the address bar keeps the active filters | none |
-| `GET /management/dashboard` | the handler and its page: no test requests it | `billing.Service.Overview`, which computes the figures, is tested in `internal/billing` |
 
 ## Source
 
 - `main_test.go`: `TestServeLifecycle`
-- `main_wiring_integration_test.go`: `TestRoutesAreMounted`, `TestPublicCustomerIgnoresStaffSessions`, `TestCrossOriginWritesAreRejected`, `newTestServer`, `signInStaff`, `send`
+- `main_wiring_integration_test.go`: `TestRoutesAreMounted`, `TestPublicCustomerIgnoresStaffSessions`, `TestCrossOriginWritesAreRejected`, `TestLegacySchemaReset`, `newTestServer`, `signInStaff`, `send`
 - `internal/testdb/testdb.go`: `Open`, `AwaitBlocked`, `TEST_DATABASE_URL`
 - `internal/billing/billingtest/billingtest.go`: `Config`, `Catalog`, `Client`, `New`
 - `internal/management/students.go`: `HX-Replace-Url`

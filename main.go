@@ -99,8 +99,49 @@ func models() []any {
 		&auth.Session{},
 		&settings.Settings{},
 		&links.Link{},
+		&links.Enrollment{},
 		&students.Student{},
 	}, billing.Models()...)
+}
+
+// migrate resets the pre-reusable-links schema (links keyed by token_hash, no enrollments
+// table) before AutoMigrate builds the new tables. Link and billing rows are dropped.
+// Students keep their rows and IDs, which ProjectHephaestus tables reference, and lose
+// only their link key. Remove once every environment has migrated.
+func migrate(ctx context.Context, db *gorm.DB, log *slog.Logger) error {
+	var legacy bool
+	err := db.WithContext(ctx).Raw(`
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = 'links' AND column_name = 'token_hash'
+		) AND NOT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = current_schema() AND table_name = 'enrollments'
+		)`).Scan(&legacy).Error
+	if err != nil {
+		return err
+	}
+	if legacy {
+		log.Warn("legacy_schema_reset")
+		err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Exec(`
+				DROP TABLE IF EXISTS
+					billing_suspensions,
+					billing_payments,
+					billing_checkout_attempts,
+					billing_obligations,
+					billing_contracts,
+					links
+				CASCADE`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`ALTER TABLE IF EXISTS students DROP COLUMN IF EXISTS source_link_hash`).Error
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return db.WithContext(ctx).AutoMigrate(models()...)
 }
 
 func run(log *slog.Logger, args []string) error {
@@ -138,7 +179,7 @@ func run(log *slog.Logger, args []string) error {
 	if err := sqlDB.PingContext(ctx); err != nil {
 		return startupError{"database_connect", err}
 	}
-	err = db.WithContext(logging.WithOperation(ctx, "startup_migrate")).AutoMigrate(models()...)
+	err = migrate(logging.WithOperation(ctx, "startup_migrate"), db, log)
 	slow.Flush()
 	if err != nil {
 		return startupError{"database_migrate", err}
@@ -188,7 +229,7 @@ func run(log *slog.Logger, args []string) error {
 	if port := os.Getenv("PORT"); port != "" {
 		addr = ":" + port
 	}
-	server, err := newServer(addr, db, feed, authentication, biller, log)
+	server, err := newServer(addr, db, feed, authentication, biller, secureCookies, log)
 	if err != nil {
 		return err
 	}
@@ -228,7 +269,7 @@ func secureHeaders(next http.Handler) http.Handler {
 	})
 }
 
-func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.Manager, biller *billing.Service, log *slog.Logger) (*http.Server, error) {
+func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.Manager, biller *billing.Service, secureCookies bool, log *slog.Logger) (*http.Server, error) {
 	store := links.New(db, feed.Changed)
 	roster := students.New(db, feed.Changed)
 	config := settings.New(db)
@@ -249,7 +290,7 @@ func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.M
 		return nil, startupError{"management_routes", err}
 	}
 	mux.Handle("/management/", authentication.Require(logging.Routes(managementMux)))
-	if err := customer.RegisterRoutes(mux, store, roster, config, biller); err != nil {
+	if err := customer.RegisterRoutes(mux, store, roster, config, biller, secureCookies); err != nil {
 		return nil, startupError{"customer_routes", err}
 	}
 	mux.Handle("POST /webhooks/stripe", http.HandlerFunc(biller.Webhook))

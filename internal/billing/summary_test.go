@@ -11,14 +11,14 @@ import (
 	"projecthermes/internal/billing"
 )
 
-func TestSummaryForLinkAndStudent(t *testing.T) {
+func TestSummaryForEnrollmentAndStudent(t *testing.T) {
 	mock := newMockStripeServer()
-	db, svc, fundedHash, fundedID := setupTestEnvironment(t, mock)
+	db, svc, fundedEnrollmentID, fundedID := setupTestEnvironment(t, mock)
 	ctx := context.Background()
 
 	fundedAt := time.Date(2026, 10, 1, 15, 4, 5, 0, time.UTC)
 	contract := billing.Contract{
-		SourceLinkHash:   fundedHash,
+		EnrollmentID:     fundedEnrollmentID,
 		FundedAt:         &fundedAt,
 		Reference:        rand.Text(),
 		PlanID:           "three",
@@ -30,14 +30,13 @@ func TestSummaryForLinkAndStudent(t *testing.T) {
 		t.Fatalf("create contract: %v", err)
 	}
 
-	sumLink, err := svc.ForLink(ctx, fundedHash)
+	sumLink, err := svc.ForEnrollment(ctx, fundedEnrollmentID)
 	if err != nil || sumLink == nil {
-		t.Fatalf("ForLink = %v, %v; want non-nil summary", sumLink, err)
+		t.Fatalf("ForEnrollment = %v, %v; want non-nil summary", sumLink, err)
 	}
 	if !sumLink.Funded || !sumLink.IsActive {
-		t.Fatalf("ForLink: Funded=%v, IsActive=%v; want true, true", sumLink.Funded, sumLink.IsActive)
+		t.Fatalf("ForEnrollment: Funded=%v, IsActive=%v; want true, true", sumLink.Funded, sumLink.IsActive)
 	}
-
 	sumStudent, err := svc.ForStudent(ctx, fundedID)
 	if err != nil || sumStudent == nil {
 		t.Fatalf("ForStudent = %v, %v; want non-nil summary", sumStudent, err)

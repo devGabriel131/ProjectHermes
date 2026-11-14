@@ -2,25 +2,24 @@ package billing
 
 import (
 	"context"
-	"crypto/sha256"
 	"slices"
 	"time"
 
 	"projecthermes/internal/students"
 )
 
-// ForLink returns the summary for the enrollment behind sourceLinkHash, or nil before checkout creates its contract.
-func (s *Service) ForLink(ctx context.Context, sourceLinkHash []byte) (*Summary, error) {
-	if len(sourceLinkHash) != sha256.Size {
+// ForEnrollment returns the summary for enrollmentID, or nil before checkout creates its contract.
+func (s *Service) ForEnrollment(ctx context.Context, enrollmentID uint64) (*Summary, error) {
+	if !validID(enrollmentID) {
 		return nil, ErrUnavailable
 	}
 	var contract Contract
-	found, err := firstRow(s.db.WithContext(ctx), &contract, "source_link_hash = ?", sourceLinkHash)
+	found, err := firstRow(s.db.WithContext(ctx), &contract, "enrollment_id = ?", enrollmentID)
 	if err != nil || !found {
 		return nil, err
 	}
 	var student students.Student
-	hasStudent, err := firstRow(s.db.WithContext(ctx), &student, "source_link_hash = ?", sourceLinkHash)
+	hasStudent, err := firstRow(s.db.WithContext(ctx), &student, "enrollment_id = ?", enrollmentID)
 	if err != nil {
 		return nil, err
 	}
@@ -29,15 +28,18 @@ func (s *Service) ForLink(ctx context.Context, sourceLinkHash []byte) (*Summary,
 
 // ForStudent returns the financial summary, or nil when the student or contract does not exist.
 func (s *Service) ForStudent(ctx context.Context, studentID uint64) (*Summary, error) {
-	if studentID == 0 || studentID > 1<<63-1 {
+	if !validID(studentID) {
 		return nil, nil
 	}
 	var student students.Student
 	if found, err := firstRow(s.db.WithContext(ctx), &student, "id = ?", studentID); err != nil || !found {
 		return nil, err
 	}
+	if student.EnrollmentID == nil {
+		return nil, nil
+	}
 	var contract Contract
-	if found, err := firstRow(s.db.WithContext(ctx), &contract, "source_link_hash = ?", student.SourceLinkHash); err != nil || !found {
+	if found, err := firstRow(s.db.WithContext(ctx), &contract, "enrollment_id = ?", *student.EnrollmentID); err != nil || !found {
 		return nil, err
 	}
 	return s.summarize(ctx, contract, student.IsActive)

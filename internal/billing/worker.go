@@ -337,8 +337,8 @@ func (s *Service) leased(ctx context.Context, l lease, fn func(tx *gorm.DB, c *C
 	ctx, cancel := persistCtx(ctx)
 	defer cancel()
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Link before Contract, the order checkout and contact edits take; funding writes the Link.
-		if err := tx.Exec("SELECT 1 FROM links WHERE token_hash = (SELECT source_link_hash FROM billing_contracts WHERE id = ?) FOR UPDATE", l.id).Error; err != nil {
+		// Enrollment before Contract, the order checkout and contact edits take; funding writes the Enrollment.
+		if err := tx.Exec("SELECT 1 FROM enrollments WHERE id = (SELECT enrollment_id FROM billing_contracts WHERE id = ?) FOR UPDATE", l.id).Error; err != nil {
 			return err
 		}
 		var c Contract
@@ -357,7 +357,7 @@ func (s *Service) leased(ctx context.Context, l lease, fn func(tx *gorm.DB, c *C
 func (s *Service) leasedStudent(ctx context.Context, l lease, fn func(tx *gorm.DB, c *Contract, student *students.Student) error) error {
 	return s.leased(ctx, l, func(tx *gorm.DB, c *Contract) error {
 		var student students.Student
-		if err := require(firstRow(tx.Clauses(forUpdate), &student, "source_link_hash = ?", c.SourceLinkHash)); err != nil {
+		if err := require(firstRow(tx.Clauses(forUpdate), &student, "enrollment_id = ?", c.EnrollmentID)); err != nil {
 			return err
 		}
 		return fn(tx, c, &student)
@@ -639,7 +639,7 @@ func (s *Service) fund(ctx context.Context, l lease, c Contract, a CheckoutAttem
 				return err
 			}
 		}
-		if err := links.Enroll(tx, cur.SourceLinkHash, fundedAt); err != nil {
+		if err := links.Enroll(tx, cur.EnrollmentID, fundedAt); err != nil {
 			return err
 		}
 		funded = true
@@ -1410,15 +1410,15 @@ func (s *Service) reconcileContract(ctx context.Context, l lease) error {
 	return s.evaluateReactivation(ctx, l)
 }
 
-// contactOf returns the details a contract bills against: the Link's until payment is confirmed, the Student's after.
+// contactOf returns the details a contract bills against: the Enrollment's until payment is confirmed, the Student's after.
 func contactOf(db *gorm.DB, c Contract) (students.Details, error) {
 	if c.FundedAt == nil {
-		var link links.Link
-		err := require(firstRow(db, &link, "token_hash = ?", c.SourceLinkHash))
+		var link links.Enrollment
+		err := require(firstRow(db, &link, "id = ?", c.EnrollmentID))
 		return link.Details, err
 	}
 	var student students.Student
-	err := require(firstRow(db, &student, "source_link_hash = ?", c.SourceLinkHash))
+	err := require(firstRow(db, &student, "enrollment_id = ?", c.EnrollmentID))
 	return student.Details, err
 }
 

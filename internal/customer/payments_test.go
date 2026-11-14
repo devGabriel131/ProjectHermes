@@ -44,8 +44,18 @@ func TestPaymentReturnRoute(t *testing.T) {
 	tokenHash := make([]byte, 32)
 	rand.Read(tokenHash)
 	now := time.Now().UTC()
-	link := links.Link{
-		TokenHash: tokenHash,
+	parent := links.Link{
+		Name:      "2026-11-01",
+		Token:     strings.Repeat("R", 43),
+		CreatedBy: "staff",
+		ExpiresAt: now.Add(7 * 24 * time.Hour),
+	}
+	if err := db.Create(&parent).Error; err != nil {
+		t.Fatalf("create parent link: %v", err)
+	}
+	link := links.Enrollment{
+		LinkID:      parent.ID,
+		SessionHash: tokenHash,
 		Details: students.Details{
 			Name:  "Return Student",
 			Email: "return@example.com",
@@ -60,7 +70,7 @@ func TestPaymentReturnRoute(t *testing.T) {
 		t.Fatalf("create link: %v", err)
 	}
 	student := students.Student{
-		SourceLinkHash: tokenHash,
+		EnrollmentID:   &link.ID,
 		Details:        link.Details,
 		IsActive:       true,
 		Cohort:         "2026-11",
@@ -69,7 +79,7 @@ func TestPaymentReturnRoute(t *testing.T) {
 		t.Fatalf("create student: %v", err)
 	}
 	contract := billing.Contract{
-		SourceLinkHash:   tokenHash,
+		EnrollmentID:     link.ID,
 		Reference:        rand.Text(),
 		PlanID:           "full",
 		PlanName:         "Pago Único",

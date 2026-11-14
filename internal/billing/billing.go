@@ -42,6 +42,7 @@ var (
 	ErrNeedsReview     = errors.New("financial state needs review")
 	ErrInvoiceNotReady = errors.New("invoice is not ready")
 	ErrContactLocked   = errors.New("billing: contact is locked")
+	ErrCancelBlocked   = errors.New("billing: payment in progress")
 )
 
 var forUpdate = clause.Locking{Strength: clause.LockingStrengthUpdate}
@@ -55,6 +56,11 @@ func persistCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 func firstRow(db *gorm.DB, dest any, query string, args ...any) (found bool, err error) {
 	result := db.Where(query, args...).Limit(1).Find(dest)
 	return result.RowsAffected > 0, result.Error
+}
+
+// validID reports whether id fits a positive PostgreSQL BIGINT primary key.
+func validID(id uint64) bool {
+	return id > 0 && id <= 1<<63-1
 }
 
 // require turns a missing row into ErrUnavailable.
@@ -159,10 +165,10 @@ func (s *Service) wakeWorker() {
 // contractFor finds the contract behind a student; unknown or out-of-range IDs are unavailable.
 func (s *Service) contractFor(ctx context.Context, studentID uint64) (Contract, error) {
 	var c Contract
-	if studentID == 0 || studentID > 1<<63-1 {
+	if !validID(studentID) {
 		return c, ErrUnavailable
 	}
-	err := require(firstRow(s.db.WithContext(ctx), &c, "source_link_hash = (SELECT source_link_hash FROM students WHERE id = ?)", studentID))
+	err := require(firstRow(s.db.WithContext(ctx), &c, "enrollment_id = (SELECT enrollment_id FROM students WHERE id = ?)", studentID))
 	return c, err
 }
 
@@ -185,7 +191,7 @@ func (s *Service) InvoiceURL(ctx context.Context, studentID, obligationID uint64
 	if err != nil {
 		return "", err
 	}
-	if obligationID == 0 || obligationID > 1<<63-1 {
+	if !validID(obligationID) {
 		return "", ErrUnavailable
 	}
 	var o Obligation

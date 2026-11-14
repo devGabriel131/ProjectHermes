@@ -4,7 +4,6 @@ package students_test
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"reflect"
@@ -42,25 +41,25 @@ func TestListRetainsExpiredSourcesAndOrdersNewestFirst(t *testing.T) {
 			Update("created_at", fixture.at).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := db.WithContext(ctx).Model(&links.Link{}).Where("token_hash = ?", fixture.student.SourceLinkHash).
+		if err := db.WithContext(ctx).Model(&links.Enrollment{}).Where("id = ?", fixture.student.EnrollmentID).
 			Updates(map[string]any{"submitted_at": fixture.at, "expires_at": fixture.at.Add(168 * time.Hour)}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
-	var sourceBefore links.Link
-	if err := db.WithContext(ctx).Where("token_hash = ?", oldest.SourceLinkHash).Take(&sourceBefore).Error; err != nil {
+	var sourceBefore links.Enrollment
+	if err := db.WithContext(ctx).Where("id = ?", oldest.EnrollmentID).Take(&sourceBefore).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.WithContext(ctx).Model(&students.Student{}).Where("id = ?", oldest.ID).Update("is_active", false).Error; err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if err := db.WithContext(ctx).AutoMigrate(&links.Link{}, &students.Student{}); err != nil {
+		if err := db.WithContext(ctx).AutoMigrate(&links.Link{}, &links.Enrollment{}, &students.Student{}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	var sourceAfter links.Link
-	if err := db.WithContext(ctx).Where("token_hash = ?", oldest.SourceLinkHash).Take(&sourceAfter).Error; err != nil {
+	var sourceAfter links.Enrollment
+	if err := db.WithContext(ctx).Where("id = ?", oldest.EnrollmentID).Take(&sourceAfter).Error; err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(sourceAfter, sourceBefore) {
@@ -115,13 +114,13 @@ func TestListRetainsExpiredSourcesAndOrdersNewestFirst(t *testing.T) {
 			}
 		}
 	}
-	entries, err := sources.List(ctx)
-	if err != nil || len(entries) != 3 {
-		t.Fatalf("source history = %+v, %v", entries, err)
+	groups, err := sources.ListGroups(ctx)
+	if err != nil || len(groups) != 3 {
+		t.Fatalf("source history = %+v, %v", groups, err)
 	}
-	for _, entry := range entries {
-		if entry.Status != links.Finished || entry.ExpiresAt.After(time.Now()) {
-			t.Fatalf("source %+v is not an expired completion", entry)
+	for _, g := range groups {
+		if len(g.Enrollments) != 1 || g.Enrollments[0].Status != links.Finished || g.Enrollments[0].ExpiresAt.After(time.Now()) {
+			t.Fatalf("source %+v is not an expired completion", g)
 		}
 	}
 	for _, id := range []uint64{0, lastTie.ID + 1, 1 << 63, ^uint64(0)} {
@@ -135,8 +134,8 @@ func TestUpdateFieldChangesOnlySelectedCanonicalColumn(t *testing.T) {
 	db, roster, sources, ctx := studentStores(t)
 	_, original := enroll(t, db, sources, ctx, "Original submission")
 	_, other := enroll(t, db, sources, ctx, "Other student")
-	var sourceBefore links.Link
-	if err := db.WithContext(ctx).Where("token_hash = ?", original.SourceLinkHash).Take(&sourceBefore).Error; err != nil {
+	var sourceBefore links.Enrollment
+	if err := db.WithContext(ctx).Where("id = ?", original.EnrollmentID).Take(&sourceBefore).Error; err != nil {
 		t.Fatal(err)
 	}
 	writes := 0
@@ -185,8 +184,8 @@ func TestUpdateFieldChangesOnlySelectedCanonicalColumn(t *testing.T) {
 			if err != nil || unrelated == nil || !reflect.DeepEqual(*unrelated, other) {
 				t.Fatalf("other student changed: %+v, %v", unrelated, err)
 			}
-			var sourceAfter links.Link
-			if err := db.WithContext(ctx).Where("token_hash = ?", original.SourceLinkHash).Take(&sourceAfter).Error; err != nil {
+			var sourceAfter links.Enrollment
+			if err := db.WithContext(ctx).Where("id = ?", original.EnrollmentID).Take(&sourceAfter).Error; err != nil {
 				t.Fatal(err)
 			}
 			if !reflect.DeepEqual(sourceBefore, sourceAfter) {
@@ -219,13 +218,13 @@ func TestUpdateFieldRejectsUnknownFieldsAndInvalidDetailsWithoutWrites(t *testin
 	db, roster, sources, ctx := studentStores(t)
 	_, original := enroll(t, db, sources, ctx, "Unchanged student")
 	_, other := enroll(t, db, sources, ctx, "Other student")
-	var sourceBefore links.Link
-	if err := db.WithContext(ctx).Where("token_hash = ?", original.SourceLinkHash).Take(&sourceBefore).Error; err != nil {
+	var sourceBefore links.Enrollment
+	if err := db.WithContext(ctx).Where("id = ?", original.EnrollmentID).Take(&sourceBefore).Error; err != nil {
 		t.Fatal(err)
 	}
 	writes := 0
 	roster = students.New(db, func() { writes++ })
-	for _, key := range []string{"", "Name", "id", "email_confirm", "source_link_hash", "created_at", "is_active", "cohort", "name = 'changed'; DROP TABLE students; --"} {
+	for _, key := range []string{"", "Name", "id", "email_confirm", "enrollment_id", "created_at", "is_active", "cohort", "name = 'changed'; DROP TABLE students; --"} {
 		t.Run("unknown field "+key, func(t *testing.T) {
 			if got, err := roster.UpdateField(ctx, original.ID, key, "Changed student"); got != nil || !errors.Is(err, students.ErrUnknownField) {
 				t.Fatalf("UpdateField(%q) = %+v, %v, want ErrUnknownField", key, got, err)
@@ -267,8 +266,8 @@ func TestUpdateFieldRejectsUnknownFieldsAndInvalidDetailsWithoutWrites(t *testin
 			t.Fatalf("rejected edits changed student: %+v, %v, want %+v", persisted, err, want)
 		}
 	}
-	var sourceAfter links.Link
-	if err := db.WithContext(ctx).Where("token_hash = ?", original.SourceLinkHash).Take(&sourceAfter).Error; err != nil {
+	var sourceAfter links.Enrollment
+	if err := db.WithContext(ctx).Where("id = ?", original.EnrollmentID).Take(&sourceAfter).Error; err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(sourceBefore, sourceAfter) {
@@ -383,7 +382,7 @@ func studentXmin(t *testing.T, db *gorm.DB, ctx context.Context, id uint64) stri
 
 func studentStores(t *testing.T) (*gorm.DB, *students.Store, *links.Store, context.Context) {
 	t.Helper()
-	db := testdb.Open(t, &links.Link{}, &students.Student{}, &settings.Settings{})
+	db := testdb.Open(t, &links.Link{}, &links.Enrollment{}, &students.Student{}, &settings.Settings{})
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	t.Cleanup(cancel)
 	return db, students.New(db, nil), links.New(db, nil), ctx
@@ -392,37 +391,37 @@ func studentStores(t *testing.T) (*gorm.DB, *students.Store, *links.Store, conte
 // pinSeq gives each enrolled test student its own PIN: the roster refuses duplicates.
 var pinSeq atomic.Int32
 
-func enroll(t *testing.T, db *gorm.DB, sources *links.Store, ctx context.Context, name string) (links.Entry, students.Student) {
+func enroll(t *testing.T, db *gorm.DB, sources *links.Store, ctx context.Context, name string) (links.LinkEntry, students.Student) {
 	t.Helper()
-	entry, err := sources.Create(ctx, "student-test", time.Now().Add(time.Hour))
+	entry, err := sources.CreateLink(ctx, "student-test", "", time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
+	}
+	started, cookieToken, err := sources.StartEnrollment(ctx, entry.Token, "")
+	if err != nil || started == nil {
+		t.Fatalf("start enrollment: %+v, %v", started, err)
 	}
 	details := students.Details{
 		Name: name, Email: "Original.Student@example.com", Phone: "+17872345678", Municipality: "San Juan", DateOfBirth: "2005-06-15", Gender: "Female",
 	}
-	if saved, err := sources.Submit(ctx, entry.Token, details, fmt.Sprintf("%06d", 100000+pinSeq.Add(1))); err != nil || saved != links.Saved {
+	if saved, err := sources.Submit(ctx, entry.Token, cookieToken, details, fmt.Sprintf("%06d", 100000+pinSeq.Add(1))); err != nil || saved != links.Saved {
 		t.Fatalf("enrollment saved=%v, err=%v", saved, err)
-	}
-	digest, err := hex.DecodeString(entry.ID)
-	if err != nil {
-		t.Fatal(err)
 	}
 	// Checkout requires the accepted agreement whose start date Enroll turns into the cohort.
 	const programStart = "2026-11-10"
 	if err := settings.New(db).SetProgramStartDate(ctx, programStart, "student-test"); err != nil {
 		t.Fatal(err)
 	}
-	if accepted, err := sources.AcceptTerms(ctx, entry.Token, programStart); err != nil || accepted == nil {
+	if accepted, err := sources.AcceptTerms(ctx, entry.Token, cookieToken, programStart); err != nil || accepted == nil {
 		t.Fatalf("accept agreement: link=%+v, err=%v", accepted, err)
 	}
 	if err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return links.Enroll(tx, digest, time.Now().UTC())
+		return links.Enroll(tx, started.ID, time.Now().UTC())
 	}); err != nil {
 		t.Fatalf("enroll: %v", err)
 	}
 	var student students.Student
-	if err := db.WithContext(ctx).Where("source_link_hash = ?", digest).Take(&student).Error; err != nil {
+	if err := db.WithContext(ctx).Where("enrollment_id = ?", started.ID).Take(&student).Error; err != nil {
 		t.Fatal(err)
 	}
 	return entry, student
@@ -432,15 +431,19 @@ func TestPinHeldBySubmittedLinkBlocksUpdateField(t *testing.T) {
 	db, roster, sources, ctx := studentStores(t)
 
 	// 1. Submit link with a PIN (no Student exists yet)
-	entry, err := sources.Create(ctx, "student-test", time.Now().Add(time.Hour))
+	entry, err := sources.CreateLink(ctx, "student-test", "", time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
+	}
+	started, cookieToken, err := sources.StartEnrollment(ctx, entry.Token, "")
+	if err != nil || started == nil {
+		t.Fatalf("start enrollment: %+v, %v", started, err)
 	}
 	const linkPin = "654321"
 	details := students.Details{
 		Name: "Pending Customer", Email: "pending@example.com", Phone: "+17875550000", Municipality: "Ponce",
 	}
-	if saved, err := sources.Submit(ctx, entry.Token, details, linkPin); err != nil || saved != links.Saved {
+	if saved, err := sources.Submit(ctx, entry.Token, cookieToken, details, linkPin); err != nil || saved != links.Saved {
 		t.Fatalf("submit: saved=%v, err=%v", saved, err)
 	}
 
@@ -489,15 +492,19 @@ func TestAddInsertsValidStudentsAndRejectsTheRest(t *testing.T) {
 	_, enrolledStudent := enroll(t, db, sources, ctx, "Enrolled Student")
 
 	// Submit a link holding PIN 654321
-	linkEntry, err := sources.Create(ctx, "student-test", time.Now().Add(time.Hour))
+	linkEntry, err := sources.CreateLink(ctx, "student-test", "", time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
+	}
+	started, cookieToken, err := sources.StartEnrollment(ctx, linkEntry.Token, "")
+	if err != nil || started == nil {
+		t.Fatalf("start enrollment: %+v, %v", started, err)
 	}
 	const linkPin = "654321"
 	linkDetails := students.Details{
 		Name: "Pending Customer", Email: "pending@example.com", Phone: "+17875550000", Municipality: "Ponce",
 	}
-	if saved, err := sources.Submit(ctx, linkEntry.Token, linkDetails, linkPin); err != nil || saved != links.Saved {
+	if saved, err := sources.Submit(ctx, linkEntry.Token, cookieToken, linkDetails, linkPin); err != nil || saved != links.Saved {
 		t.Fatalf("submit: saved=%v, err=%v", saved, err)
 	}
 
@@ -553,8 +560,8 @@ func TestAddInsertsValidStudentsAndRejectsTheRest(t *testing.T) {
 		if err != nil || got == nil {
 			t.Fatalf("Get(%d) = %+v, %v", a.ID, got, err)
 		}
-		if got.SourceLinkHash != nil {
-			t.Fatalf("SourceLinkHash = %v, want nil", got.SourceLinkHash)
+		if got.EnrollmentID != nil {
+			t.Fatalf("EnrollmentID = %v, want nil", got.EnrollmentID)
 		}
 		if got.Cohort != "" {
 			t.Fatalf("Cohort = %q, want ''", got.Cohort)

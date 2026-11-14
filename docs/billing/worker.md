@@ -55,10 +55,10 @@ Wake sources: a stored webhook (`Webhook`), a customer contact edit (`UpdateCont
 | Claim | One transaction selects due rows (`processed_at IS NULL`, retry time due, lease expired) with `FOR UPDATE SKIP LOCKED`, then stamps one random `lease_token` on the batch | Plain `SELECT` of due rows (`next_sync_at` null or due, lease expired), `next_sync_at ASC NULLS FIRST`, no row lock |
 | Lease taken | At claim | Per contract by `withContract`: `UPDATE ... WHERE lease_expires_at IS NULL OR lease_expires_at <= now()`; zero rows means `errContractBusy` |
 | Renewed | Once, at the start of `processEvent` (events late in a batch may already be near expiry) | `renew` before every Stripe stage; fails with `errLeaseLost` when expired or the token changed |
-| Fencing | `processEvent` writes its outcome only `WHERE id = ? AND lease_token = ?` | Most writes go through `leased`: a transaction that locks the Link row, then the Contract row, checks token and expiry, and for policy code the Student row (`markSynced`, `contractRetry` and `release` update the contract directly `WHERE id = ? AND lease_token = ?`) |
+| Fencing | `processEvent` writes its outcome only `WHERE id = ? AND lease_token = ?` | Most writes go through `leased`: a transaction that locks the Enrollment row, then the Contract row, checks token and expiry, and for policy code the Student row (`markSynced`, `contractRetry` and `release` update the contract directly `WHERE id = ? AND lease_token = ?`) |
 | Released | The finishing update clears token and expiry | `release` in a `defer`, on a 5 s detached context |
 
-Only event claims use `SKIP LOCKED`. The contract lease is a compare-and-set, so a second claimer simply gets zero rows. Lock order is Link, then Contract, then Student, the same order checkout and contact edits take.
+Only event claims use `SKIP LOCKED`. The contract lease is a compare-and-set, so a second claimer simply gets zero rows. Lock order is Enrollment, then Contract, then Student, the same order checkout and contact edits take.
 
 Staff actions share the contract lease. `ReconcileStudent` and `RequestReinstatement` go through `withStaffContract`, which turns `errContractBusy` into `ErrPaymentPending` (management answers 409 "A payment is still pending. Try again shortly."). Staff find the contract through the Student row, which exists only after funding, so in production they sync funded contracts; the pipeline they run is the worker's own.
 
@@ -111,8 +111,8 @@ flowchart TD
 | Step | Function | What it does |
 |---|---|---|
 | 2 | `resumeCreate`, `syncAttempt` | For each active attempt (`creating`, `open`, `processing`, `expiring`, `uncertain`). Without a Session ID: a `creating` attempt younger than 15 s is left to its web request; otherwise list the Customer's Sessions and match `client_reference_id` (one: adopt and sync; several: contract review `unresolved_provider_create`; none and younger than 23 h: replay the create under the same idempotency key; none and older: `failed`). With a Session: move the attempt, adopt a payable URL, or `fund`. States and sessions: [Checkout](checkout.md) |
-| 2 | `fund` | After every Stripe read, one transaction under the lease: dates the obligations from the paid invoice's `paid_at` (`Plan.Schedule`), records tuition #1 as paid, stores the Payment, marks the attempt `paid`, clears the funding-blocking reviews, calls `links.Enroll` (the only Student creation, which also sets `links.paid_at` and clears `links.pin`), sets `funded_at` and `next_sync_at = NULL`. Then it runs `scheduleInvoices`. A mismatching first invoice blocks funding and keeps the attempt `processing` |
-| 3 | `syncCustomerContact` | When name or email differ from the `synced_customer_*` stamp, update the Stripe Customer, then the stamp. The source is the Link before funding (`contactOf`), the Student after |
+| 2 | `fund` | After every Stripe read, one transaction under the lease: dates the obligations from the paid invoice's `paid_at` (`Plan.Schedule`), records tuition #1 as paid, stores the Payment, marks the attempt `paid`, clears the funding-blocking reviews, calls `links.Enroll` (the only Student creation, which also sets `enrollments.paid_at` and clears `enrollments.pin`), sets `funded_at` and `next_sync_at = NULL`. Then it runs `scheduleInvoices`. A mismatching first invoice blocks funding and keeps the attempt `processing` |
+| 3 | `syncCustomerContact` | When name or email differ from the `synced_customer_*` stamp, update the Stripe Customer, then the stamp. The source is the Enrollment before funding (`contactOf`), the Student after |
 | 5 | `scheduleInvoices` | Later tuition (`number > 1`, `collect`, dated, no review) with any creation stage still missing (`stripe_invoice_id IS NULL OR stripe_invoice_item_id IS NULL OR scheduled_finalization_at IS NULL`); runs `ensureDefaultPaymentMethod` first. Detail: [Invoices](invoices.md) |
 | 6 | `syncInvoice` | Fetch the invoice, record each paid InvoicePayment's PaymentIntent as a Payment, map the invoice onto the obligation (`invoiceStateOf`), save through `store`, which also recomputes the contract's `payment_review` flag. A non-matching invoice that could still collect is held (`auto_advance` off) after its review is persisted |
 | 7-9 | `evaluateDeadlines`, `cancelFees`, `evaluateReactivation` | School policy on the freshly refreshed state: [Suspension](suspension.md) |
@@ -167,7 +167,7 @@ The package has four jobs in pipeline order: queue and lease mechanics, mirrorin
 | Contract retry is a fixed minute | No retry counter column exists (`ponytail` note on `contractRetry`) |
 | Every sync re-reads all of the contract's invoices | At most six per contract; narrowing is deferred (`ponytail` note on `reconcileContract`) |
 | `persistCtx` in `leased`, `release` and the event finish | Records Stripe outcomes after a shutdown or request timeout |
-| Link lock taken in `leased` | Same order as checkout and contact edits; funding writes the Link |
+| Enrollment lock taken in `leased` | Same order as checkout and contact edits; funding writes the Enrollment |
 | `reflect.DeepEqual` in `savePayment` | `paymentFacts` holds pointers, so `==` would compare addresses; it also avoids no-op live events |
 | 15-minute rechecks and the daily audit | Catch Stripe changes that arrive without a webhook |
 

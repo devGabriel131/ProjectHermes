@@ -8,14 +8,13 @@ One handler loads three sources under a single 5 s context and fills `dashboardD
 
 ```mermaid
 flowchart LR
-    Handler["GET /management/dashboard"] --> Links["links.Store.List: every link"]
+    Handler["GET /management/dashboard"] --> Links["links.Store.ListGroups: all links and enrollments"]
     Handler --> Count["students.Store.Count: one query"]
     Handler --> Overview["billing.Service.Overview: three queries"]
-    Links --> Loop["Go loop over the entries"]
-    Loop --> Waiting["LinksWaiting"]
-    Loop --> Sent["LinksSent"]
+    Links --> Loop["Go loop over links and enrollments"]
+    Loop --> Sent["LinksSent, ActiveLinks"]
+    Loop --> Started["EnrollmentsStarted, LinksWaiting"]
     Loop --> Forms["FormsCompleted"]
-    Count --> Students["Students: Active, Suspended, Total"]
     Overview --> Q1["Query 1: tuition obligations of funded contracts"]
     Overview --> Q2["Query 2: every billing_payments row"]
     Overview --> Q3["Query 3: every billing_contracts row"]
@@ -36,9 +35,9 @@ flowchart LR
 
 | Figure | Window |
 |---|---|
-| Links created (`LinksSent`) | `created_at` not before `now - 30 d` |
-| Forms completed (`FormsCompleted`) | `submitted_at` not before `now - 30 d` |
-| Paid enrollments (`FundedRecently`) | `funded_at >= now - 30 d` (looks back) |
+| Links created (`LinksSent`) | `links.created_at` not before `now - 30 d` |
+| Enrollments started (`EnrollmentsStarted`) | `enrollments.created_at` not before `now - 30 d` |
+| Forms completed (`FormsCompleted`) | `enrollments.submitted_at` not before `now - 30 d` |
 | Due in the next 30 days (`DueSoon`) | `now <= due_at < now + 30 d` (looks ahead) |
 | Overdue | `due_at < now` (no lower bound) |
 
@@ -54,10 +53,11 @@ flowchart LR
 | Tuition | Overdue (amount and count) | Amount: remaining cents of those obligations with `due_at < now`. Count: the same obligations with remaining above zero |
 | Tuition | Due in the next 30 days (amount and count) | Same shape for `now <= due_at < now + 30 d` |
 | Enrollment | Links created | Links created within the window, whatever became of them (Trash included) |
-| Enrollment | Forms completed | Links with `submitted_at` in the window, paid or not. The label says "completed"; the figure counts **submitted** links |
+| Enrollment | Enrollments started | Enrollments started within the window, whatever became of them |
+| Enrollment | Forms completed | Enrollments with `submitted_at` in the window, paid or not. The label says "completed"; the figure counts **submitted** enrollments |
 | Enrollment | Paid enrollments | Contracts with `funded_at` in the window (funded contracts, hence Students created) |
-| Enrollment | Links waiting on a customer ("Right now") | Links that are `Cancelable` at load time: Not opened, Opened or In progress. Awaiting payment is excluded ([Links](../domain/links.md)) |
-
+| Enrollment | Active links ("Right now") | Reusable links with status `Active` |
+| Enrollment | In progress ("Right now") | Enrollments currently `In progress` (unsubmitted, active) ([Links](../domain/links.md)) |
 Three more counts appear only in the attention list:
 
 | Count | Derivation |
@@ -95,9 +95,9 @@ Nothing publishes an event for the clock alone. A figure that changes only becau
 
 ## Source
 
-- `internal/management/dashboard.go`: `dashboardWindow`, `dashboardData`, `NeedsAttention`, `registerDashboardRoutes`, `LinksWaiting`, `FormsCompleted`, `LinksSent`
+- `internal/management/dashboard.go`: `dashboardWindow`, `dashboardData`, `NeedsAttention`, `registerDashboardRoutes`, `LinksSent`, `ActiveLinks`, `EnrollmentsStarted`, `FormsCompleted`, `LinksWaiting`
 - `internal/management/templates/dashboard.html`: `dashboard-content`, `dashboard-attention`, `dashboard-alert`, `management-changed`
 - `internal/billing/overview.go`: `Overview`, `CollectedCents`, `OutstandingCents`, `OverdueInstallments`, `DueSoonInstallments`, `FailedInstallments`, `ContractsInReview`, `PaymentsInReview`, `FundedRecently`
 - `internal/students/students.go`: `Counts`, `Count`, `Total`
-- `internal/links/links.go`: `List`, `Cancelable`
+- `internal/links/links.go`: `ListGroups`, `LinkEntry`, `EnrollmentEntry`
 - `static/management-live.js`: `listenForChanges`

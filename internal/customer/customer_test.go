@@ -34,30 +34,40 @@ import (
 // later keeps test links usable for any test's duration.
 var later = time.Now().Add(time.Hour)
 
-// fixture is one fresh usable link served by the customer routes.
+// fixture is one fresh usable link with a started browser session served by the customer routes.
 type fixture struct {
-	db    *gorm.DB
-	store *links.Store
-	entry links.Entry
-	path  string
-	mux   http.Handler
+	db     *gorm.DB
+	store  *links.Store
+	entry  links.LinkEntry
+	eID    uint64
+	cookie string
+	path   string
+	mux    http.Handler
+}
+
+func (f fixture) sessionCookie() *http.Cookie {
+	return &http.Cookie{Name: sessionCookieName, Value: f.cookie}
 }
 
 func newFixture(t *testing.T) fixture {
 	t.Helper()
 	db := customerDatabase(t)
 	store := links.New(db, nil)
-	entry, err := store.Create(t.Context(), "staff", later)
+	entry, err := store.CreateLink(t.Context(), "staff", "", later)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return fixture{db, store, entry, "/customer/" + entry.Token, newMux(t, db)}
+	started, cookie, err := store.StartEnrollment(t.Context(), entry.Token, "")
+	if err != nil || started == nil || cookie == "" {
+		t.Fatalf("start enrollment: %+v, %q, %v", started, cookie, err)
+	}
+	return fixture{db, store, entry, started.ID, cookie, "/customer/" + entry.Token, newMux(t, db)}
 }
 
 func TestErrorResponsesKeepStudentForm(t *testing.T) {
 	f := newFixture(t)
 	existing := contactDetails("Existing name")
-	saveDetails(t, f.store, f.entry.Token, existing)
+	saveDetails(t, f.store, f.entry.Token, f.cookie, existing)
 	muxes := map[bool]http.Handler{
 		false: f.mux,
 		true:  newMux(t, failingDB(t, f.db)),
@@ -88,7 +98,7 @@ func TestErrorResponsesKeepStudentForm(t *testing.T) {
 				if tc.method == http.MethodGet {
 					target += "/forms"
 				}
-				w := customerRequest(t, muxes[tc.databaseFailure], tc.method, target, tc.body, htmx)
+				w := customerRequest(t, muxes[tc.databaseFailure], tc.method, target, tc.body, htmx, f.sessionCookie())
 				if w.Code != tc.status {
 					t.Fatalf("status = %d, want %d: %s", w.Code, tc.status, w.Body.String())
 				}
@@ -123,13 +133,13 @@ func TestAutosaveKeepsDraftWithoutFinishing(t *testing.T) {
 		{"clear municipality", "municipality", "", "", http.StatusOK},
 		{"clear gender", "gender", "", "", http.StatusOK},
 	}
-	for i, step := range steps {
+	for _, step := range steps {
 		t.Run(step.name, func(t *testing.T) {
 			// Unrelated parameters must not be parsed or written by this draft.
 			form := url.Values{"name": {"Bad <name>"}, "email": {"invalid"}, "phone": {"invalid"},
 				"municipality": {"invalid"}, "gender": {"invalid"}, "pin": {"invalid"}, "email_confirm": {"never persisted"}}
 			form.Set(step.key, step.raw)
-			w := customerRequest(t, f.mux, http.MethodPost, f.path+"/draft/"+step.key, form.Encode(), true)
+			w := customerRequest(t, f.mux, http.MethodPost, f.path+"/draft/"+step.key, form.Encode(), true, f.sessionCookie())
 			if w.Code != step.code || strings.Contains(w.Body.String(), "<input") {
 				t.Fatalf("draft status = %d, want %d, fragment %s", w.Code, step.code, w.Body.String())
 			}
@@ -152,27 +162,20 @@ func TestAutosaveKeepsDraftWithoutFinishing(t *testing.T) {
 			if link.Details != want || link.SubmittedAt != nil || len(studentRecords(t, f.db)) != 0 {
 				t.Fatalf("draft changed unrelated data: link %+v, want details %+v", link, want)
 			}
-			if i == 0 && link.OpenedAt != nil {
-				t.Fatal("draft POST recorded a first visit")
-			}
-			reload := customerRequest(t, f.mux, http.MethodGet, f.path+"/forms", "", false)
+			reload := customerRequest(t, f.mux, http.MethodGet, f.path+"/forms", "", false, f.sessionCookie())
 			requireAttempted(t, reload.Body.String(), detailsForm(want))
-			entries, err := f.store.List(t.Context())
-			if err != nil || len(entries) != 1 {
-				t.Fatalf("list: %+v, %v", entries, err)
+			groups, err := f.store.ListGroups(t.Context())
+			if err != nil || len(groups) != 1 || len(groups[0].Enrollments) != 1 {
+				t.Fatalf("list: %+v, %v", groups, err)
 			}
-			status := links.InProgress
-			if want == (students.Details{}) {
-				status = links.Opened
-			}
-			if entries[0].Status != status {
-				t.Fatalf("status = %q, want %q", entries[0].Status, status)
+			if groups[0].Enrollments[0].Status != links.InProgress {
+				t.Fatalf("status = %q, want %q", groups[0].Enrollments[0].Status, links.InProgress)
 			}
 		})
 	}
 
 	final := contactForm("Ana Pérez")
-	w := customerRequest(t, f.mux, http.MethodPost, f.path, final.Encode(), true)
+	w := customerRequest(t, f.mux, http.MethodPost, f.path, final.Encode(), true, f.sessionCookie())
 	if w.Code != http.StatusOK {
 		t.Fatalf("submit: status = %d, body %q", w.Code, w.Body.String())
 	}
@@ -183,7 +186,7 @@ func TestAutosaveKeepsDraftWithoutFinishing(t *testing.T) {
 	before := stored(t, f.db)
 	for _, suffix := range []string{"/draft/name", "/draft/email", "/draft/phone", "/draft/municipality", "/draft/gender"} {
 		key := strings.TrimPrefix(suffix, "/draft/")
-		w := customerRequest(t, f.mux, http.MethodPost, f.path+suffix, url.Values{key: {""}}.Encode(), true)
+		w := customerRequest(t, f.mux, http.MethodPost, f.path+suffix, url.Values{key: {""}}.Encode(), true, f.sessionCookie())
 		if w.Code != http.StatusConflict || w.Header().Get("HX-Refresh") != "true" {
 			t.Fatalf("draft after submit: status = %d, HX-Refresh = %q", w.Code, w.Header().Get("HX-Refresh"))
 		}
@@ -192,10 +195,10 @@ func TestAutosaveKeepsDraftWithoutFinishing(t *testing.T) {
 	if after := stored(t, f.db); !reflect.DeepEqual(after, before) {
 		t.Fatalf("late drafts changed completed details: before %+v, after %+v", before, after)
 	}
-	if _, err := f.store.Cancel(t.Context(), f.entry.ID, "staff"); err != nil {
+	if _, err := f.store.CancelEnrollment(t.Context(), f.eID, "staff"); err != nil {
 		t.Fatal(err)
 	}
-	w = customerRequest(t, f.mux, http.MethodPost, f.path+"/draft/name", "name=After+attempted+cancel", true)
+	w = customerRequest(t, f.mux, http.MethodPost, f.path+"/draft/name", "name=After+attempted+cancel", true, f.sessionCookie())
 	if w.Code != http.StatusConflict || w.Header().Get("HX-Refresh") != "true" {
 		t.Fatalf("finished draft after cancel: status = %d, HX-Refresh = %q", w.Code, w.Header().Get("HX-Refresh"))
 	}
@@ -204,15 +207,15 @@ func TestAutosaveKeepsDraftWithoutFinishing(t *testing.T) {
 func TestUnusableLinksTakePrecedence(t *testing.T) {
 	db := customerDatabase(t)
 	store := links.New(db, nil)
-	expired, err := store.Create(t.Context(), "staff", time.Now().Add(-time.Minute))
+	expired, err := store.CreateLink(t.Context(), "staff", "", time.Now().Add(-time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
-	canceled, err := store.Create(t.Context(), "staff", later)
+	canceled, err := store.CreateLink(t.Context(), "staff", "", later)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Cancel(t.Context(), canceled.ID, "staff"); err != nil {
+	if _, err := store.CancelLink(t.Context(), canceled.ID, "staff"); err != nil {
 		t.Fatal(err)
 	}
 	mux := newMux(t, db)
@@ -221,6 +224,7 @@ func TestUnusableLinksTakePrecedence(t *testing.T) {
 		path := "/customer/" + token
 		for _, tc := range []struct{ name, method, suffix, body string }{
 			{"entry", http.MethodGet, "", ""},
+			{"start", http.MethodPost, "/start", ""},
 			{"forms", http.MethodGet, "/forms", ""},
 			{"valid final", http.MethodPost, "", contactForm("Ana Pérez").Encode()},
 			{"valid draft", http.MethodPost, "/draft/name", "name=Ana"},
@@ -256,7 +260,7 @@ func TestCompletedAccessAndReplay(t *testing.T) {
 	const submittedName = "Submission snapshot"
 	const canonicalName = "Edited student name"
 	// Submit directly so replay must not even fill in the absent first-visit time.
-	if saved, err := f.store.Submit(t.Context(), f.entry.Token, contactDetails(submittedName), ""); err != nil || saved != links.Saved {
+	if saved, err := f.store.Submit(t.Context(), f.entry.Token, f.cookie, contactDetails(submittedName), ""); err != nil || saved != links.Saved {
 		t.Fatalf("submit: saved=%v, err=%v", saved, err)
 	}
 	if enrolled := studentRecords(t, f.db); len(enrolled) != 0 {
@@ -289,7 +293,7 @@ func TestCompletedAccessAndReplay(t *testing.T) {
 			{"oversized stale draft", "/draft/name", "name=" + strings.Repeat("x", 5000), http.StatusConflict},
 		} {
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {
-				w := customerRequest(t, f.mux, http.MethodPost, f.path+tc.suffix, tc.body, mode == "htmx")
+				w := customerRequest(t, f.mux, http.MethodPost, f.path+tc.suffix, tc.body, mode == "htmx", f.sessionCookie())
 				wantStatus := tc.status
 				if tc.status == http.StatusOK && mode == "ordinary" {
 					wantStatus = http.StatusSeeOther
@@ -320,14 +324,21 @@ func TestCompletedAccessAndReplay(t *testing.T) {
 	}
 	for _, target := range []string{f.path, f.path + "/forms"} {
 		for _, htmx := range []bool{false, true} {
-			w := customerRequest(t, f.mux, http.MethodGet, target, "", htmx)
+			w := customerRequest(t, f.mux, http.MethodGet, target, "", htmx, f.sessionCookie())
 			requireAdvance(t, w, f.path+"/agreement", false, private...)
 		}
 	}
 	server := serve(t, f.db)
-	headKeeps(t, f.db, server, f.path, http.StatusOK)
+	headKeeps(t, f.db, server, f.path, http.StatusOK, f.cookie)
 
-	if err := f.db.WithContext(t.Context()).Model(&links.Link{}).Where("token_hash = ?", before[0].TokenHash).Update("expires_at", time.Now().Add(-time.Minute)).Error; err != nil {
+	if err := f.db.WithContext(t.Context()).Model(&links.Enrollment{}).Where("id = ?", before[0].ID).Update("expires_at", time.Now().Add(-time.Minute)).Error; err != nil {
+		t.Fatal(err)
+	}
+	// While the parent link is still active, GET /forms redirects to welcome; POST rejects the expired enrollment.
+	w := customerRequest(t, f.mux, http.MethodGet, f.path+"/forms", "", false, f.sessionCookie())
+	requireAdvance(t, w, f.path, false)
+	// Once the parent link also expires, all routes return 404.
+	if err := f.db.WithContext(t.Context()).Model(&links.Link{}).Where("id = ?", f.entry.ID).Update("expires_at", time.Now().Add(-time.Minute)).Error; err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct{ method, suffix string }{
@@ -336,95 +347,216 @@ func TestCompletedAccessAndReplay(t *testing.T) {
 		{http.MethodPost, ""},
 		{http.MethodPost, "/draft/name"},
 	} {
-		w := customerRequest(t, f.mux, tc.method, f.path+tc.suffix, "name=Replacement", false)
+		w := customerRequest(t, f.mux, tc.method, f.path+tc.suffix, "name=Replacement", false, f.sessionCookie())
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("expired completion %s %s: status = %d", tc.method, tc.suffix, w.Code)
 		}
 	}
-	headKeeps(t, f.db, server, f.path, http.StatusNotFound)
+	headKeeps(t, f.db, server, f.path, http.StatusNotFound, f.cookie)
 	if after := studentRecords(t, f.db); !reflect.DeepEqual(after, studentsBefore) {
 		t.Fatalf("completion access or expiry changed retained students from %+v to %+v", studentsBefore, after)
 	}
 }
 
-// TestHeadChecksLinkWithoutChangingIt follows one link through its life. HEAD
-// only reports whether it opens; GET still records the customer's first visit.
+// TestHeadChecksLinkWithoutChangingIt follows a reusable link through welcome, start, draft, and submit.
+// HEAD only reports status without writing; GET welcome never creates an enrollment; POST /start starts the session.
 func TestHeadChecksLinkWithoutChangingIt(t *testing.T) {
-	f := newFixture(t)
-	server := serve(t, f.db)
-	client := &http.Client{Timeout: httpTimeout}
-	// send makes a request carrying a name, as a stray edit would.
-	send := func(t *testing.T, method, target string) int {
+	db := customerDatabase(t)
+	store := links.New(db, nil)
+	entry, err := store.CreateLink(t.Context(), "staff", "", later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/customer/" + entry.Token
+	server := serve(t, db)
+	client := &http.Client{
+		Timeout:       httpTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	send := func(t *testing.T, method, target, cookieVal string) *http.Response {
 		t.Helper()
 		r, err := http.NewRequestWithContext(t.Context(), method, server.URL+target, strings.NewReader(contactForm("Changed student").Encode()))
 		if err != nil {
 			t.Fatal(err)
 		}
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if cookieVal != "" {
+			r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: cookieVal})
+		}
 		resp, err := client.Do(r)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
-		return resp.StatusCode
+		return resp
 	}
 
-	headKeeps(t, f.db, server, f.path, http.StatusOK)
-	headKeeps(t, f.db, server, f.path+"/forms", http.StatusOK)
-	if entries, err := f.store.List(t.Context()); err != nil || len(entries) != 1 || entries[0].Status != links.NotOpened {
-		t.Fatalf("after HEAD: entries %+v, err %v; want one %q", entries, err, links.NotOpened)
+	headKeeps(t, db, server, path, http.StatusOK, "")
+	headKeeps(t, db, server, path+"/forms", http.StatusSeeOther, "")
+	if len(stored(t, db)) != 0 {
+		t.Fatal("HEAD created an enrollment")
 	}
 
-	if status := send(t, http.MethodGet, f.path); status != http.StatusOK {
-		t.Fatalf("GET status = %d, want 200", status)
+	resp := send(t, http.MethodGet, path, "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(stored(t, db)) != 0 {
+		t.Fatalf("GET welcome status=%d, enrollments=%d; want 200, 0", resp.StatusCode, len(stored(t, db)))
 	}
-	if stored(t, f.db)[0].OpenedAt == nil {
-		t.Fatal("GET did not record the first visit")
-	}
-	headKeeps(t, f.db, server, f.path, http.StatusOK)
+	headKeeps(t, db, server, path, http.StatusOK, "")
 
-	saveDetails(t, f.store, f.entry.Token, contactDetails("Draft student"))
-	headKeeps(t, f.db, server, f.path, http.StatusOK)
+	resp = send(t, http.MethodPost, path+"/start", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != path+"/forms" {
+		t.Fatalf("POST /start status=%d, location=%q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	var cookieVal string
+	for _, c := range resp.Cookies() {
+		if c.Name == sessionCookieName {
+			cookieVal = c.Value
+			if !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != path {
+				t.Fatalf("unexpected session cookie attributes: %+v", c)
+			}
+		}
+	}
+	if cookieVal == "" || len(stored(t, db)) != 1 {
+		t.Fatalf("POST /start did not issue cookie or create enrollment: cookie=%q, count=%d", cookieVal, len(stored(t, db)))
+	}
+
+	headKeeps(t, db, server, path, http.StatusOK, cookieVal)
+	headKeeps(t, db, server, path+"/forms", http.StatusOK, cookieVal)
+
+	saveDetails(t, store, entry.Token, cookieVal, contactDetails("Draft student"))
+	headKeeps(t, db, server, path, http.StatusOK, cookieVal)
 
 	// Autosave and the page answer no other methods, so none can edit the draft.
-	before := stored(t, f.db)
+	before := stored(t, db)
 	for _, tc := range []struct{ name, method, target string }{
-		{"HEAD autosave", http.MethodHead, f.path + "/draft/name"},
-		{"GET autosave", http.MethodGet, f.path + "/draft/name"},
-		{"PUT page", http.MethodPut, f.path},
-		{"DELETE page", http.MethodDelete, f.path},
+		{"HEAD autosave", http.MethodHead, path + "/draft/name"},
+		{"GET autosave", http.MethodGet, path + "/draft/name"},
+		{"PUT page", http.MethodPut, path},
+		{"DELETE page", http.MethodDelete, path},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if status := send(t, tc.method, tc.target); status != http.StatusMethodNotAllowed {
-				t.Errorf("status = %d, want 405", status)
+			resp := send(t, tc.method, tc.target, cookieVal)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusMethodNotAllowed {
+				t.Errorf("status = %d, want 405", resp.StatusCode)
 			}
 		})
 	}
-	if after := stored(t, f.db); !reflect.DeepEqual(after, before) {
-		t.Fatalf("unsupported methods changed stored links from %+v to %+v", before, after)
+	if after := stored(t, db); !reflect.DeepEqual(after, before) {
+		t.Fatalf("unsupported methods changed stored enrollments from %+v to %+v", before, after)
 	}
 
-	// A submitted link still opens read-only: HEAD answers 200, not the 409 that locks edits.
-	if saved, err := f.store.Submit(t.Context(), f.entry.Token, contactDetails("Ana Pérez"), ""); err != nil || saved != links.Saved {
+	// A submitted enrollment still opens read-only: HEAD answers 200, not the 409 that locks edits.
+	if saved, err := store.Submit(t.Context(), entry.Token, cookieVal, contactDetails("Ana Pérez"), ""); err != nil || saved != links.Saved {
 		t.Fatalf("submit: saved=%v, err=%v", saved, err)
 	}
-	headKeeps(t, f.db, server, f.path, http.StatusOK)
+	headKeeps(t, db, server, path, http.StatusOK, cookieVal)
 
 	// A failed lookup is a server error, never a guess about the link.
-	headKeeps(t, f.db, serve(t, failingDB(t, f.db)), f.path, http.StatusInternalServerError)
+	headKeeps(t, db, serve(t, failingDB(t, db)), path, http.StatusInternalServerError, cookieVal)
+}
+
+func TestReusableLinkWelcomeStartAndMultiCustomerIsolation(t *testing.T) {
+	db := customerDatabase(t)
+	store := links.New(db, nil)
+	entry, err := store.CreateLink(t.Context(), "staff", "", later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := newMux(t, db)
+	path := "/customer/" + entry.Token
+
+	// Welcome page has Comenzar form targeting /start and creates 0 enrollments.
+	w := customerRequest(t, mux, http.MethodGet, path, "", false)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `action="`+path+`/start"`) || !strings.Contains(w.Body.String(), "Comenzar") {
+		t.Fatalf("welcome page: status=%d, body=%s", w.Code, w.Body.String())
+	}
+	if len(stored(t, db)) != 0 {
+		t.Fatal("welcome GET created enrollment")
+	}
+
+	// Visitor 1 starts session.
+	w1 := customerRequest(t, mux, http.MethodPost, path+"/start", "", false)
+	requireAdvance(t, w1, path+"/forms", false)
+	c1 := w1.Result().Cookies()[0]
+
+	// Re-POST /start with existing live cookie reuses enrollment 1 and does not create a second row.
+	w1b := customerRequest(t, mux, http.MethodPost, path+"/start", "", false, c1)
+	requireAdvance(t, w1b, path+"/forms", false)
+	if len(stored(t, db)) != 1 {
+		t.Fatalf("reused start created extra row: %d", len(stored(t, db)))
+	}
+
+	// Welcome with live InProgress cookie shows Continuar link to /forms.
+	w1Welcome := customerRequest(t, mux, http.MethodGet, path, "", false, c1)
+	if w1Welcome.Code != http.StatusOK || !strings.Contains(w1Welcome.Body.String(), "Continuar") || !strings.Contains(w1Welcome.Body.String(), path+"/forms") {
+		t.Fatalf("welcome with live session: %d, %s", w1Welcome.Code, w1Welcome.Body.String())
+	}
+
+	// Visitor 2 (no cookie) starts an independent session on the same link.
+	w2 := customerRequest(t, mux, http.MethodPost, path+"/start", "", false)
+	requireAdvance(t, w2, path+"/forms", false)
+	c2 := w2.Result().Cookies()[0]
+	if c2.Value == c1.Value || len(stored(t, db)) != 2 {
+		t.Fatalf("visitor 2 did not get isolated enrollment: c1=%q c2=%q count=%d", c1.Value, c2.Value, len(stored(t, db)))
+	}
+	saveDetails(t, store, entry.Token, c1.Value, contactDetails("Visitor One"))
+	saveDetails(t, store, entry.Token, c2.Value, contactDetails("Visitor Two"))
+	r1 := customerRequest(t, mux, http.MethodGet, path+"/forms", "", false, c1)
+	r2 := customerRequest(t, mux, http.MethodGet, path+"/forms", "", false, c2)
+	if !strings.Contains(r1.Body.String(), "Visitor One") || strings.Contains(r1.Body.String(), "Visitor Two") ||
+		!strings.Contains(r2.Body.String(), "Visitor Two") || strings.Contains(r2.Body.String(), "Visitor One") {
+		t.Fatal("visitor sessions leaked across browsers")
+	}
+
+	// Visitor 1 finishes enrollment -> welcome shows completed + Comenzar nueva matrícula, and POST /start starts a fresh one.
+	if res, err := store.Submit(t.Context(), entry.Token, c1.Value, contactDetails("Visitor One"), ""); err != nil || res != links.Saved {
+		t.Fatalf("submit 1: %v, %v", res, err)
+	}
+	if err := settings.New(db).SetProgramStartDate(t.Context(), "2026-11-10", "staff"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AcceptTerms(t.Context(), entry.Token, c1.Value, "2026-11-10"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return links.Enroll(tx, stored(t, db)[0].ID, time.Now().UTC())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The 168-hour deadline is for paying: once paid, it must not lock the customer out of the plan page.
+	if err := db.WithContext(t.Context()).Model(&links.Enrollment{}).Where("paid_at IS NOT NULL").
+		Update("expires_at", time.Now().Add(-time.Minute)).Error; err != nil {
+		t.Fatal(err)
+	}
+	wDone := customerRequest(t, mux, http.MethodGet, path, "", false, c1)
+	if wDone.Code != http.StatusOK || !strings.Contains(wDone.Body.String(), "Tu matrícula ya fue completada.") ||
+		!strings.Contains(wDone.Body.String(), `href="`+path+`/payments"`) ||
+		!strings.Contains(wDone.Body.String(), "Comenzar nueva matrícula") {
+		t.Fatalf("finished welcome missing plan link or start-new option: %d, %s", wDone.Code, wDone.Body.String())
+	}
+	if wPlan := customerRequest(t, mux, http.MethodGet, path+"/payments", "", false, c1); wPlan.Code != http.StatusOK {
+		t.Fatalf("paid plan page past the deadline: %d, %s", wPlan.Code, wPlan.Body.String())
+	}
+	wNew := customerRequest(t, mux, http.MethodPost, path+"/start", "", false, c1)
+	requireAdvance(t, wNew, path+"/forms", false)
+	if len(wNew.Result().Cookies()) == 0 || wNew.Result().Cookies()[0].Value == c1.Value || len(stored(t, db)) != 3 {
+		t.Fatalf("start new after finish failed: cookies=%+v, count=%d", wNew.Result().Cookies(), len(stored(t, db)))
+	}
 }
 
 func TestHeadRejectsUnusableLinks(t *testing.T) {
 	db := customerDatabase(t)
 	store := links.New(db, nil)
-	canceled, err := store.Create(t.Context(), "staff", later)
+	canceled, err := store.CreateLink(t.Context(), "staff", "", later)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Cancel(t.Context(), canceled.ID, "staff"); err != nil {
+	if _, err := store.CancelLink(t.Context(), canceled.ID, "staff"); err != nil {
 		t.Fatal(err)
 	}
-	expired, err := store.Create(t.Context(), "staff", time.Now().Add(-time.Minute))
+	expired, err := store.CreateLink(t.Context(), "staff", "", time.Now().Add(-time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,15 +568,15 @@ func TestHeadRejectsUnusableLinks(t *testing.T) {
 		{"expired", expired.Token},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			headKeeps(t, db, server, "/customer/"+tc.token, http.StatusNotFound)
-			headKeeps(t, db, server, "/customer/"+tc.token+"/forms", http.StatusNotFound)
+			headKeeps(t, db, server, "/customer/"+tc.token, http.StatusNotFound, "")
+			headKeeps(t, db, server, "/customer/"+tc.token+"/forms", http.StatusNotFound, "")
 		})
 	}
 }
 
 func TestDraftCardinalityAllowlistAndFailures(t *testing.T) {
 	f := newFixture(t)
-	saveDetails(t, f.store, f.entry.Token, contactDetails("Saved student"))
+	saveDetails(t, f.store, f.entry.Token, f.cookie, contactDetails("Saved student"))
 	before := stored(t, f.db)
 	failing := newMux(t, failingDB(t, f.db))
 	for _, field := range students.Fields() {
@@ -455,7 +587,7 @@ func TestDraftCardinalityAllowlistAndFailures(t *testing.T) {
 		} {
 			for _, htmx := range []bool{false, true} {
 				t.Run(field.Key+"/"+tc.name+fmt.Sprint("/htmx=", htmx), func(t *testing.T) {
-					w := customerRequest(t, f.mux, http.MethodPost, f.path+"/draft/"+field.Key+tc.suffix, tc.body, htmx)
+					w := customerRequest(t, f.mux, http.MethodPost, f.path+"/draft/"+field.Key+tc.suffix, tc.body, htmx, f.sessionCookie())
 					if w.Code != http.StatusBadRequest || strings.Contains(w.Body.String(), "data-validation=") ||
 						strings.Contains(w.Body.String(), "<input") {
 						t.Fatalf("malformed draft status %d, fragment %s", w.Code, w.Body.String())
@@ -466,13 +598,13 @@ func TestDraftCardinalityAllowlistAndFailures(t *testing.T) {
 	}
 	// Unknown keys are rejected before lookup, even when the database is down.
 	for _, key := range []string{"email_confirm", "Name", "unknown"} {
-		w := customerRequest(t, failing, http.MethodPost, f.path+"/draft/"+key, "name=Ignored", true)
+		w := customerRequest(t, failing, http.MethodPost, f.path+"/draft/"+key, "name=Ignored", true, f.sessionCookie())
 		if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "customer-not-found") ||
 			w.Header().Get("HX-Refresh") != "true" {
 			t.Fatalf("unknown key %q: status %d, body %s", key, w.Code, w.Body.String())
 		}
 	}
-	if w := customerRequest(t, f.mux, http.MethodPost, f.path+"/draft", "name=Ignored", false); w.Code != http.StatusNotFound {
+	if w := customerRequest(t, f.mux, http.MethodPost, f.path+"/draft", "name=Ignored", false, f.sessionCookie()); w.Code != http.StatusNotFound {
 		t.Fatalf("obsolete draft endpoint still accepted: %d", w.Code)
 	}
 	for _, tc := range []struct {
@@ -491,7 +623,7 @@ func TestDraftCardinalityAllowlistAndFailures(t *testing.T) {
 			if tc.failing {
 				handler = failing
 			}
-			w := customerRequest(t, handler, http.MethodPost, f.path+"/draft/name", tc.body, true)
+			w := customerRequest(t, handler, http.MethodPost, f.path+"/draft/name", tc.body, true, f.sessionCookie())
 			if w.Code != tc.status || strings.Contains(w.Body.String(), "data-validation=") {
 				t.Fatalf("draft error status %d, want %d; body %s", w.Code, tc.status, w.Body.String())
 			}
@@ -504,7 +636,7 @@ func TestDraftCardinalityAllowlistAndFailures(t *testing.T) {
 
 func TestFinalValidationAndEmailConfirmation(t *testing.T) {
 	f := newFixture(t)
-	saveDetails(t, f.store, f.entry.Token, contactDetails("Saved student"))
+	saveDetails(t, f.store, f.entry.Token, f.cookie, contactDetails("Saved student"))
 	before := stored(t, f.db)
 	cases := []struct {
 		name     string
@@ -535,7 +667,7 @@ func TestFinalValidationAndEmailConfirmation(t *testing.T) {
 				for key, values := range tc.replace {
 					form[key] = values
 				}
-				w := customerRequest(t, f.mux, http.MethodPost, f.path, form.Encode(), htmx)
+				w := customerRequest(t, f.mux, http.MethodPost, f.path, form.Encode(), htmx, f.sessionCookie())
 				if w.Code != http.StatusUnprocessableEntity {
 					t.Fatalf("status = %d, want 422: %s", w.Code, w.Body.String())
 				}
@@ -565,14 +697,14 @@ func TestFinalValidationAndEmailConfirmation(t *testing.T) {
 		}
 	}
 	// Reload restores saved contact values, but never infers email confirmation.
-	reload := customerRequest(t, f.mux, http.MethodGet, f.path+"/forms", "", false)
+	reload := customerRequest(t, f.mux, http.MethodGet, f.path+"/forms", "", false, f.sessionCookie())
 	requireAttempted(t, reload.Body.String(), detailsForm(contactDetails("Saved student")))
 	valid := contactForm("  María   Pérez  ")
 	valid.Set("email", " Ada+private@EXAMPLE.com ")
 	valid.Set("email_confirm", " Ada+private@example.COM ")
 	valid.Set("phone", " (202) 555-0123 ")
 	valid.Set("municipality", " Bayamón ")
-	w := customerRequest(t, f.mux, http.MethodPost, f.path, valid.Encode(), false)
+	w := customerRequest(t, f.mux, http.MethodPost, f.path, valid.Encode(), false, f.sessionCookie())
 	requireAdvance(t, w, f.path+"/agreement", false, privateFormValues(valid)...)
 	want := students.Details{Name: "María Pérez", Email: "Ada+private@example.com", Phone: "+12025550123", Municipality: "Bayamón", DateOfBirth: "2005-06-15", Gender: "Female"}
 	link, enrolled := stored(t, f.db)[0], studentRecords(t, f.db)
@@ -583,23 +715,23 @@ func TestFinalValidationAndEmailConfirmation(t *testing.T) {
 
 func TestPinChecksAreCappedPerLink(t *testing.T) {
 	f := newFixture(t)
-	if err := f.db.Exec("UPDATE links SET pin_checks = ?", links.MaxPinChecks-1).Error; err != nil {
+	if err := f.db.Exec("UPDATE enrollments SET pin_checks = ?", links.MaxPinChecks-1).Error; err != nil {
 		t.Fatal(err)
 	}
 	pin := url.Values{"pin": {"4821"}}.Encode()
-	if w := customerRequest(t, f.mux, http.MethodPost, f.path+"/pin", pin, true); w.Code != http.StatusOK {
+	if w := customerRequest(t, f.mux, http.MethodPost, f.path+"/pin", pin, true, f.sessionCookie()); w.Code != http.StatusOK {
 		t.Fatalf("last PIN check status = %d, want 200: %s", w.Code, w.Body.String())
 	}
-	w := customerRequest(t, f.mux, http.MethodPost, f.path+"/pin", pin, true)
+	w := customerRequest(t, f.mux, http.MethodPost, f.path+"/pin", pin, true, f.sessionCookie())
 	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), pinLimitMessage) {
 		t.Fatalf("PIN check over budget: status %d, body %s", w.Code, w.Body.String())
 	}
-	w = customerRequest(t, f.mux, http.MethodPost, f.path, contactForm("Ada Lovelace").Encode(), true)
+	w = customerRequest(t, f.mux, http.MethodPost, f.path, contactForm("Ada Lovelace").Encode(), true, f.sessionCookie())
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("final submit over budget status = %d, want 429: %s", w.Code, w.Body.String())
 	}
 	var submitted int64
-	if err := f.db.Raw("SELECT count(*) FROM links WHERE submitted_at IS NOT NULL").Scan(&submitted).Error; err != nil || submitted != 0 {
+	if err := f.db.Raw("SELECT count(*) FROM enrollments WHERE submitted_at IS NOT NULL").Scan(&submitted).Error; err != nil || submitted != 0 {
 		t.Fatalf("submitted links = %d, err %v; want 0", submitted, err)
 	}
 }
@@ -638,24 +770,29 @@ func privateFormValues(form url.Values) []string {
 	return private
 }
 
-func saveDetails(t *testing.T, store *links.Store, token string, details students.Details) {
+func saveDetails(t *testing.T, store *links.Store, linkToken, cookieToken string, details students.Details) {
 	t.Helper()
 	for key, values := range detailsForm(details) {
 		if key == "email_confirm" {
 			continue
 		}
-		if result, err := store.SaveDraft(t.Context(), token, key, values[0]); err != nil || result != links.Saved {
+		if result, err := store.SaveDraft(t.Context(), linkToken, cookieToken, key, values[0]); err != nil || result != links.Saved {
 			t.Fatalf("save %s draft: result %v, error %v", key, result, err)
 		}
 	}
 }
 
-func customerRequest(t *testing.T, handler http.Handler, method, path, body string, htmx bool) *httptest.ResponseRecorder {
+func customerRequest(t *testing.T, handler http.Handler, method, path, body string, htmx bool, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if htmx {
 		r.Header.Set("HX-Request", "true")
+	}
+	for _, c := range cookies {
+		if c != nil && c.Value != "" {
+			r.AddCookie(c)
+		}
 	}
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, r)
@@ -706,7 +843,7 @@ const httpTimeout = 10 * time.Second
 
 func customerDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
-	models := append([]any{&links.Link{}, &students.Student{}, &settings.Settings{}}, billing.Models()...)
+	models := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}, &settings.Settings{}}, billing.Models()...)
 	return testdb.Open(t, models...)
 }
 
@@ -762,7 +899,7 @@ func testCustomerBiller(t *testing.T, db *gorm.DB) *billing.Service {
 func newMux(t *testing.T, db *gorm.DB) http.Handler {
 	t.Helper()
 	mux := http.NewServeMux()
-	if err := RegisterRoutes(mux, links.New(db, nil), students.New(db, nil), settings.New(db), testCustomerBiller(t, db)); err != nil {
+	if err := RegisterRoutes(mux, links.New(db, nil), students.New(db, nil), settings.New(db), testCustomerBiller(t, db), false); err != nil {
 		t.Fatal(err)
 	}
 	return logging.Requests(logging.New(io.Discard), mux)
@@ -791,10 +928,10 @@ func failingDB(t *testing.T, db *gorm.DB) *gorm.DB {
 }
 
 // stored reads every link directly, never through Open, so checks record no visit.
-func stored(t *testing.T, db *gorm.DB) []links.Link {
+func stored(t *testing.T, db *gorm.DB) []links.Enrollment {
 	t.Helper()
-	var all []links.Link
-	if err := db.WithContext(t.Context()).Order("token_hash").Find(&all).Error; err != nil {
+	var all []links.Enrollment
+	if err := db.WithContext(t.Context()).Order("id").Find(&all).Error; err != nil {
 		t.Fatal(err)
 	}
 	return all
@@ -858,12 +995,12 @@ func requireNoPrivate(t *testing.T, body string, private ...string) {
 
 // headKeeps sends HEAD for path, plain and from HTMX, expecting want each
 // time, and fails if any stored link changed.
-func headKeeps(t *testing.T, db *gorm.DB, server *httptest.Server, path string, want int) {
+func headKeeps(t *testing.T, db *gorm.DB, server *httptest.Server, path string, want int, cookieVal string) {
 	t.Helper()
 	before := stored(t, db)
 	studentsBefore := studentRecords(t, db)
 	for _, htmx := range []bool{false, true} {
-		if got := head(t, server, path, htmx); got != want {
+		if got := head(t, server, path, htmx, cookieVal); got != want {
 			t.Fatalf("HEAD %s (htmx=%v): status = %d, want %d", path, htmx, got, want)
 		}
 	}
@@ -879,7 +1016,7 @@ func headKeeps(t *testing.T, db *gorm.DB, server *httptest.Server, path string, 
 // and returns the status. http.Client never reads a HEAD response body, so
 // head reads the raw connection: the request asks the server to close it after
 // replying, and any byte after the headers would be a body.
-func head(t *testing.T, server *httptest.Server, path string, htmx bool) int {
+func head(t *testing.T, server *httptest.Server, path string, htmx bool, cookieVal string) int {
 	t.Helper()
 	conn, err := net.DialTimeout("tcp", server.Listener.Addr().String(), httpTimeout)
 	if err != nil {
@@ -896,6 +1033,9 @@ func head(t *testing.T, server *httptest.Server, path string, htmx bool) int {
 	r.Close = true
 	if htmx {
 		r.Header.Set("HX-Request", "true")
+	}
+	if cookieVal != "" {
+		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: cookieVal})
 	}
 	if err := r.Write(conn); err != nil {
 		t.Fatal(err)
@@ -931,7 +1071,7 @@ func TestContactEditFlowAndBackNavigation(t *testing.T) {
 	f := newFixture(t)
 
 	// 1. Unsubmitted link: GET /edit redirects to /forms
-	w := customerRequest(t, f.mux, http.MethodGet, f.path+"/edit", "", false)
+	w := customerRequest(t, f.mux, http.MethodGet, f.path+"/edit", "", false, f.sessionCookie())
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != f.path+"/forms" {
 		t.Fatalf("unsubmitted /edit: status %d, location %q; want redirect to /forms", w.Code, w.Header().Get("Location"))
 	}
@@ -941,14 +1081,14 @@ func TestContactEditFlowAndBackNavigation(t *testing.T) {
 	initial.Email = "original@example.com"
 	initial.Phone = "+17875551111"
 	initial.Municipality = "Ponce"
-	res, err := f.store.Submit(t.Context(), f.entry.Token, initial, "")
+	res, err := f.store.Submit(t.Context(), f.entry.Token, f.cookie, initial, "")
 	if err != nil || res != links.Saved {
 		t.Fatalf("submit: %v, %v", res, err)
 	}
 
 	// 2. Submitted link:
 	// GET /edit renders prefilled form with back link to agreement and action=/edit
-	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/edit", "", false)
+	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/edit", "", false, f.sessionCookie())
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /edit: status %d, body %s", w.Code, w.Body.String())
 	}
@@ -975,7 +1115,7 @@ func TestContactEditFlowAndBackNavigation(t *testing.T) {
 	}
 
 	// Agreement page has "Editar información del estudiante"
-	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/agreement", "", false)
+	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/agreement", "", false, f.sessionCookie())
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), f.path+"/edit") || !strings.Contains(w.Body.String(), "Editar información del estudiante") {
 		t.Fatalf("unfunded agreement page missing edit back link: %s", w.Body.String())
 	}
@@ -990,7 +1130,7 @@ func TestContactEditFlowAndBackNavigation(t *testing.T) {
 		"date_of_birth": {"2005-06-15"},
 		"gender":        {"Female"},
 	}
-	w = customerRequest(t, f.mux, http.MethodPost, f.path+"/edit", invalidForm.Encode(), false)
+	w = customerRequest(t, f.mux, http.MethodPost, f.path+"/edit", invalidForm.Encode(), false, f.sessionCookie())
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("POST /edit with invalid email: status %d, want 422", w.Code)
 	}
@@ -1005,16 +1145,17 @@ func TestContactEditFlowAndBackNavigation(t *testing.T) {
 		"date_of_birth": {"2004-05-14"},
 		"gender":        {"Female"},
 	}
-	w = customerRequest(t, f.mux, http.MethodPost, f.path+"/edit", validForm.Encode(), false)
+	w = customerRequest(t, f.mux, http.MethodPost, f.path+"/edit", validForm.Encode(), false, f.sessionCookie())
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != f.path+"/agreement" {
 		t.Fatalf("POST /edit: status %d, location %q; want redirect to /agreement", w.Code, w.Header().Get("Location"))
 	}
 
-	// Check DB: link row is updated with new contact details; no students row exists
-	link, err := f.store.Lookup(t.Context(), f.entry.Token)
-	if err != nil || link == nil {
-		t.Fatalf("lookup link: %v, %v", link, err)
+	// Check DB: enrollment row is updated with new contact details; no students row exists
+	sess, err := f.store.LookupSession(t.Context(), f.entry.Token, f.cookie)
+	if err != nil || sess == nil || sess.Enrollment == nil {
+		t.Fatalf("lookup session: %v, %v", sess, err)
 	}
+	link := sess.Enrollment
 	if link.Name != "Updated Student" || link.Email != "updated@example.com" || link.Phone != "+17875552222" || link.Municipality != "San Juan" {
 		t.Fatalf("link snapshot should be updated, got: %+v", link)
 	}
@@ -1030,7 +1171,7 @@ func TestContactEditFlowAndBackNavigation(t *testing.T) {
 	// Create funded contract
 	fundedAt := time.Now().UTC()
 	contract := billing.Contract{
-		SourceLinkHash:   link.TokenHash,
+		EnrollmentID:     link.ID,
 		Reference:        rand.Text(),
 		PlanID:           "full",
 		PlanName:         "Pago Único",
@@ -1043,32 +1184,32 @@ func TestContactEditFlowAndBackNavigation(t *testing.T) {
 	}
 
 	// GET /edit redirects to /payments
-	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/edit", "", false)
+	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/edit", "", false, f.sessionCookie())
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != f.path+"/payments" {
 		t.Fatalf("funded GET /edit: status %d, location %q; want redirect to /payments", w.Code, w.Header().Get("Location"))
 	}
 
 	// POST /edit redirects to /payments
-	w = customerRequest(t, f.mux, http.MethodPost, f.path+"/edit", validForm.Encode(), false)
+	w = customerRequest(t, f.mux, http.MethodPost, f.path+"/edit", validForm.Encode(), false, f.sessionCookie())
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != f.path+"/payments" {
 		t.Fatalf("funded POST /edit: status %d, location %q; want redirect to /payments", w.Code, w.Header().Get("Location"))
 	}
 
 	// Agreement page does NOT have edit back link when funded
-	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/agreement", "", false)
+	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/agreement", "", false, f.sessionCookie())
 	if strings.Contains(w.Body.String(), "Editar información del estudiante") {
 		t.Fatalf("funded agreement page should not show edit link: %s", w.Body.String())
 	}
 
 	// Accept terms so /payments does not redirect to /agreement
-	if err := f.db.WithContext(t.Context()).Model(&links.Link{}).
-		Where("token_hash = ?", link.TokenHash).
+	if err := f.db.WithContext(t.Context()).Model(&links.Enrollment{}).
+		Where("id = ?", link.ID).
 		Updates(map[string]any{"terms_accepted_at": time.Now().UTC(), "program_start_date": "2026-11-01"}).Error; err != nil {
 		t.Fatal(err)
 	}
 
 	// Payments page has top back link to agreement and no duplicate bottom link
-	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/payments", "", false)
+	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/payments", "", false, f.sessionCookie())
 	body = w.Body.String()
 	if !strings.Contains(body, `href="`+f.path+`/agreement"`) || !strings.Contains(body, "Volver al acuerdo") {
 		t.Fatalf("payments page missing top back link: %s", body)
@@ -1087,15 +1228,10 @@ func TestContactEditGuard(t *testing.T) {
 	initial.Email = "staffixed@example.com"
 	initial.Municipality = "San Juan"
 	initial.DateOfBirth = "2005-06-15"
-	res, err := f.store.Submit(t.Context(), f.entry.Token, initial, "")
+	res, err := f.store.Submit(t.Context(), f.entry.Token, f.cookie, initial, "")
 	if err != nil || res != links.Saved {
 		t.Fatalf("submit: %v, %v", res, err)
 	}
-	link, err := f.store.Lookup(t.Context(), f.entry.Token)
-	if err != nil || link == nil {
-		t.Fatal(err)
-	}
-
 	// Customer submits POST /edit changing only date_of_birth
 	editForm := url.Values{
 		"name":          {"Staff Fixed"},
@@ -1106,22 +1242,23 @@ func TestContactEditGuard(t *testing.T) {
 		"date_of_birth": {"2004-01-01"},
 		"gender":        {"Female"},
 	}
-	w := customerRequest(t, f.mux, http.MethodPost, f.path+"/edit", editForm.Encode(), false)
+	w := customerRequest(t, f.mux, http.MethodPost, f.path+"/edit", editForm.Encode(), false, f.sessionCookie())
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != f.path+"/agreement" {
 		t.Fatalf("POST /edit: %d, loc %s", w.Code, w.Header().Get("Location"))
 	}
 
-	link, err = f.store.Lookup(t.Context(), f.entry.Token)
-	if err != nil || link == nil {
+	sess, err := f.store.LookupSession(t.Context(), f.entry.Token, f.cookie)
+	if err != nil || sess == nil || sess.Enrollment == nil {
 		t.Fatal(err)
 	}
+	link := sess.Enrollment
 	if link.DateOfBirth != "2004-01-01" {
 		t.Fatalf("link dob not updated: %s, want 2004-01-01", link.DateOfBirth)
 	}
 
 	// 2. In-flight and active attempt gate checks
 	contract := billing.Contract{
-		SourceLinkHash:   link.TokenHash,
+		EnrollmentID:     link.ID,
 		Reference:        rand.Text(),
 		PlanID:           "full",
 		PlanName:         "Pago Único",
@@ -1143,7 +1280,7 @@ func TestContactEditGuard(t *testing.T) {
 	}
 
 	// State = "open": edits allowed, agreement has edit link
-	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/agreement", "", false)
+	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/agreement", "", false, f.sessionCookie())
 	if !strings.Contains(w.Body.String(), "Editar información del estudiante") {
 		t.Fatalf("open state should allow edit link: %s", w.Body.String())
 	}
@@ -1154,12 +1291,12 @@ func TestContactEditGuard(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Agreement page has NO edit link
-		w = customerRequest(t, f.mux, http.MethodGet, f.path+"/agreement", "", false)
+		w = customerRequest(t, f.mux, http.MethodGet, f.path+"/agreement", "", false, f.sessionCookie())
 		if strings.Contains(w.Body.String(), "Editar información del estudiante") {
 			t.Fatalf("state %s should hide edit link: %s", blockedState, w.Body.String())
 		}
 		// GET /edit redirects to /payments
-		w = customerRequest(t, f.mux, http.MethodGet, f.path+"/edit", "", false)
+		w = customerRequest(t, f.mux, http.MethodGet, f.path+"/edit", "", false, f.sessionCookie())
 		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != f.path+"/payments" {
 			t.Fatalf("GET /edit in %s: %d, loc %s; want redirect to /payments", blockedState, w.Code, w.Header().Get("Location"))
 		}
@@ -1173,12 +1310,12 @@ func TestContactEditGuard(t *testing.T) {
 			"date_of_birth": {"2000-01-01"},
 			"gender":        {"Female"},
 		}
-		w = customerRequest(t, f.mux, http.MethodPost, f.path+"/edit", attemptForm.Encode(), false)
+		w = customerRequest(t, f.mux, http.MethodPost, f.path+"/edit", attemptForm.Encode(), false, f.sessionCookie())
 		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != f.path+"/payments" {
 			t.Fatalf("POST /edit in %s: %d, loc %s; want redirect to /payments", blockedState, w.Code, w.Header().Get("Location"))
 		}
-		var checkLink links.Link
-		f.db.Where("token_hash = ?", link.TokenHash).Take(&checkLink)
+		var checkLink links.Enrollment
+		f.db.Where("id = ?", link.ID).Take(&checkLink)
 		if checkLink.Name != "Staff Fixed" || checkLink.DateOfBirth != "2004-01-01" {
 			t.Fatalf("POST /edit during %s mutated link: %+v", blockedState, checkLink)
 		}
@@ -1188,7 +1325,7 @@ func TestContactEditGuard(t *testing.T) {
 	if err := f.db.Model(&billing.CheckoutAttempt{}).Where("id = ?", attempt.ID).Update("state", "creating").Error; err != nil {
 		t.Fatal(err)
 	}
-	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/agreement", "", false)
+	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/agreement", "", false, f.sessionCookie())
 	if !strings.Contains(w.Body.String(), "Editar información del estudiante") {
 		t.Fatalf("creating state should allow edit link: %s", w.Body.String())
 	}
@@ -1200,9 +1337,9 @@ func TestContactEditGuard(t *testing.T) {
 	go func() {
 		defer close(txDone)
 		_ = f.db.Transaction(func(tx *gorm.DB) error {
-			var lockedLink links.Link
+			var lockedLink links.Enrollment
 			if err := tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
-				Where("token_hash = ?", link.TokenHash).Take(&lockedLink).Error; err != nil {
+				Where("id = ?", link.ID).Take(&lockedLink).Error; err != nil {
 				return err
 			}
 			close(lockHeld)
@@ -1223,7 +1360,7 @@ func TestContactEditGuard(t *testing.T) {
 			"date_of_birth": {"2002-02-02"},
 			"gender":        {"Female"},
 		}
-		cw := customerRequest(t, f.mux, http.MethodPost, f.path+"/edit", concurrentForm.Encode(), false)
+		cw := customerRequest(t, f.mux, http.MethodPost, f.path+"/edit", concurrentForm.Encode(), false, f.sessionCookie())
 		editDone <- cw.Code
 	}()
 
@@ -1242,7 +1379,7 @@ func TestContactEditGuard(t *testing.T) {
 	if code != http.StatusSeeOther {
 		t.Fatalf("concurrent POST /edit after unlock: %d; want 303", code)
 	}
-	f.db.Where("token_hash = ?", link.TokenHash).Take(&link)
+	f.db.Where("id = ?", link.ID).Take(&link)
 	if link.DateOfBirth != "2002-02-02" {
 		t.Fatalf("concurrent edit did not persist: %s", link.DateOfBirth)
 	}

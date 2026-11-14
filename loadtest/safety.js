@@ -27,14 +27,18 @@ const redirectsTo = (suffix) => (r) => target(r).endsWith(suffix);
 
 let used = 0;
 function fresh() {
+  http.cookieJar().clear(ORIGIN);
   const i = used++;
   const token = tokenAt(tokens, i);
   if (!token) exec.test.abort(`safety.js needs a token at slice index ${i}; widen OFFSET/COUNT`);
   const form = formValues(OFFSET + i);
   return { token, path: `/customer/${token}`, form, body: encode(form) };
 }
+const start = (c) =>
+  expect(call('POST', `${c.path}/start`), 'POST /customer/:token/start sets cookie and redirects to forms', 303, {
+    'Location ends /forms': redirectsTo('/forms'),
+  });
 const submit = (c, opts = {}) => call('POST', c.path, { body: c.body, htmx: true, ...opts });
-
 export default function () {
   group('1 token boundaries', () => {
     const c = fresh();
@@ -60,7 +64,9 @@ export default function () {
     check(lengths, { 'every unusable-token response has the same body length (no existence oracle)': (s) => s.size === 1 });
 
     expect(call('HEAD', c.path), 'HEAD on an unused valid token reports usable', 200, { 'has empty body': (r) => !r.body });
-    expect(call('HEAD', `${c.path}/forms`), 'HEAD /forms on an unused valid token reports usable', 200, { 'has empty body': (r) => !r.body });
+    expect(call('HEAD', `${c.path}/forms`), 'HEAD /forms without a session cookie redirects to welcome', 303, {
+      'Location ends at welcome': redirectsTo(c.path),
+    });
     for (const method of ['PUT', 'DELETE']) {
       expectPlain(call(method, c.path), `${method} /customer/{token} is not routable`, 405);
     }
@@ -71,6 +77,7 @@ export default function () {
 
   group('2 draft endpoint', () => {
     const c = fresh();
+    start(c);
     const draft = (field, body) => call('POST', `${c.path}/draft/${field}`, { body, htmx: true });
     expect(draft('nope', encode({ nope: 'x' })), 'autosave of an unknown field is refused', 404);
     expect(draft('name', encode({ name: ['Ana Pérez', 'Luis Soto'] })), 'autosave with duplicate values is rejected', 400);
@@ -91,6 +98,7 @@ export default function () {
 
   group('3 final submit', () => {
     const c = fresh();
+    start(c);
     const invalid = {
       'email mismatch': { email_confirm: 'other@example.com' },
       'one-word name': { name: 'María' },
@@ -129,6 +137,7 @@ export default function () {
 
   group('4 concurrent final submit', () => {
     const c = fresh();
+    start(c);
     const responses = http.batch(Array.from({ length: 20 }, () => spec('POST', c.path, { body: c.body, htmx: true })));
     for (const r of responses) {
       expect(r, '20 racing identical submits are each accepted or replayed as a redirect, never 4xx/5xx', [200, 303], {
@@ -140,6 +149,7 @@ export default function () {
 
   group('5 agreement and payment gating', () => {
     const c = fresh();
+    start(c);
     const agreementPost = (form) => call('POST', `${c.path}/agreement`, { body: encode(form) });
     expect(call('GET', `${c.path}/agreement`), 'agreement before submit sends the customer back to the form', 303, { 'Location ends /forms': redirectsTo('/forms') });
     expect(call('GET', `${c.path}/payments`), 'payments before submit sends the customer back to the form', 303, { 'Location ends /forms': redirectsTo('/forms') });
@@ -189,6 +199,8 @@ export default function () {
   group('6 cross-origin protection', () => {
     const c = fresh();
     const blocked = (what, r) => expectPlain(r, `cross-origin ${what} is blocked before any handler runs`, 403, { 'says cross-origin': has('cross-origin request detected') });
+    blocked('start', call('POST', `${c.path}/start`, { headers: EVIL }));
+    start(c);
     blocked('autosave', call('POST', `${c.path}/draft/name`, { body: encode({ name: 'Evil Name' }), htmx: true, headers: EVIL }));
     blocked('final submit', submit(c, { headers: EVIL }));
     blocked('autosave with Origin only (no Sec-Fetch-Site)', call('POST', `${c.path}/draft/name`, { body: encode({ name: 'Evil Name' }), htmx: true, headers: { Origin: EVIL.Origin } }));

@@ -30,7 +30,7 @@ The browser side of the site: server-rendered templates, htmx 2.0.11 and six sma
 |---|---|
 | `management-live.js` | Opens `EventSource("/management/events")`; each message triggers `management-changed` on `body`. If the stream is closed (a deploy's 502, a sign-in redirect) it triggers one refresh, which sends a signed-out tab to login through `HX-Redirect`, and reconnects after 5 s. Does nothing unless `window.htmx` exists. |
 | `management-time.js` | `htmx.onLoad` rewrites every `<time datetime>` into the staff member's own time zone (`Intl.DateTimeFormat`, medium date, short time), including swapped-in rows. The server renders UTC. Settings does not load this script, so its "last changed" time stays UTC. |
-| `management.js` | Links page. Shows absolute URLs, create-and-copy, copy buttons, the copy toast, and errors in `#link-status` and `#link-refresh-error`. |
+| `management.js` | Links page. Shows absolute URLs, preserves open `<details>` states (enrollment trees and rename panels), rename drafts, and active input caret selection across HTMX swaps, copy buttons, the copy toast, and errors in `#link-status` and `#link-refresh-error`. |
 | `students.js` | Student pages. A click anywhere on a row opens it (ignoring controls, modifier keys and text selection); `showModal()` when content arrives in `#student-dialog-content`; forces a swap on a 422 from the field editor and blocks swaps for other 4xx and 5xx; moves focus to the first input or the edit link after a field swap; returns focus to the opening row on close; shows per-field, billing and roster errors ([Students](management/students.md)). |
 | `settings.js` | Settings page. Mirrors the lifetime slider into its `<output>` because the site CSP blocks inline handlers. |
 | `customer.js` | Customer form. Live email and confirmation check through `setCustomValidity`; ignores autosave responses for controls that left the page; keeps `aria-invalid` in step with the status region; focuses the first invalid field after a 422; on status 0 shows "No se guardó. Verifica tu conexión e intenta de nuevo." |
@@ -64,36 +64,13 @@ sequenceDiagram
 
 The stream carries no data and a burst of writes collapses into one event ([Live updates](live-updates.md)). Only refreshes write rows, so a slow older response cannot overwrite a newer one ([Management overview](management/overview.md)).
 
-## Create and copy a link
+## Copy a link
 
-The new link's URL exists only in the create response. `management.js` starts the clipboard write during the click, because Safari requires user activation before the response arrives, and hands the clipboard a promise that resolves once the URL is known.
+Every visible link row renders its permanent `/customer/{token}` URL and Copy link button directly. `management.js` handles clicks on `[data-copy-link]` by writing the link's absolute URL (`link.href`) to `navigator.clipboard` and showing the `#copy-toast` ("Link has been copied.") or a clipboard fallback notice in `#link-status`.
 
-```mermaid
-sequenceDiagram
-    actor Staff
-    participant H as htmx
-    participant J as management.js
-    participant C as Clipboard
-    participant A as POST /management/links
-    Staff->>H: click Create and copy link
-    H->>J: htmx:beforeRequest
-    J->>J: startAction, status says Creating link
-    J->>C: clipboard.write with a pending text/plain promise
-    H->>A: POST /management/links
-    A-->>H: result fragment with HX-Trigger management-changed
-    H->>H: append link-url and link-copy to link-tokens, fill link-status out of band
-    H->>J: htmx:afterRequest on the form
-    J->>C: resolve the promise with the absolute URL
-    H->>A: GET /management/ from the management-changed event
-    A-->>H: link-rows with hx-preserve placeholders
-    H->>H: move the real link-url and link-copy into their row
-    H->>J: htmx:afterSwap on generated-links
-    J->>Staff: toast says Link has been copied
-```
-
-- The toast (`#copy-toast`, `role="status"`) is shown only once the URL element is visible inside its row. If the clipboard is unavailable the message "Clipboard unavailable; copy the link below." goes into `#link-status` instead.
+- `POST /management/links`, `POST /management/links/{id}/rename`, `POST /management/links/{id}/cancel`, and `POST /management/enrollments/{id}/cancel` swap nothing (`hx-swap="none"`) and trigger `management-changed`, letting `#generated-links` refresh cleanly while `openDetails`, `renameDrafts`, and `focusedField` preserve expanded `<details>` link trees and in-progress renames.
 - `requestSequence` makes a newer action invalidate older feedback; live list refreshes do not count as actions.
-- Rows without a token (every link but the one just created) hold hidden placeholders, so only the creating session gets a URL and a copy button. Saved rows render a relative path; the script replaces the link text with the absolute URL.
+- Saved rows render a relative path; `management.js` does not expose `link-tokens` or hidden placeholders.
 - Failed actions put the response text, or "Request failed. Please try again.", in `#link-status`; a failed list refresh writes `#link-refresh-error`.
 
 ## htmx configuration
@@ -122,7 +99,7 @@ The two sheets are standalone; customer pages never load `styles.css`.
 - **`styles.css`** (staff and login). Everything is scoped to `.management`: a light workspace on the logo's colors. Tokens (`--canvas`, `--surface`, `--brand`, `--rail`, `--bulb`, status tints) sit at the top, and `:root:has(> .management)` sets `color-scheme: light`. `.management-workspace` is a grid of a 15 rem deep-teal rail (`.management-sidebar`: brand, navigation, account) and main; `--bulb` yellow appears only as the current-page marker, rail focus rings and the skip link. Below 60 rem the rail becomes a top bar with a scrolling navigation row. Controls are 36 px for mouse users and 44 px under `pointer: coarse`. A student opens as a full-height sheet from the right edge. Sections follow the pages: shell, buttons, live regions and copy toast, link list, program start and lifetime forms, sign in, students and sheet, dashboard.
 - **`customer.css`** (customer pages). Tokens on `.customer` (`--ink`, `--teal`, `--bulb`, `--danger`), `color-scheme: light`, mobile-first single column (`--column` 32 rem, 38 rem on the agreement, 62 rem on payments) with breakpoints at 40 rem and 56 rem. Sections: page frame, progress steps, type, notices, buttons, welcome, student form, checkbox and radio, agreement, plans, funded readout, payment return.
 - **No theme switch.** Neither sheet has a `prefers-color-scheme` rule: both are light only.
-- **Fonts.** Staff and customer pages load Figtree (400 to 700) and Marcellus for the brand name. All use `display=swap` and fall back to system stacks. Staff monospace text (one-time link URL, billing review codes) uses a system monospace stack because the CSP allows no second family.
+- **Fonts.** Staff and customer pages load Figtree (400 to 700) and Marcellus for the brand name. All use `display=swap` and fall back to system stacks. Staff monospace text (link URLs, billing review codes) uses a system monospace stack because the CSP allows no second family.
 
 ## Site CSP implications
 
@@ -157,7 +134,7 @@ The same middleware sends `Strict-Transport-Security: max-age=31536000` (no `inc
 | Surface | Without JavaScript |
 |---|---|
 | Create link | Plain form post; the full page shows the new URL on its row as a relative path. The Copy link button does nothing, so staff copy the link by hand. |
-| Cancel link, cancel all | Plain form posts, with no confirmation prompt (`hx-confirm` needs htmx). |
+| Cancel link, cancel enrollment | Plain form posts, with no confirmation prompt (`hx-confirm` needs htmx). |
 | Start date, settings | Ordinary forms; they never used htmx. |
 | Student filters | GET form with a `<noscript>` Apply button. |
 | Student rows and field edits | Row links open the details page; Edit links use `?edit=1`; a save posts and answers 303 to `?saved={field}`. |
@@ -178,12 +155,12 @@ The same middleware sends `Strict-Transport-Security: max-age=31536000` (no `inc
 - `main.go`: `assets`, `newServer`
 - `static/management-live.js`: `EventSource`, `management-changed`, `listenForChanges`
 - `static/management-time.js`: `onLoad`, `Intl.DateTimeFormat`
-- `static/management.js`: `ClipboardItem`, `requestSequence`, `startAction`, `showCreationFeedback`, `link-tokens`
+- `static/management.js`: `requestSequence`, `startAction`, `syncLinkRows`, `showCopyError`, `confirmCopy`, `openDetails`, `renameDrafts`, `focusedField`
 - `static/students.js`: `showModal`, `requestError`, `htmx:beforeSwap`
 - `static/customer.js`: `setCustomValidity`, `reconcileEmails`, `ignoreDetachedDraft`
 - `static/styles.css`: `color-scheme`, `management-workspace`, `management-sidebar`, `prefers-reduced-motion`, `copy-toast`
 - `static/customer.css`: `color-scheme`, `--column`, `prefers-reduced-motion`
-- `internal/management/templates/index.html`: `hx-preserve`, `copy-toast`, `hx-confirm`, `management-skip-link`
+- `internal/management/templates/index.html`: `copy-toast`, `hx-confirm`, `management-skip-link`
 - `internal/management/templates/students.html`: `student-dialog`, `noscript`
 - `internal/management/templates/settings.html`: `settings.js`
 - `internal/customer/templates/index.html`: `htmx-config`, `includeIndicatorStyles`, `hx-trigger`, `customer.js`

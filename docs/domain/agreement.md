@@ -16,15 +16,15 @@ sequenceDiagram
     Handler->>DB: settings.Current
     Handler-->>Customer: terms, date, unchecked box
     Customer->>Handler: POST accept_terms=yes and program_start_date
-    Handler->>Store: AcceptTerms(token, shownStartDate)
-    Store->>DB: UPDATE links SET terms_accepted_at = now() and program_start_date WHERE submitted, not yet accepted, and shown date equals the settings row read FOR SHARE
+    Handler->>Store: AcceptTerms(linkToken, cookieToken, shownStartDate)
+    Store->>DB: UPDATE enrollments SET terms_accepted_at = now() and program_start_date WHERE submitted, not yet accepted, and shown date equals the settings row read FOR SHARE
     alt one row updated
-        Store-->>Handler: accepted link
+        Store-->>Handler: accepted enrollment
         Handler-->>Customer: 303 to /payments
     else no row updated
-        Store->>DB: Lookup again
+        Store->>DB: re-read activeSubmitted
         alt already accepted meanwhile
-            Store-->>Handler: existing link, first values kept
+            Store-->>Handler: existing enrollment, first values kept
             Handler-->>Customer: 303 to /payments
         else date differs
             Store-->>Handler: ErrProgramStartChanged
@@ -56,10 +56,10 @@ Acceptance time is the database clock (`now()`). The agreement text is static in
 | Step | Value |
 |---|---|
 | Staff save a date | `settings.program_start_date`, `YYYY-MM-DD` |
-| Customer accepts | `links.program_start_date` is the snapshot ([Links](links.md)) |
-| Funding runs `links.Enroll` | `students.cohort = left(links.program_start_date, 7)`, for example `2026-11` |
+| Customer accepts | `enrollments.program_start_date` is the snapshot ([Links](links.md)) |
+| Funding runs `links.Enroll` | `students.cohort = left(enrollments.program_start_date, 7)`, for example `2026-11` |
 
-The cohort comes from the Link's snapshot, never the live settings row. Because acceptance requires a valid date, every Student gets a valid cohort.
+The cohort comes from the Enrollment's snapshot, never the live settings row. Because acceptance requires a valid date, every Student gets a valid cohort.
 
 ## The settings row
 
@@ -72,8 +72,8 @@ erDiagram
         timestamptz updated_at
         text updated_by
     }
-    links {
-        bytea token_hash PK
+    enrollments {
+        bigint id PK
         timestamptz terms_accepted_at
         text program_start_date "accepted snapshot"
         timestamptz expires_at
@@ -82,11 +82,10 @@ erDiagram
         bigint id PK
         text cohort "YYYY-MM"
     }
-    settings ||..o{ links : "read FOR SHARE by AcceptTerms"
-    links ||--o| students : "Enroll copies left(program_start_date, 7)"
-```
+    settings ||..o{ enrollments : "read FOR SHARE by AcceptTerms"
+    enrollments ||--o| students : "Enroll copies left(program_start_date, 7)"
 
-The `settings` to `links` line is logical, not a foreign key. The whole-database picture is in [Data model](../data-model.md).
+The `settings` to `enrollments` line is logical, not a foreign key. The whole-database picture is in [Data model](../data-model.md).
 
 ```mermaid
 flowchart LR
@@ -97,7 +96,7 @@ flowchart LR
     ROW -->|"Current"| M["management: link expiry at create, date on /management/"]
     ROW -->|"Current"| C["customer agreement page: displayed date"]
     ROW -->|"FOR SHARE subquery"| AT["links.Store.AcceptTerms"]
-    AT --> SNAP["links.program_start_date and terms_accepted_at"]
+    AT --> SNAP["enrollments.program_start_date and terms_accepted_at"]
     SNAP -->|"left(program_start_date, 7)"| EN["links.Enroll: students.cohort"]
 ```
 
@@ -128,7 +127,7 @@ Page structure and fragments are in [Management overview](../management/overview
 
 ## Source
 
-- `internal/links/links.go`: `Store.AcceptTerms`, `ErrProgramStartChanged`, `Enroll`, `Store.Lookup`
+- `internal/links/links.go`: `Store.AcceptTerms`, `ErrProgramStartChanged`, `Enroll`, `Store.LookupSession`
 - `internal/settings/settings.go`: `Settings`, `Store.Current`, `Store.SetLinkLifetimeDays`, `Store.SetProgramStartDate`, `ParseProgramStartDate`, `MinLinkLifetimeDays`, `MaxLinkLifetimeDays`, `DefaultLinkLifetimeDays`, `ErrProgramStartDate`, `ErrLinkLifetimeRange`
 - `internal/customer/agreement.go`: `agreement`
 - `internal/customer/templates/agreement.html`: `accept_terms`, `program_start_date`

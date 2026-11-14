@@ -15,7 +15,7 @@ import (
 // Dashboard money must count only what funded contracts owe, once, and agree with
 // the per-student rules for overdue, failed and in-review.
 func TestOverviewCountsOnlyFundedTuition(t *testing.T) {
-	db, svc, hashA, _ := setupTestEnvironment(t, newMockStripeServer())
+	db, svc, idA, _ := setupTestEnvironment(t, newMockStripeServer())
 	now := time.Now().UTC()
 	const day = 24 * time.Hour
 	at := func(d time.Duration) *time.Time { v := now.Add(d); return &v }
@@ -25,19 +25,20 @@ func TestOverviewCountsOnlyFundedTuition(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	student := func() []byte {
+	student := func() uint64 {
 		t.Helper()
 		hash := make([]byte, 32)
 		rand.Read(hash)
 		details := students.Details{Name: "Extra Student"}
-		create(&links.Link{TokenHash: hash, Details: details, ExpiresAt: now.Add(7 * day)})
-		s := students.Student{SourceLinkHash: hash, Details: details, IsActive: true, Cohort: "2026-11"}
+		e := links.Enrollment{LinkID: seedLink(t, db), SessionHash: hash, Details: details, ExpiresAt: now.Add(7 * day)}
+		create(&e)
+		s := students.Student{EnrollmentID: &e.ID, Details: details, IsActive: true, Cohort: "2026-11"}
 		create(&s)
-		return hash
+		return e.ID
 	}
-	contract := func(sourceHash []byte, fundedAt *time.Time, attention *string) uint64 {
+	contract := func(enrollmentID uint64, fundedAt *time.Time, attention *string) uint64 {
 		t.Helper()
-		c := billing.Contract{SourceLinkHash: sourceHash, Reference: rand.Text(), PlanID: "three", PlanName: "Plan de 3 Pagos Mensuales",
+		c := billing.Contract{EnrollmentID: enrollmentID, Reference: rand.Text(), PlanID: "three", PlanName: "Plan de 3 Pagos Mensuales",
 			InstallmentCount: 3, TotalCents: 62500, FundedAt: fundedAt, ReviewReason: attention}
 		create(&c)
 		return c.ID
@@ -55,7 +56,7 @@ func TestOverviewCountsOnlyFundedTuition(t *testing.T) {
 	settled := func(o *billing.Obligation) { o.FirstSettledAt = at(-35 * day) }
 
 	// A: funded recently. #2 is overdue and failed, #3 is due soon and in review.
-	a := contract(hashA, at(-5*day), nil)
+	a := contract(idA, at(-5*day), nil)
 	obligation(a, "tuition", 1, at(-35*day), 0, settled)
 	obligation(a, "tuition", 2, at(-10*day), 20000, func(o *billing.Obligation) { o.FailureOrActionRequired = true })
 	obligation(a, "tuition", 3, at(10*day), 20000, review)

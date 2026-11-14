@@ -3,7 +3,6 @@
 package management
 
 import (
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -24,52 +23,52 @@ import (
 // pinSeq hands each enrolled test student its own PIN: the roster refuses duplicates.
 var pinSeq atomic.Int32
 
-func enrollStudent(t *testing.T, a *app, name string) (students.Student, links.Link) {
+func enrollStudent(t *testing.T, a *app, name string) (students.Student, links.Enrollment) {
 	t.Helper()
-	entry, err := a.store.Create(t.Context(), "staff", later)
+	entry, err := a.store.CreateLink(t.Context(), "staff", "", later)
 	if err != nil {
 		t.Fatal(err)
+	}
+	started, cookie, err := a.store.StartEnrollment(t.Context(), entry.Token, "")
+	if err != nil || started == nil {
+		t.Fatalf("start enrollment: %+v, %v", started, err)
 	}
 	pin := fmt.Sprintf("%06d", 100000+pinSeq.Add(1))
-	if saved, err := a.store.Submit(t.Context(), entry.Token, contactDetails(name), pin); err != nil || saved != links.Saved {
+	if saved, err := a.store.Submit(t.Context(), entry.Token, cookie, contactDetails(name), pin); err != nil || saved != links.Saved {
 		t.Fatalf("enroll student: submitted = %v, error = %v", saved, err)
 	}
-	acceptAgreement(t, a, entry.Token)
-	hash, err := hex.DecodeString(entry.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	acceptAgreement(t, a, entry.Token, cookie)
 	now := time.Now().UTC()
 	if err := a.db.WithContext(t.Context()).Transaction(func(tx *gorm.DB) error {
-		return links.Enroll(tx, hash, now)
+		return links.Enroll(tx, started.ID, now)
 	}); err != nil {
 		t.Fatalf("enroll student: %v", err)
 	}
 	var record students.Student
-	if err := a.db.WithContext(t.Context()).Where("source_link_hash = ?", hash).Take(&record).Error; err != nil {
+	if err := a.db.WithContext(t.Context()).Where("enrollment_id = ?", started.ID).Take(&record).Error; err != nil {
 		t.Fatal(err)
 	}
-	var source links.Link
-	if err := a.db.WithContext(t.Context()).Where("token_hash = ?", hash).Take(&source).Error; err != nil {
+	var source links.Enrollment
+	if err := a.db.WithContext(t.Context()).Where("id = ?", started.ID).Take(&source).Error; err != nil {
 		t.Fatal(err)
 	}
 	return record, source
 }
 
-// acceptAgreement accepts token's submitted agreement, as checkout requires before Enroll;
+// acceptAgreement accepts the submitted agreement, as checkout requires before Enroll;
 // the start date's month becomes the student's cohort.
-func acceptAgreement(t *testing.T, a *app, token string) {
+func acceptAgreement(t *testing.T, a *app, linkToken, cookieToken string) {
 	t.Helper()
 	const programStart = "2026-11-10"
 	if err := settings.New(a.db).SetProgramStartDate(t.Context(), programStart, "staff"); err != nil {
 		t.Fatal(err)
 	}
-	if accepted, err := a.store.AcceptTerms(t.Context(), token, programStart); err != nil || accepted == nil {
+	if accepted, err := a.store.AcceptTerms(t.Context(), linkToken, cookieToken, programStart); err != nil || accepted == nil {
 		t.Fatalf("accept agreement: link=%+v, err=%v", accepted, err)
 	}
 }
 
-func requireStudentState(t *testing.T, a *app, original students.Student, source links.Link, other students.Student, details students.Details) {
+func requireStudentState(t *testing.T, a *app, original students.Student, source links.Enrollment, other students.Student, details students.Details) {
 	t.Helper()
 	want := original
 	want.Details = details
@@ -81,8 +80,8 @@ func requireStudentState(t *testing.T, a *app, original students.Student, source
 	if err != nil || unrelated == nil || !reflect.DeepEqual(*unrelated, other) {
 		t.Fatalf("unrelated student changed: %+v, error = %v; want %+v", unrelated, err, other)
 	}
-	var snapshot links.Link
-	if err := a.db.WithContext(t.Context()).Where("token_hash = ?", source.TokenHash).Take(&snapshot).Error; err != nil {
+	var snapshot links.Enrollment
+	if err := a.db.WithContext(t.Context()).Where("id = ?", source.ID).Take(&snapshot).Error; err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(snapshot, source) {
@@ -210,7 +209,7 @@ func TestStudentReadValidateSaveReload(t *testing.T) {
 	}
 	requireStudentRow(t, body, original)
 	requireStudentRow(t, body, other)
-	if strings.Contains(body, hex.EncodeToString(original.SourceLinkHash)) || strings.Contains(body, "/customer/") ||
+	if strings.Contains(body, fmt.Sprintf("%x", source.SessionHash)) || strings.Contains(body, "/customer/") ||
 		strings.Contains(body, "/static/management.js") {
 		t.Fatalf("archive leaked source access or loaded link-only script: %s", body)
 	}
@@ -367,7 +366,7 @@ func TestStudentHTMXFragmentsModalAndEscaping(t *testing.T) {
 				}
 				requireStudentState(t, a, original, source, other, expected)
 
-				form := url.Values{"value": {edit.raw}, "source_link_hash": {"ignored"}, "id": {fmt.Sprint(other.ID)}}
+				form := url.Values{"value": {edit.raw}, "enrollment_id": {"ignored"}, "id": {fmt.Sprint(other.ID)}}
 				query = "?modal=1&value=Query+must+not+save"
 				if modal {
 					form.Set("modal", "1")
@@ -456,7 +455,7 @@ func TestStudentRejectedRequestsCannotMutate(t *testing.T) {
 	path := fmt.Sprintf("/management/students/%d", original.ID)
 	fieldPath := path + "/fields/name"
 
-	for _, key := range []string{"id", "source_link_hash", "created_at", "missing", "name = 'changed'; DROP TABLE students;--"} {
+	for _, key := range []string{"id", "enrollment_id", "created_at", "missing", "name = 'changed'; DROP TABLE students;--"} {
 		t.Run("unknown field "+key, func(t *testing.T) {
 			for _, method := range []string{http.MethodGet, http.MethodPost} {
 				res, body := a.send(t, staff, method, path+"/fields/"+url.PathEscape(key), url.Values{"value": {"Changed student"}}, htmxHeader)
@@ -593,37 +592,43 @@ func TestOnlyPaidCustomersAppearInStudentsTab(t *testing.T) {
 	staff := a.signIn(t, "staff")
 
 	// Customer 1: submits form, unpaid (Awaiting payment)
-	entry1, err := a.store.Create(t.Context(), "staff", later)
+	entry1, err := a.store.CreateLink(t.Context(), "staff", "", later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, c1, err := a.store.StartEnrollment(t.Context(), entry1.Token, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	details1 := contactDetails("Unpaid Customer")
 	details1.Email = "unpaid.secret@example.com"
 	details1.Phone = "+17875551111"
-	if saved, err := a.store.Submit(t.Context(), entry1.Token, details1, "123456"); err != nil || saved != links.Saved {
+	if saved, err := a.store.Submit(t.Context(), entry1.Token, c1, details1, "123456"); err != nil || saved != links.Saved {
 		t.Fatalf("submit customer 1: %v, %v", saved, err)
 	}
 
 	// Customer 2: submits form and pays (enrolled via links.Enroll)
-	entry2, err := a.store.Create(t.Context(), "staff", later)
+	entry2, err := a.store.CreateLink(t.Context(), "staff", "", later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2, c2, err := a.store.StartEnrollment(t.Context(), entry2.Token, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	details2 := contactDetails("Paid Customer")
 	details2.Email = "paid.student@example.com"
 	details2.Phone = "+17875552222"
-	if saved, err := a.store.Submit(t.Context(), entry2.Token, details2, "654321"); err != nil || saved != links.Saved {
+	if saved, err := a.store.Submit(t.Context(), entry2.Token, c2, details2, "654321"); err != nil || saved != links.Saved {
 		t.Fatalf("submit customer 2: %v, %v", saved, err)
 	}
-	acceptAgreement(t, a, entry2.Token)
-	hash2, _ := hex.DecodeString(entry2.ID)
+	acceptAgreement(t, a, entry2.Token, c2)
 	now := time.Now().UTC()
 	if err := a.db.WithContext(t.Context()).Transaction(func(tx *gorm.DB) error {
-		return links.Enroll(tx, hash2, now)
+		return links.Enroll(tx, e2.ID, now)
 	}); err != nil {
 		t.Fatalf("enroll customer 2: %v", err)
 	}
-
 	// GET /management/students: lists ONLY the paid one
 	res, body := a.send(t, staff, http.MethodGet, "/management/students", nil, nil)
 	if res.StatusCode != http.StatusOK {

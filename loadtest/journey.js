@@ -4,7 +4,7 @@ import http from 'k6/http';
 import exec from 'k6/execution';
 import { sleep } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
-import { baseOptions, call, completeToPayments, expect, has, loadTokens, OFFSET, randomToken, summarize, tokenAt } from './lib.js';
+import { ORIGIN, baseOptions, call, completeToPayments, expect, has, loadTokens, OFFSET, randomToken, summarize, tokenAt } from './lib.js';
 
 // Only real failures count in http_req_failed; 404/409/422 are not expected anywhere in this journey.
 http.setResponseCallback(http.expectedStatuses({ min: 200, max: 399 }));
@@ -52,7 +52,8 @@ function repeatTraffic(token) {
 }
 
 export default function () {
-  // One link = one customer: iterationInTest is unique per scenario, so every token is used once.
+  // Clear VU cookies so a reusable token never resumes a prior customer's session.
+  http.cookieJar().clear(ORIGIN);
   const i = exec.scenario.iterationInTest;
   const token = tokenAt(tokens, i);
   if (!token) {

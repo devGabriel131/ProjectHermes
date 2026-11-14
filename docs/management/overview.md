@@ -24,13 +24,13 @@ flowchart TD
 
 | Route | Full page (no HTMX) | HTMX answer | Notes |
 |---|---|---|---|
-| `GET /management/{$}` | `index.html` | `link-rows` | Links tab. Hides Trash links and links paid more than 24 h ago; also shows the program start date form. `?program-start-date-saved` adds the notice "Fecha de comienzo guardada." |
-| `GET /management/trash` | `index.html` (Trash) | `link-rows` | Canceled and expired links only. |
+| `GET /management/{$}` | `index.html` | `link-rows` | Links tab. Hides trashed links without active enrollments and enrollments paid more than 24 h ago; also shows the program start date form. `?program-start-date-saved` adds the notice "Fecha de comienzo guardada." |
+| `GET /management/trash` | `index.html` (Trash) | `link-rows` | Canceled and expired links and enrollments. |
 | `POST /management/program-start-date` | 303 to `/management/?program-start-date-saved`, or 422 `index.html` | none | Ordinary form post. Semantics in [Agreement](../domain/agreement.md). |
 | `POST /management/links` | `index.html`, new link's URL on its row | `result` + `HX-Trigger` | Notice "Link created." |
+| `POST /management/links/{id}/rename` | `index.html` | `result` + `HX-Trigger`; 204 when the ID names no link | Trims whitespace, rejects empty/over-100-rune/control names with 422; no-op preserves existing row and notice "Link renamed." |
 | `POST /management/links/{id}/cancel` | `index.html` | `result` + `HX-Trigger`; 204 when the ID names no link | Notice "Link canceled." or "Link can no longer be canceled." |
-| `POST /management/links/cancel` | `index.html` | `result` + `HX-Trigger` | Cancels every cancelable link. |
-| `GET /management/settings` | `settings.html` | same | `?saved` adds the lifetime notice "Saved."; `?bootcamp-date-saved` adds it under the bootcamp date. |
+| `POST /management/enrollments/{id}/cancel` | `index.html` | `result` + `HX-Trigger`; 409 on `ErrCancelBlocked`; 204 when the ID names no enrollment | Delegates to `billing.Service.CancelEnrollment`; notices "Enrollment canceled.", "Expired PIN cleared.", or "Enrollment can no longer be canceled." |
 | `POST /management/settings` | 303 to `/management/settings?saved`, or 422 `settings.html` | none | Ordinary form post; the link lifetime only. |
 | `POST /management/bootcamp-date` | 303 to `/management/settings?bootcamp-date-saved`, or 422 `settings.html` "Enter a valid date (YYYY-MM-DD)." | none | Ordinary form post. Saves `settings.bootcamp_date`, the next Bootcamp Militarizado, which ProjectHephaestus prints on its employer letter and treats as over once the day has passed. |
 | `GET /management/dashboard` | `dashboard.html` | `dashboard-content` | [Dashboard](dashboard.md). |
@@ -50,7 +50,7 @@ All staff templates are parsed together from `templates/*.html`, so `header`, `n
 
 | File | Defines |
 |---|---|
-| `index.html` | `index.html`, `link`, `link-rows`, `link-url`, `link-copy`, `result`, `header`, `navigation`, `link-icon`, `trash-icon` |
+| `index.html` | `index.html`, `link`, `link-rows`, `result`, `header`, `navigation`, `link-icon`, `trash-icon` |
 | `students.html` | `students.html`, `student-records`, `student-row`, `student-detail`, `student-field`, `student-save`, `billing-time`, `student-billing`, `student-billing-portal` |
 | `dashboard.html` | `dashboard.html`, `dashboard-content` |
 | `settings.html` | `settings.html` |
@@ -73,7 +73,7 @@ Every live region re-fetches itself on the `management-changed` event, which com
 | Dashboard | `.dashboard` | `GET /management/dashboard` | `dashboard-content` | inner |
 
 - **Only refreshes write rows.** Link actions (`acknowledge`) answer with a notice plus `HX-Trigger: management-changed`, and the cancel forms use `hx-swap="none"`. The list is replaced only by a GET, so a slower, older render never overwrites a newer one.
-- **Create.** The create response (`result`) carries the new link's one-time URL and copy button. htmx appends them to the hidden `#link-tokens`, and an out-of-band swap fills `#link-status`. The refreshed rows hold hidden `hx-preserve` placeholders (`link-url-{id}`, `link-copy-{id}`) that htmx replaces with the real elements from `#link-tokens`. The token is never stored, so this is the only moment it can reach the page.
+- **Create.** `POST /management/links` answers `result` (an out-of-band swap filling `#link-status`) with `HX-Trigger: management-changed`; the refreshed rows render each link's permanent `/customer/{token}` URL and Copy link button directly.
 - **Dialogs.** A student row link loads `student-detail` into `#student-dialog-content` and `students.js` opens the `<dialog>`; see [Students](students.md).
 - **Signed out.** An HTMX request without a valid session gets 401 and `HX-Redirect: /management/`, which sends the whole window to the login page rather than swapping a login form into a fragment. `HX-Refresh` is customer-only; management 404s and 500s are plain text, and staff pages do not swap 4xx or 5xx responses (`management.js` shows the server text in a status element; `students.js` shows plain-text server replies for billing actions and fixed client messages for field or roster failures).
 
@@ -81,9 +81,8 @@ Every live region re-fetches itself on the `management-changed` event, which com
 
 | Surface | Limit |
 |---|---|
-| `POST /management/program-start-date`, `/management/bootcamp-date` and `/management/settings` body | 1 KiB (`http.MaxBytesReader`) |
+| `POST /management/links/{id}/rename`, `/management/program-start-date`, `/management/bootcamp-date` and `/management/settings` body | 1 KiB (`http.MaxBytesReader`) |
 | `POST .../fields/{field}` body | 4 KiB; larger is 413 "This value is too large.", unreadable is 400 |
-| Handler database work | 5 s context per handler |
 | Billing actions (reconcile, reinstatement, portal, invoice) | No 5 s handler context. Each billing method bounds its own provider work with `providerBudget` (8 s, under the 10 s server write timeout) |
 | `{id}` and `{obligation}` path values | Must parse as a positive PostgreSQL BIGINT, else 404 without a query |
 
@@ -91,7 +90,7 @@ Other POST handlers read no body. `GET /management/events` clears its own write 
 
 ## Lists and live regions
 
-- **Unpaginated.** `links.Store.List` returns every link, oldest first, and `list` filters by tab in Go; `students.Store.List` returns every matching student, newest first. Both carry `ponytail` ceilings; see [Go-live](../go-live.md).
+- **Unpaginated.** `links.Store.ListGroups` returns every link with its enrollments, oldest first, and `list` filters by tab in Go; `students.Store.List` returns every matching student, newest first. Both carry `ponytail` ceilings; see [Go-live](../go-live.md).
 - **Pages with a stream.** Links, Trash, students list, student details and the dashboard load `management-live.js`. Settings loads only `settings.js`, login loads no script; neither opens a stream.
 - **Settings publish no event.** `settings.Store` has no `changed` callback, so a start date, bootcamp date or lifetime write does not refresh other tabs.
 - **Auth is checked when the stream connects.** A tab signed out later keeps its open stream; the next event triggers a refresh, which the 401 plus `HX-Redirect` turns into the login page.
@@ -99,23 +98,23 @@ Other POST handlers read no body. `GET /management/events` clears its own write 
 ## Deliberate choices
 
 - **`Vary: HX-Request` with `no-store`.** The same URL returns a page or a fragment; without `Vary` a cache could serve the wrong one.
-- **Hidden `#link-tokens` with `hx-preserve` placeholders.** Lets the one-time URL survive refreshes when only refreshes write rows.
+- **Permanent link URLs on rows.** Links stay copyable from any browser session while visible; individual customer sessions use a separate `enrollment_session` cookie.
 - **A catch-up event on every connect.** It costs one extra rows GET per page load but repairs pages that missed events while disconnected.
 - **Links counted in Go on the dashboard.** Acceptable over the unpaginated list at current scale.
 
 ## Source
 
 - `main.go`: `newServer`, `managementMux`, `RegisterRoutes`
-- `internal/management/management.go`: `RegisterRoutes`, `render`, `htmx`, `pageData`, `settingsData`, `acknowledge`, `MaxBytesReader`
+- `internal/management/management.go`: `RegisterRoutes`, `render`, `htmx`, `pageData`, `settingsData`, `acknowledge`, `cancelEnrollmentNotice`, `MaxBytesReader`
 - `internal/management/students.go`: `registerStudentRoutes`, `billingFailure`, `pathID`
 - `internal/management/dashboard.go`: `registerDashboardRoutes`
-- `internal/management/templates/index.html`: `link-rows`, `link-url`, `link-copy`, `result`, `link-tokens`, `navigation`
+- `internal/management/templates/index.html`: `link-rows`, `result`, `navigation`
 - `internal/management/templates/students.html`: `student-records`, `student-detail`, `student-billing`
 - `internal/management/templates/dashboard.html`: `dashboard-content`
 - `internal/management/templates/settings.html`: `settings.js`
 - `internal/auth/http.go`: `Require`
-- `internal/billing/billing.go`: `providerBudget`
+- `internal/billing/billing.go`: `providerBudget`, `ErrCancelBlocked`
+- `internal/billing/cancel.go`: `CancelEnrollment`
 - `internal/live/live.go`: `Feed`
-- `internal/links/links.go`: `List`, `Archived`, `Trashed`
-- `internal/students/students.go`: `List`
+- `internal/links/links.go`: `ListGroups`, `Archived`, `Trashed`, `RenameLink`, `CancelLink`, `CancelEnrollmentTx`
 - `static/management-live.js`: `management-changed`
