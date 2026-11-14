@@ -125,7 +125,7 @@ Stripe makes the first attempt when an armed invoice finalizes. When it fails (`
 | Reviewed obligations are skipped | A hold stays a hold, as when arming |
 | `store` clears `next_retry_at` as soon as the invoice stops failing | A paid invoice is never retried |
 
-The retry runs inside `reconcileContract`, so staff Reconcile pays a due retry too, never earlier than its time. `nextSyncAt` wakes the contract at `next_retry_at`. Stripe's own Smart Retries, when enabled in the Dashboard, run independently of this `[EXTERNAL]`.
+The retry runs inside `reconcileContract`, so staff Reconcile pays a due retry too, never earlier than its time. `nextSyncAt` wakes the contract at `next_retry_at`, and when a webhook delivers the failure `store` pulls `next_sync_at` forward to it, so the retry does not wait for the next 15-minute recheck. Stripe's own Smart Retries, when enabled in the Dashboard, run independently of this `[EXTERNAL]`.
 
 ## Reinstatement fee
 

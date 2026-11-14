@@ -187,17 +187,25 @@ func (s *Service) store(ctx context.Context, l lease, read *invoiceRead, pays []
 				"failure_or_action_required": st.Failed,
 				"review_reason":              nullable(st.Review),
 			}
+			var retryAt *time.Time
 			switch {
 			case !st.Failed:
 				updates["next_retry_at"] = nil
 			case !read.o.FailureOrActionRequired: // newly failed: schedule the first retry
-				updates["next_retry_at"] = s.firstRetryAt(read.o, time.Now().UTC())
+				if retryAt = s.firstRetryAt(read.o, time.Now().UTC()); retryAt != nil {
+					updates["next_retry_at"] = *retryAt
+				}
 			}
 			if st.Settled && read.o.FirstSettledAt == nil {
 				updates["first_settled_at"] = read.settledAt // earliest authoritative settlement is kept
 			}
 			if err := tx.Model(&Obligation{}).Where("id = ?", read.o.ID).Updates(updates).Error; err != nil {
 				return err
+			}
+			if retryAt != nil { // an event-driven failure must not wait for the contract's next scheduled sync
+				if err := tx.Model(&Contract{}).Where("id = ? AND next_sync_at > ?", c.ID, *retryAt).Update("next_sync_at", *retryAt).Error; err != nil {
+					return err
+				}
 			}
 			changed = true
 			if st.Review != "" && st.Review != read.o.state().Review {

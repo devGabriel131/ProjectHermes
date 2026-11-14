@@ -772,8 +772,12 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 // delay up to the limit, a recovered card settles on the retry, and a decline only the payer can
 // fix is never charged again.
 func TestFailedInstallmentIsPaidAgain(t *testing.T) {
+	// Shorter than the 15-minute recheck of an unpaid contract, so a retry due before the contract's
+	// next scheduled sync is visible.
+	const retryDelay = time.Minute
 	type fixture struct {
 		mock *workerMockServer
+		db   *gorm.DB
 		o    billing.Obligation
 		// due makes the retry due now and runs one worker pass, then reloads o.
 		due func()
@@ -783,11 +787,16 @@ func TestFailedInstallmentIsPaidAgain(t *testing.T) {
 		t.Helper()
 		mock := newWorkerMockServer(time.Date(2026, time.November, 15, 4, 0, 0, 0, time.UTC), 20834)
 		db, _, contract, attempt := seedThreePlanCheckout(t)
-		svc := billingtest.New(t, db, mock.mux)
+		cfg := billingtest.Config()
+		cfg.RetryDelay = retryDelay
+		svc, err := billing.New(db, billingtest.Client(t, mock.mux), cfg, billingtest.Catalog(), nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
 		mustCreate(t, db, &billing.WebhookEvent{ID: "evt_checkout_completed", EventType: "checkout.session.completed", ResourceID: *attempt.StripeSessionID})
 		svc.DrainForTest(t.Context())
 
-		f := &fixture{mock: mock}
+		f := &fixture{mock: mock, db: db}
 		if err := db.Where("contract_id = ? AND number = 2", contract.ID).First(&f.o).Error; err != nil {
 			t.Fatalf("load installment 2: %v", err)
 		}
@@ -829,11 +838,16 @@ func TestFailedInstallmentIsPaidAgain(t *testing.T) {
 
 	t.Run("soft decline is retried up to the limit", func(t *testing.T) {
 		f := failed(t, "insufficient_funds")
-		if !f.o.FailureOrActionRequired || f.o.NextRetryAt == nil || !inAbout(*f.o.NextRetryAt, 24*time.Hour) || len(payCalls(f)) != 0 {
-			t.Fatalf("after the failure: failed=%v next=%v pays=%v, want failed, a retry about 24h out, no pay yet", f.o.FailureOrActionRequired, f.o.NextRetryAt, payCalls(f))
+		if !f.o.FailureOrActionRequired || f.o.NextRetryAt == nil || !inAbout(*f.o.NextRetryAt, retryDelay) || len(payCalls(f)) != 0 {
+			t.Fatalf("after the failure: failed=%v next=%v pays=%v, want failed, a retry about %v out, no pay yet", f.o.FailureOrActionRequired, f.o.NextRetryAt, payCalls(f), retryDelay)
+		}
+		var c billing.Contract
+		f.db.First(&c, f.o.ContractID)
+		if c.NextSyncAt != nil && c.NextSyncAt.After(*f.o.NextRetryAt) {
+			t.Fatalf("contract next sync %v is after the retry at %v: a failure delivered by event would wait for the next scheduled sync", c.NextSyncAt, f.o.NextRetryAt)
 		}
 		f.due()
-		if got := payCalls(f); !slices.Equal(got, keys(f, 1)) || f.o.RetryCount != 1 || f.o.NextRetryAt == nil || !inAbout(*f.o.NextRetryAt, 24*time.Hour) {
+		if got := payCalls(f); !slices.Equal(got, keys(f, 1)) || f.o.RetryCount != 1 || f.o.NextRetryAt == nil || !inAbout(*f.o.NextRetryAt, retryDelay) {
 			t.Fatalf("after retry 1: pays=%v count=%d next=%v, want %v, 1 and the next retry scheduled", got, f.o.RetryCount, f.o.NextRetryAt, keys(f, 1))
 		}
 		f.due()

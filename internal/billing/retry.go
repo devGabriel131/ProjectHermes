@@ -35,11 +35,12 @@ var retryableDeclines = []string{
 func (s *Service) retryDelay() time.Duration { return cmp.Or(s.cfg.RetryDelay, defaultRetryDelay) }
 
 // firstRetryAt is when a newly failed installment is paid again; nil when no retry applies.
-func (s *Service) firstRetryAt(o Obligation, now time.Time) any {
+func (s *Service) firstRetryAt(o Obligation, now time.Time) *time.Time {
 	if o.Kind != "tuition" || o.RetryCount >= maxRetries {
 		return nil
 	}
-	return now.Add(s.retryDelay())
+	at := now.Add(s.retryDelay())
+	return &at
 }
 
 // retryFailed pays again every failed, unreviewed installment whose retry is due.

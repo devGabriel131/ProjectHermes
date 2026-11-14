@@ -152,7 +152,7 @@ Staff Reconcile is therefore not charge-free: it can create and arm invoices (a 
 | A failed installment with a retry in the future | that `next_retry_at` |
 | A Payment without `balance_transaction_id` (fee and net not yet known) | now + 15 min |
 
-Other writers move the schedule: funding sets `next_sync_at = NULL` (due at once, see [Funding and scheduling](#funding-and-scheduling)), `touch` sets it to now (contact edits, `TouchContract`), a withdrawal sets it to now, a failed sync sets now + 1 min. The 15-minute rechecks and the daily audit are how Stripe changes are found when no webhook arrives.
+Other writers move the schedule: funding sets `next_sync_at = NULL` (due at once, see [Funding and scheduling](#funding-and-scheduling)), `touch` sets it to now (contact edits, `TouchContract`), a withdrawal sets it to now, a failed sync sets now + 1 min, and `store` pulls it forward to a retry it has just scheduled for an installment whose failure arrived by webhook. The 15-minute rechecks and the daily audit are how Stripe changes are found when no webhook arrives.
 
 ## Graceful stop
 
