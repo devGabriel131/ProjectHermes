@@ -70,7 +70,7 @@ async function runAll(browser, list, workers) {
 (async () => {
   const browser = await chromium.launch();
   let failed = await runAll(browser, sessions, CONCURRENCY);
-  if (failed.length) {
+  for (let pass = 0; pass < 2 && failed.length; pass++) {
     console.log(`retrying ${failed.length} one at a time`);
     failed = await runAll(browser, failed, 1);
   }
