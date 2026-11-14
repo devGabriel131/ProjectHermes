@@ -69,8 +69,10 @@ flowchart LR
   customer --> links
   customer --> logging
   customer --> payments
+  customer --> puertorico
   customer --> settings
   customer --> students
+  links --> puertorico
   links --> settings
   links --> students
   live --> logging
@@ -80,10 +82,12 @@ flowchart LR
   management --> payments
   management --> settings
   management --> students
+  payments --> puertorico
+  students --> puertorico
   billingtest --> billing
 ```
 
-`logging`, `payments`, `settings` and `students` import no other module package. `management` does not import `auth`: staff identity arrives as a function argument (see Wiring).
+`logging`, `puertorico` and `settings` import no other module package; `payments` and `students` import only `puertorico`. `management` does not import `auth`: staff identity arrives as a function argument (see Wiring).
 
 | Path | Responsibility |
 |---|---|
@@ -97,6 +101,7 @@ flowchart LR
 | `internal/logging` | JSON events, request correlation, slow-query summaries ([Observability](operations/observability.md)) |
 | `internal/management` | Staff pages and fragments ([Management overview](management/overview.md)) |
 | `internal/payments` | Plans, integer-cent installments, due-date schedules, money formatting |
+| `internal/puertorico` | The Puerto Rico civil time zone (`Zone`, UTC-4, no daylight saving time) |
 | `internal/settings` | The single settings row: link lifetime, program start date ([Agreement](domain/agreement.md)), bootcamp date |
 | `internal/students` | Student record, contact-field registry, municipalities ([Students](domain/students.md)) |
 | `internal/testdb` | One PostgreSQL schema per integration test ([Testing](testing.md)) |
@@ -119,7 +124,7 @@ All GET patterns also answer HEAD (`ServeMux` behavior). On the outer mux, a met
 | `POST /management/login` | SCS `LoadAndSave` | `auth` | Public, rate-limited |
 | `POST /management/logout` | SCS `LoadAndSave` | `auth` | Session optional; answers 303 to `/management/` |
 | `/management/` (any method) | `auth.Require`, then `logging.Routes(managementMux)` | `auth` guards, `management` serves | Signed-in staff |
-| `GET /customer/{token}`, `GET /customer/{token}/forms`, `POST /customer/{token}` | `withHeaders` | `customer` | Bearer token in the URL |
+| `GET /customer/{token}`, `POST /customer/{token}/start`, `GET /customer/{token}/forms`, `POST /customer/{token}` | `withHeaders` | `customer` | Bearer token in the URL |
 | `POST /customer/{token}/draft/{field}`, `POST /customer/{token}/pin` | `withHeaders` | `customer` | Bearer token |
 | `GET`/`POST /customer/{token}/edit`, `/agreement`, `/payments` | `withHeaders` | `customer` | Bearer token |
 | `GET /payments/return` | `withHeaders` | `customer` | Token-free; session id in query |
@@ -133,8 +138,8 @@ All GET patterns also answer HEAD (`ServeMux` behavior). On the outer mux, a met
 |---|---|
 | `GET /management/events` | `newServer` (`live.Feed`) |
 | `GET /management/{$}`, `GET /management/trash`, `POST /management/program-start-date`, `POST /management/bootcamp-date`, `POST /management/links`, `POST /management/links/{id}/rename`, `POST /management/links/{id}/cancel`, `POST /management/enrollments/{id}/cancel`, `GET`/`POST /management/settings` | `management.RegisterRoutes` |
-| `GET /management/dashboard` | `registerDashboardRoutes` |
-| `GET /management/students`, `GET /management/students/{id}`, `GET`/`POST /management/students/{id}/fields/{field}`, `GET /management/students/{id}/billing`, `POST .../billing/reconcile`, `POST .../billing/reinstatement`, `GET .../billing/invoices/{obligation}`, `POST .../billing/portal` | `registerStudentRoutes` |
+| `GET /management/dashboard` | `management.RegisterRoutes` |
+| `GET /management/students`, `GET /management/students/new`, `POST /management/students`, `POST /management/students/import`, `GET /management/students/{id}`, `GET`/`POST /management/students/{id}/fields/{field}`, `GET /management/students/{id}/billing`, `POST .../billing/reconcile`, `POST .../billing/reinstatement`, `GET .../billing/invoices/{obligation}`, `POST .../billing/portal` | `management.RegisterRoutes` |
 
 Behavior of each route is documented in [Management overview](management/overview.md), [Students](management/students.md) and [Dashboard](management/dashboard.md). Inside the management mux a wrong method gives 405 and an unknown path 404, both only after sign-in.
 
@@ -158,6 +163,7 @@ Session lifetime, auth-version revocation and the limiter are in [Staff authenti
 flowchart TD
   conn["http.Server\nReadHeaderTimeout 5 s, WriteTimeout 10 s, IdleTimeout 60 s\nErrorLog becomes http_server_error"]
   req["logging.Requests\nrequest ID, status capture, one request_failed"]
+  sec["secureHeaders\nsite CSP, HSTS, nosniff, noindex"]
   cop["http.CrossOriginProtection\n403 for cross-origin writes"]
   outer["logging.Routes(mux)\nlabel = matched pattern"]
   mux{"outer mux"}
@@ -167,11 +173,11 @@ flowchart TD
   inner["logging.Routes(managementMux)\nlabel = leaf pattern"]
   mgmt["management handlers"]
   feed["live.Feed\nGET /management/events"]
-  hdr["withHeaders\nno-store, CSP, no-referrer"]
+  hdr["withHeaders\nno-store, no-referrer, Vary HX-Request"]
   cust["customer handlers"]
   hook["billing.Service.Webhook"]
 
-  conn --> req --> cop --> outer --> mux
+  conn --> req --> sec --> cop --> outer --> mux
   mux -->|"GET /static/, /favicon.ico, /{$}"| static
   mux -->|"POST /management/login, /logout"| authh
   mux -->|"/management/"| require --> inner
@@ -183,6 +189,8 @@ flowchart TD
 
 The 403 from `CrossOriginProtection` fires for non-safe methods (such as POST) when a request carries a `Sec-Fetch-Site` other than `same-origin` or `none` (refusing both `cross-site` and `same-site`), or a foreign `Origin`; a request with neither header passes (`TestCrossOriginWritesAreRejected`, case `neither`). There is no bypass for the webhook: it relies on server-to-server calls carrying neither header.
 
+`secureHeaders` sets the browser policies before any handler runs, so every response, including a 403, 404 or 405, carries them (`TestRoutesAreMounted`). `withHeaders` adds only the customer-specific ones; the CSP is the site-wide `sitePolicy`, never per route ([Frontend](frontend.md#site-csp-implications)).
+
 ## Wiring
 
 - `newServer` builds the `links`, `students` and `settings` stores once and shares them: the customer and management packages both receive all three, plus the billing service.
@@ -190,7 +198,7 @@ The 403 from `CrossOriginProtection` fires for non-safe methods (such as POST) w
 - `auth.Staff` is passed to `management.RegisterRoutes` as a `func(context.Context) string`. The management package never imports `auth`, so it cannot decide access; it only reads the username `Require` verified.
 - The webhook is mounted in `main.go` but owned by billing, and sits outside `/management/`: its credential is the Stripe signature ([Webhooks](billing/webhooks.md)).
 - `auth.Require` on the `/management/` prefix is the staff boundary. Folder layout is not: a handler registered on the outer mux, even from the `management` package, would be public. New staff routes must be registered on `managementMux`.
-- `biller.Run` starts in one goroutine from `run` and is stopped and awaited on exit ([Worker](billing/worker.md)).
+- `biller.Run` and `authentication.Run` (expired-session cleanup) start in goroutines from `run` and are stopped and awaited on exit ([Worker](billing/worker.md), [Staff authentication](staff-auth.md)).
 - The module has no `init()` function and no mutable package-level state; package-level values are registries and sentinel errors.
 
 ## Deliberate choices
@@ -203,14 +211,12 @@ The 403 from `CrossOriginProtection` fires for non-safe methods (such as POST) w
 
 ## Source
 
-- `main.go`: `newServer`, `serve`, `run`, `models`, `startupError`, `assets`
+- `main.go`: `newServer`, `secureHeaders`, `sitePolicy`, `serve`, `run`, `models`, `startupError`, `assets`
 - `go.mod`: `github.com/air-verse/air`, `github.com/nyaruka/phonenumbers/v2`, `github.com/stripe/stripe-go/v87`, `gorm.io/gorm`, `gorm.io/driver/postgres`
 - `internal/auth/http.go`: `Manager.RegisterRoutes`, `Require`, `Staff`
 - `internal/logging/http.go`: `Requests`, `Routes`, `RecordError`
 - `internal/customer/customer.go`: `RegisterRoutes`, `withHeaders`
 - `internal/management/management.go`: `RegisterRoutes`
-- `internal/management/dashboard.go`: `registerDashboardRoutes`
-- `internal/management/students.go`: `registerStudentRoutes`
 - `internal/billing/webhook.go`: `Service.Webhook`, `maxWebhookBody`
 - `internal/live/live.go`: `Feed.Changed`, `Feed.Close`
 - `internal/billing/billingtest/billingtest.go`: `Config`

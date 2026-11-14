@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"projecthermes/internal/puertorico"
 	"projecthermes/internal/students"
 )
 
@@ -19,8 +20,7 @@ func TestFieldParsersRespectNormalizationAndDraftBoundaries(t *testing.T) {
 		invalid  bool
 	}
 	local64 := strings.Repeat("a", 64)
-	puertoRico := time.FixedZone("America/Puerto_Rico", -4*60*60)
-	now := time.Now().In(puertoRico)
+	now := time.Now().In(puertorico.Zone)
 	relative := func(years, days int) string { return now.AddDate(years, 0, days).Format("2006-01-02") }
 	dobCases := []parserCase{
 		{"valid date", "2005-06-15", true, "2005-06-15", false},

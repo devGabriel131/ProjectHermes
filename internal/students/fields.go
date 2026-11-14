@@ -9,9 +9,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/nyaruka/phonenumbers/v2"
-)
 
-var puertoRico = time.FixedZone("America/Puerto_Rico", -4*60*60)
+	"projecthermes/internal/puertorico"
+)
 
 type Field struct {
 	Key, Label, InputType string
@@ -50,7 +50,7 @@ var fields = []Field{
 	{
 		Key: "gender", Label: "Gender",
 		Value: func(s Student) string { return s.Gender },
-		Parse: ParseGender, Options: GenderOptions(),
+		Parse: ParseGender, Options: genders,
 	},
 }
 
@@ -232,22 +232,20 @@ func ParsePhone(raw string, required bool) (string, error) {
 // ParseDateOfBirth validates a calendar date formatted as YYYY-MM-DD.
 // The date must be strictly before today in Puerto Rico with age 0-100 inclusive.
 func ParseDateOfBirth(raw string, required bool) (string, error) {
+	const message = "Enter a date of birth before today and no more than 100 years ago."
 	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		if required {
-			return "", &ValidationError{Message: "date of birth required"}
-		}
+	if trimmed == "" && !required {
 		return "", nil
 	}
-	t, err := time.ParseInLocation(time.DateOnly, trimmed, puertoRico)
+	t, err := time.ParseInLocation(time.DateOnly, trimmed, puertorico.Zone)
 	if err != nil {
-		return "", &ValidationError{Message: "invalid date format"}
+		return "", &ValidationError{Message: message}
 	}
-	nowYear, nowMonth, nowDay := time.Now().In(puertoRico).Date()
+	nowYear, nowMonth, nowDay := time.Now().In(puertorico.Zone).Date()
 	// Midnight today, so a birth date equal to today is not Before it.
-	today := time.Date(nowYear, nowMonth, nowDay, 0, 0, 0, 0, puertoRico)
+	today := time.Date(nowYear, nowMonth, nowDay, 0, 0, 0, 0, puertorico.Zone)
 	if !t.Before(today) {
-		return "", &ValidationError{Message: "date of birth must be before today"}
+		return "", &ValidationError{Message: message}
 	}
 	birthYear, birthMonth, birthDay := t.Date()
 	age := nowYear - birthYear
@@ -255,17 +253,12 @@ func ParseDateOfBirth(raw string, required bool) (string, error) {
 		age--
 	}
 	if age > 100 {
-		return "", &ValidationError{Message: "age must be between 0 and 100"}
+		return "", &ValidationError{Message: message}
 	}
 	return t.Format(time.DateOnly), nil
 }
 
 var genders = []string{"Male", "Female"}
-
-// GenderOptions returns the ordered choices. Callers must not modify the slice.
-func GenderOptions() []string {
-	return genders
-}
 
 func ParseGender(raw string, required bool) (string, error) {
 	return parseOption(raw, required, genders, "Select Male or Female.")
@@ -298,16 +291,17 @@ func parseOption(raw string, required bool, options []string, message string) (s
 
 // ParsePin accepts 4 to 6 ASCII digits. It stays text so leading zeros survive.
 func ParsePin(raw string, required bool) (string, error) {
+	const message = "Enter a PIN of 4 to 6 digits."
 	pin := strings.TrimSpace(raw)
 	if pin == "" && !required {
 		return "", nil
 	}
 	if len(pin) < 4 || len(pin) > 6 {
-		return "", &ValidationError{Message: "Enter a PIN of 4 to 6 digits."}
+		return "", &ValidationError{Message: message}
 	}
 	for i := range len(pin) {
 		if pin[i] < '0' || pin[i] > '9' {
-			return "", &ValidationError{Message: "Enter a PIN of 4 to 6 digits."}
+			return "", &ValidationError{Message: message}
 		}
 	}
 	return pin, nil

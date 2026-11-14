@@ -63,8 +63,8 @@ func acceptAgreement(t *testing.T, a *app, linkToken, cookieToken string) {
 	if err := settings.New(a.db).SetProgramStartDate(t.Context(), programStart, "staff"); err != nil {
 		t.Fatal(err)
 	}
-	if accepted, err := a.store.AcceptTerms(t.Context(), linkToken, cookieToken, programStart); err != nil || accepted == nil {
-		t.Fatalf("accept agreement: link=%+v, err=%v", accepted, err)
+	if accepted, err := a.store.AcceptTerms(t.Context(), linkToken, cookieToken, programStart); err != nil || !accepted {
+		t.Fatalf("accept agreement: accepted=%v, err=%v", accepted, err)
 	}
 }
 
@@ -466,7 +466,7 @@ func TestStudentRejectedRequestsCannotMutate(t *testing.T) {
 			requireStudentState(t, a, original, source, other, original.Details)
 		})
 	}
-	for _, id := range []string{"0", "-1", "+1", "not-a-number", "18446744073709551616", "18446744073709551615", "1 OR 1=1"} {
+	for _, id := range []string{"0", "-1", "+1", "not-a-number", "9223372036854775808", "18446744073709551615", "1 OR 1=1"} {
 		t.Run("invalid student "+id, func(t *testing.T) {
 			missing := "/management/students/" + url.PathEscape(id)
 			for _, suffix := range []string{"", "/fields/name?edit=1"} {

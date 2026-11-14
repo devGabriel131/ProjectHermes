@@ -510,13 +510,12 @@ button.management-button-danger:enabled:hover {
   overflow-wrap: anywhere;
 }
 
-.management-link-heading .management-link-unnamed {
+.management-link-unnamed {
   color: var(--muted);
   font-weight: 400;
 }
 
 .management-link-phone {
-  grid-area: 1 / 2;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -556,11 +555,6 @@ button.management-button-danger:enabled:hover {
   align-items: center;
   justify-content: flex-end;
   gap: 0.25rem;
-}
-
-/* Rows without actions still hold a hidden copy-button placeholder. */
-.management-link-actions:not(:has(> :not([hidden]))) {
-  display: none;
 }
 
 /* Status text always shows; color only reinforces it. */
@@ -604,7 +598,6 @@ button.management-button-danger:enabled:hover {
 }
 
 .management-link-status[data-status="Finished"],
-.management .status-active,
 .management .status-badge[data-tone="ok"] {
   --tone: var(--ok);
   --tone-tint: var(--ok-tint);
@@ -616,7 +609,6 @@ button.management-button-danger:enabled:hover {
 }
 
 .management-link-status[data-status="Canceled"],
-.management .status-suspended,
 .management .status-badge[data-tone="danger"] {
   --tone: var(--danger);
   --tone-tint: var(--danger-tint);
@@ -658,14 +650,7 @@ button.management-button-danger:enabled:hover {
 }
 
 .management-link-rename-form input {
-  box-sizing: border-box;
   min-width: 12rem;
-  min-height: 2.25rem;
-  padding: 0.25rem 0.5rem;
-  border: 1px solid var(--edge);
-  border-radius: var(--radius);
-  font: inherit;
-  font-size: 0.875rem;
 }
 
 .management-enrollments-tree {
@@ -722,11 +707,6 @@ button.management-button-danger:enabled:hover {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem 0.75rem;
-}
-
-.management-enrollment .management-link-phone,
-.management-enrollment .management-link-status {
-  grid-area: auto;
 }
 
 .management-enrollment .management-link-meta {
@@ -1267,7 +1247,7 @@ button.management-button-danger:enabled:hover {
   font-weight: 500;
 }
 
-.management :is(.student-field-editor, .student-add-form) :is(input:not([type="hidden"]), select, textarea) {
+.management :is(.student-field-editor, .student-add-form) :is(input:not([type="hidden"]), select) {
   width: 100%;
   min-width: 0;
 }
@@ -1288,17 +1268,7 @@ button.management-button-danger:enabled:hover {
   margin-top: 0;
 }
 
-/* Import results fit the screen without sideways scrolling: Row stays as narrow as its
-   numbers, and Name and Problems share the rest and wrap. */
-.management .student-import-report .student-table {
-  min-width: 0;
-}
-
-.management .student-import-report .student-table :is(th, td) {
-  min-width: 0;
-  max-width: none;
-}
-
+/* Row stays as narrow as its numbers. */
 .management .student-import-report .student-table :is(th, td):first-child {
   width: 1%;
   white-space: nowrap;

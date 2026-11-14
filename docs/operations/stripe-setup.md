@@ -11,7 +11,7 @@ Do the setup once per mode. Sandbox and live each need their own key, prices, pa
 | 1 | API key and mode | `STRIPE_API_KEY` for the mode (`rk_test_`/`sk_test_` for sandbox, `rk_live_`/`sk_live_` for live) and `STRIPE_MODE` exactly `sandbox` or `live` | Partly. The prefix must match the mode, at startup. Restricted keys are advice only: an `sk_` key is accepted |
 | 2 | Public origin | `PUBLIC_BASE_URL`: origin only, `https` (plain `http` only for `localhost`, `127.0.0.1` or `::1` in sandbox). Builds the Checkout return URLs and the portal return URL | Yes, at startup |
 | 3 | Prices | Six one-time USD prices found by lookup key ([table](#price-lookup-keys)) | Yes, at startup |
-| 4 | Webhook endpoint | `<PUBLIC_BASE_URL>/webhooks/stripe`, created with API version `2026-09-30.endive`, subscribed to the 22 types in [Webhooks](../billing/webhooks.md) `[EXTERNAL]` | Partly. Signature, 300 s tolerance, mode and API release train are checked per event (400 on failure). The endpoint's existence and its subscription list are not checked |
+| 4 | Webhook endpoint | `<PUBLIC_BASE_URL>/webhooks/stripe`, created with API version `2026-09-30.endive`, subscribed to the 23 types in [Webhooks](../billing/webhooks.md) `[EXTERNAL]` | Partly. Signature, 300 s tolerance, mode and API release train are checked per event (400 on failure). The endpoint's existence and its subscription list are not checked |
 | 5 | Webhook secret | `STRIPE_WEBHOOK_SECRET`: the registered endpoint's signing secret when deployed, the secret printed by `stripe listen` locally `[EXTERNAL]` | Presence at startup; correctness shows up as 400s on every delivery |
 | 6 | Payment-method configuration | `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID`; contents: Card, Apple Pay, Google Pay, Link and Klarna on, everything else off `[EXTERNAL]` | ID must be non-empty. It is sent only for the single payment (`full`); its contents are never read |
 | 7 | Customer portal configuration | `STRIPE_PORTAL_CONFIGURATION_ID`; contents: invoice history and payment-method update only `[EXTERNAL]` | ID must be non-empty; contents are never read |
@@ -34,7 +34,7 @@ Every price must be one-time, `per_unit`, USD, active, and in the configured mod
 | `asvab_three_remaining_usd` | `three`, payments 2 and 3 | 20833 | $208.33 |
 | `asvab_six_initial_usd` | `six`, first payment | 10835 | $108.35 |
 | `asvab_six_remaining_usd` | `six`, payments 2 to 6 | 10833 | $108.33 |
-| `asvab_reinstatement_usd` | Reinstatement fee (`ReinstatementFeeCents`) | 2500 | $25.00 |
+| `asvab_reinstatement_usd` | Reinstatement fee (`reinstatementFeeCents`) | 2500 | $25.00 |
 
 All later installments of a plan share one `remaining` price. The catalog also refuses a plan whose installments share a key but differ in amount, so editing one amount in `plans.go` needs a new price. Plan amounts are in [Billing overview](../billing/overview.md).
 
@@ -88,11 +88,12 @@ If webhook delivery is missing or the endpoint is not subscribed to a type, the 
 
 ## Source
 
-- `internal/billing/stripe.go`: `Config`, `Validate`, `LoadConfigFromEnv`, `LoadCatalog`, `priceKey`, `ReinstatementFeeCents`, `reinstatementKey`, `stripeLocale`, `NewStripeClient`
+- `internal/billing/stripe.go`: `Config`, `Validate`, `LoadConfigFromEnv`, `LoadCatalog`, `priceKey`, `reinstatementFeeCents`, `reinstatementKey`, `stripeLocale`, `NewStripeClient`
 - `internal/billing/checkout.go`: `sessionParams`, `AdaptivePricing`, `AllowedPaymentMethodTypes`, `PaymentMethodConfiguration`
 - `internal/billing/billing.go`: `PortalURL`, `New`
 - `internal/billing/webhook.go`: `webhookEvents`, `Webhook`
-- `internal/billing/worker.go`: `createInvoice`, `invoiceMatches`, `ensureDefaultPaymentMethod`, `nextSyncAt`
+- `internal/billing/invoices.go`: `createInvoice`, `invoiceMatches`, `ensureDefaultPaymentMethod`
+- `internal/billing/worker.go`: `nextSyncAt`
 - `internal/payments/plans.go`: `Plans`
 - `main.go`: `LoadCatalog`, `LoadConfigFromEnv`, `billing_catalog`, `billing_configuration`
 - `.env.example`: `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_MODE`, `PUBLIC_BASE_URL`, `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID`, `STRIPE_PORTAL_CONFIGURATION_ID`

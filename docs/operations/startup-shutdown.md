@@ -23,10 +23,10 @@ flowchart TD
   cfg["billing.LoadConfigFromEnv"]
   catalog["NewStripeClient, LoadCatalog\n15 s budget"]
   biller["billing.New"]
-  authm["auth.New\nsession cleanup every 5 min"]
+  authm["auth.New"]
   addr["address from PORT"]
   server["newServer: stores, routes, middleware"]
-  worker["go biller.Run"]
+  worker["go biller.Run, go authentication.Run\nsession cleanup every 5 min"]
   listen["net.Listen"]
   serve["server_listening, serve"]
   fail["startup_failed with stage\nexit 1"]
@@ -55,9 +55,9 @@ Facts the diagram compresses:
 
 - The logger is built first, from the `RAILWAY_*` variables; only the web server logs to stdout ([Observability](observability.md)).
 - Ping and `AutoMigrate` share one 10 s context derived from the signal context. The slow-query summary is flushed right after the migration.
-- `migrate` detects the pre-reusable-links schema (`links.token_hash` without `enrollments`), drops `links` and the five core `billing_*` tables while preserving `users`, `sessions`, `settings`, `students`, and `billing_webhook_events`, and runs `AutoMigrate(models()...)` to create or alter every table: `auth.User`, `auth.Session`, `settings.Settings`, `links.Link`, `links.Enrollment`, `students.Student` and `billing.Models()`. There are no migration files ([Data model](../data-model.md)).
+- `AutoMigrate(models()...)` creates or alters every table: `auth.User`, `auth.Session`, `settings.Settings`, `links.Link`, `links.Enrollment`, `students.Student` and `billing.Models()`. It never drops a table or column. There are no migration files ([Data model](../data-model.md)).
 - Cookie and Stripe settings are read only after the database is migrated, so a bad Stripe variable still leaves the schema migrated.
-- The worker goroutine starts before `net.Listen`; a `listen` failure unwinds through the deferred stop, which cancels and awaits it.
+- Both worker goroutines start before `net.Listen`; a `listen` failure unwinds through the deferred stop, which cancels and awaits them.
 - Any startup failure is logged by `main` after `run` returns, so deferred cleanup (including the final slow-query flush) happens first.
 
 ### CLI branch
@@ -89,17 +89,17 @@ Consequences:
 | `IdleTimeout` | 60 s | `newServer` |
 | Drain on shutdown | 10 s | `serve` argument in `run` |
 | Slow-query flush ticker | 30 s while serving | `serve` |
-| Expired-session cleanup | every 5 min, each delete bounded at 5 s | `auth.New` |
+| Expired-session cleanup | every 5 min, each delete bounded at 5 s | `auth.Manager.Run` |
 
 ## Shutdown
 
-SIGINT or SIGTERM cancels the context from `signal.NotifyContext`. The worker's context is derived from it, so the worker stops at the signal, in parallel with the HTTP drain. Only the wait for the worker happens after `serve` returns.
+SIGINT or SIGTERM cancels the context from `signal.NotifyContext`. The workers' context is derived from it, so the billing worker and the session cleanup stop at the signal, in parallel with the HTTP drain. Only the wait for them happens after `serve` returns.
 
 ```mermaid
 sequenceDiagram
   participant OS
   participant Sig as signal context
-  participant W as billing worker
+  participant W as workers
   participant S as serve
   participant H as http.Server
   participant F as live.Feed
@@ -109,7 +109,7 @@ sequenceDiagram
   Sig-->>W: worker context cancelled
   Sig-->>S: ctx.Done
   par worker winds down
-    W->>W: return after its current drain step
+    W->>W: billing returns after its current drain step, session cleanup at once
   and HTTP drain
     S->>S: log shutdown_requested, drain_timeout_ms=10000
     S->>H: Shutdown with 10 s deadline
@@ -120,7 +120,6 @@ sequenceDiagram
   S->>S: log shutdown_completed or shutdown_failed
   S-->>D: serve returns
   D->>W: cancelWorker, then worker.Wait
-  D->>D: authentication.Close stops session cleanup
   D->>D: sqlDB.Close
   D->>D: stop signal handling, final slow.Flush
 ```
@@ -128,7 +127,7 @@ sequenceDiagram
 Details:
 
 - `Shutdown` closes the listeners and starts the `feed.Close` hook at its beginning; the drain then waits for active connections up to 10 s. If the deadline passes, `server.Close()` is joined into the error and `shutdown_failed` is logged; the process exits 1.
-- The deferred calls unwind last-in first: worker cancel and `Wait`, `authentication.Close`, the catalog and migration contexts, `sqlDB.Close`, `stop`, then the final `slow.Flush`.
+- The deferred calls unwind last-in first: worker cancel and `Wait`, the catalog and migration contexts, `sqlDB.Close`, `stop`, then the final `slow.Flush`.
 - A clean shutdown exits 0. A signal during startup cancels the budgeted contexts, so the step in progress fails under its own stage (`database_connect`, `database_migrate` or `billing_catalog`) and the process exits 1.
 - Worker steps run under leases and resume from stored state. A webhook stored during the drain is only an event record that the next worker picks up ([Worker](../billing/worker.md)).
 
@@ -141,12 +140,12 @@ Details:
 - **`startupError` type.** It carries the `stage` string out of `run` and `newServer`; `main` logs it once as `startup_failed`, so no stage logs its own failure.
 - **`RegisterOnShutdown(feed.Close)`.** Event streams never finish on their own. Without the hook `Shutdown` would wait on them until the 10 s drain expired.
 - **Help dispatch before logger and database.** `--help` works offline and without environment variables.
-- **Worker context from the signal context.** The worker stops at once instead of running Stripe calls through the drain; its work is resumable.
+- **Worker context from the signal context.** The workers stop at once instead of running Stripe calls or a session delete through the drain; their work is resumable.
 
 ## Source
 
-- `main.go`: `main`, `run`, `serve`, `newServer`, `startupError`, `models`, `migrate`, `signalContext`, `cancelWorker`
-- `internal/auth/http.go`: `New`, `Close`, `deleteExpiredSessions`
+- `main.go`: `main`, `run`, `serve`, `newServer`, `startupError`, `models`, `signalContext`, `cancelWorker`
+- `internal/auth/http.go`: `New`, `Run`, `deleteExpiredSessions`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`
 - `internal/live/live.go`: `Feed.Close`, `writeTimeout`
 - `internal/billing/stripe.go`: `NewStripeClient`, `LoadCatalog`

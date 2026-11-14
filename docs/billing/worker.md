@@ -6,7 +6,7 @@ The worker never applies an event body. A stored event holds only `id`, `event_t
 
 ## Tick
 
-`Service.Run` drains once at start, then again on every 5 s tick or as soon as it is woken. A pass is one bounded batch of events followed by one bounded batch of contracts; it does not loop until the queues are empty.
+`Service.Run` drains once at start, then again on every 5 s tick or as soon as it is woken. A pass handles at most `eventBatch` events, each claimed just before it runs, followed by one bounded batch of contracts; it does not loop until the queues are empty.
 
 ```mermaid
 sequenceDiagram
@@ -17,10 +17,8 @@ sequenceDiagram
     WH->>DB: INSERT billing_webhook_events ON CONFLICT DO NOTHING
     WH-->>W: wake channel, capacity 1
     Note over W: first drain at start, then each 5 s tick or wake
-    W->>DB: claimEvents, one short transaction, FOR UPDATE SKIP LOCKED, oldest first, LIMIT 25
-    W->>DB: stamp lease_token and lease_expires_at now+60 s on the batch
-    loop each claimed event unless shutting down
-        W->>DB: processEvent renews the event lease, guarded by token
+    loop at most 25 events, until none is due or shutting down
+        W->>DB: claimEvent, one UPDATE of the oldest due event chosen FOR UPDATE SKIP LOCKED, lease_token and lease_expires_at now+60 s
         W->>S: handleEvent retrieves the referenced object
         W->>DB: withContract takes the contract lease by compare-and-set
         W->>DB: sync the attempt, invoice, payment or invoices
@@ -39,7 +37,7 @@ Wake sources: a stored webhook (`Webhook`), a customer contact edit (`UpdateCont
 | Constant | Value | Meaning |
 |---|---|---|
 | `workerTick` | 5 s | Pass interval |
-| `eventBatch` | 25 | Events claimed per pass |
+| `eventBatch` | 25 | Most events handled per pass |
 | `contractBatch` | 10 | Contracts synced per pass |
 | `leaseSQL` | 60 s | Lease length for events and contracts |
 | `retryMin` / `retryMax` | 5 s / 15 min | Event backoff start and cap |
@@ -52,9 +50,9 @@ Wake sources: a stored webhook (`Webhook`), a customer contact edit (`UpdateCont
 
 | | Webhook events | Contracts |
 |---|---|---|
-| Claim | One transaction selects due rows (`processed_at IS NULL`, retry time due, lease expired) with `FOR UPDATE SKIP LOCKED`, then stamps one random `lease_token` on the batch | Plain `SELECT` of due rows (`next_sync_at` null or due, lease expired), `next_sync_at ASC NULLS FIRST`, no row lock |
-| Lease taken | At claim | Per contract by `withContract`: `UPDATE ... WHERE lease_expires_at IS NULL OR lease_expires_at <= now()`; zero rows means `errContractBusy` |
-| Renewed | Once, at the start of `processEvent` (events late in a batch may already be near expiry) | `renew` before every Stripe stage; fails with `errLeaseLost` when expired or the token changed |
+| Claim | `claimEvent`: one `UPDATE ... RETURNING` of the oldest due row (`processed_at IS NULL`, retry time due, lease expired), chosen by a subquery with `FOR UPDATE SKIP LOCKED` and served by the partial index `idx_pending_events` (`created_at WHERE processed_at IS NULL`) | Plain `SELECT` of due rows (`next_sync_at` null or due, lease expired), `next_sync_at ASC NULLS FIRST`, no row lock |
+| Lease taken | By the claim itself, with a fresh random `lease_token`, right before the event runs | Per contract by `withContract`: `UPDATE ... WHERE lease_expires_at IS NULL OR lease_expires_at <= now()`; zero rows means `errContractBusy` |
+| Renewed | Never: no event waits behind another while leased | `renew` before every Stripe stage; fails with `errLeaseLost` when expired or the token changed |
 | Fencing | `processEvent` writes its outcome only `WHERE id = ? AND lease_token = ?` | Most writes go through `leased`: a transaction that locks the Enrollment row, then the Contract row, checks token and expiry, and for policy code the Student row (`markSynced`, `contractRetry` and `release` update the contract directly `WHERE id = ? AND lease_token = ?`) |
 | Released | The finishing update clears token and expiry | `release` in a `defer`, on a 5 s detached context |
 
@@ -73,7 +71,7 @@ Staff actions share the contract lease. `ReconcileStudent` and `RequestReinstate
 
 Retries never stop and there is no dead-letter queue. Processed events are never deleted; nothing in the app removes `billing_webhook_events` rows. A missing local row or an initial Stripe 404 during session or payment-intent lookup counts as success (`ignoreMissing`), so unrelated objects never retry; other 404s deeper in handlers retry with backoff.
 
-Failures are logged as `billing_reconcile_failed` with `stage` and `ref`: `event_claim`, `contract_claim`, `event_lease`, `event_finish`, `lease_release`, `contract_retry`, `contract_sync`, or the event type for a failed handler. Review flags log `billing_review_required`. Catalogue: [Observability](../operations/observability.md).
+Failures are logged as `billing_reconcile_failed` with `stage` and `ref`: `event_claim`, `contract_claim`, `event_finish`, `lease_release`, `contract_retry`, `contract_sync`, or the event type for a failed handler. Review flags log `billing_review_required` with the reason and the contract or obligation reference. Catalogue: [Observability](../operations/observability.md).
 
 ## Event routing
 
@@ -82,11 +80,12 @@ Failures are logged as `billing_reconcile_failed` with `stage` and `ref`: `event
 | Event type | Local lookup | Action |
 |---|---|---|
 | `checkout.session.*` | Attempt by `stripe_session_id`, or an unbound attempt by `reference = client_reference_id` | `syncAttempt` |
+| `payment_intent.payment_failed` | Checkout Session listed by `payment_intent` (invoice PaymentIntents have none, so those events end as a no-op), then its attempt as for `checkout.session.*` | `syncAttempt`, which records the decline ([Checkout](checkout.md)) |
 | `invoice.*` | Obligation by `stripe_invoice_id = resource_id` | `syncInvoice` |
 | `customer.updated` | Contract by `stripe_customer_id` | `scheduleInvoices` (resumes invoice creation once a default card exists) |
 | `charge.*`, `refund.updated`, `charge.dispute.*`, `radar.early_fraud_warning.created` | `paymentIntentOf` fetches the refund, dispute, fraud warning or charge to find its PaymentIntent, then the `billing_payments` row | `syncPayment` |
 
-An event whose Payment row does not exist yet is dropped as processed: the invoice that pays it records current charge facts when it syncs. The 22 allowlisted types are listed in [Webhooks](webhooks.md).
+An event whose Payment row does not exist yet is dropped as processed: the invoice that pays it records current charge facts when it syncs. The 23 allowlisted types are listed in [Webhooks](webhooks.md).
 
 ## Per-contract sync
 
@@ -110,14 +109,22 @@ flowchart TD
 
 | Step | Function | What it does |
 |---|---|---|
-| 2 | `resumeCreate`, `syncAttempt` | For each active attempt (`creating`, `open`, `processing`, `expiring`, `uncertain`). Without a Session ID: a `creating` attempt younger than 15 s is left to its web request; otherwise list the Customer's Sessions and match `client_reference_id` (one: adopt and sync; several: contract review `unresolved_provider_create`; none and younger than 23 h: replay the create under the same idempotency key; none and older: `failed`). With a Session: move the attempt, adopt a payable URL, or `fund`. States and sessions: [Checkout](checkout.md) |
-| 2 | `fund` | After every Stripe read, one transaction under the lease: dates the obligations from the paid invoice's `paid_at` (`Plan.Schedule`), records tuition #1 as paid, stores the Payment, marks the attempt `paid`, clears the funding-blocking reviews, calls `links.Enroll` (the only Student creation, which also sets `enrollments.paid_at` and clears `enrollments.pin`), sets `funded_at` and `next_sync_at = NULL`. Then it runs `scheduleInvoices`. A mismatching first invoice blocks funding and keeps the attempt `processing` |
+| 2 | `resumeCreate`, `syncAttempt` | For each active attempt (`creating`, `open`, `processing`, `expiring`, `uncertain`). Without a Session ID: a `creating` attempt younger than `creatingGrace` (15 s: `providerBudget` + `persistBudget` + 2 s) is left to its web request; otherwise list the Customer's Sessions and match `client_reference_id` (one: adopt and sync; several: contract review `unresolved_provider_create`; none and younger than 23 h: replay the create under the same idempotency key; none and older: `failed`). With a Session: move the attempt, adopt a payable URL, or `fund`; a paid Session of an already funded contract is a no-op. States and sessions: [Checkout](checkout.md) |
+| 2 | `fund` | After every Stripe read, one transaction under the lease: dates the obligations from the paid invoice's `paid_at` (`Plan.Schedule`), records tuition #1 as paid, stores the Payment, marks the attempt `paid`, clears the funding-blocking reviews, calls `links.Enroll` (the only Student creation for an enrollment, which also sets `enrollments.paid_at` and clears `enrollments.pin`), sets `funded_at` and `next_sync_at = NULL`. It schedules nothing itself ([Funding and scheduling](#funding-and-scheduling)). A mismatching first invoice blocks funding and keeps the attempt `processing` |
 | 3 | `syncCustomerContact` | When name or email differ from the `synced_customer_*` stamp, update the Stripe Customer, then the stamp. The source is the Enrollment before funding (`contactOf`), the Student after |
 | 5 | `scheduleInvoices` | Later tuition (`number > 1`, `collect`, dated, no review) with any creation stage still missing (`stripe_invoice_id IS NULL OR stripe_invoice_item_id IS NULL OR scheduled_finalization_at IS NULL`); runs `ensureDefaultPaymentMethod` first. Detail: [Invoices](invoices.md) |
 | 6 | `syncInvoice` | Fetch the invoice, record each paid InvoicePayment's PaymentIntent as a Payment, map the invoice onto the obligation (`invoiceStateOf`), save through `store`, which also recomputes the contract's `payment_review` flag. A non-matching invoice that could still collect is held (`auto_advance` off) after its review is persisted |
 | 7-9 | `evaluateDeadlines`, `cancelFees`, `evaluateReactivation` | School policy on the freshly refreshed state: [Suspension](suspension.md) |
 
-Staff Reconcile is therefore not charge-free: it can create and arm invoices (a past-due invoice is finalized at once, so Stripe then collects) and suspend or reactivate a student. The attempt and funding steps are the same code, but staff reach only funded contracts (the Student exists only after funding), so in production funding itself happens in the worker path. Staff reinstatement runs the same pass first, then creates the fee.
+Staff Reconcile is therefore not charge-free: it can create and arm invoices (a past-due invoice is finalized at once, so Stripe then collects) and suspend or reactivate a student. The attempt and funding steps are the same code, but staff reach only funded contracts (an enrollment's Student exists only after funding), so in production funding itself happens in the worker path. Staff reinstatement runs the same pass first, then creates the fee.
+
+### Funding and scheduling
+
+`reconcileContract` (step 5) owns invoice scheduling; the only other caller of `scheduleInvoices` is the `customer.updated` route. Funding leaves `next_sync_at = NULL`, so a contract funded by an event is synced by `drainContracts` in the same pass (`NULLS FIRST`), and one funded inside `reconcileContract` (worker sync or staff action) reaches step 5 in that same call. Consequences:
+
+- With more than `contractBatch` (10) contracts funded in one pass, the rest are scheduled on the next pass, one tick (5 s) later.
+- A failed scheduling step fails the contract sync, which retries after `contractRetry` (1 min), not on the event backoff.
+- A replayed paid Session of a funded contract does nothing; the contract's own syncs resume any unfinished scheduling.
 
 ## When the next sync runs
 
@@ -133,35 +140,37 @@ Staff Reconcile is therefore not charge-free: it can create and arm invoices (a 
 | Obligation with a due date, money remaining and no `deadline_episode_id` | `due_at + 14 days` while still in the future |
 | A Payment without `balance_transaction_id` (fee and net not yet known) | now + 15 min |
 
-Other writers move the schedule: funding sets `next_sync_at = NULL` (due at once), `touch` sets it to now (contact edits, `TouchContract`), a failed sync sets now + 1 min. The 15-minute rechecks and the daily audit are how Stripe changes are found when no webhook arrives.
+Other writers move the schedule: funding sets `next_sync_at = NULL` (due at once, see [Funding and scheduling](#funding-and-scheduling)), `touch` sets it to now (contact edits, `TouchContract`), a failed sync sets now + 1 min. The 15-minute rechecks and the daily audit are how Stripe changes are found when no webhook arrives.
 
 ## Graceful stop
 
-The worker context derives from the process signal context, so the worker stops at the signal, in parallel with the HTTP drain; only the wait for it happens after `serve` returns (order: [Startup and shutdown](../operations/startup-shutdown.md)). `drainEvents` and `drainContracts` check the context between items; an in-flight event is handed back untouched. Writes that follow a Stripe result use `persistCtx` (5 s, detached from cancellation), so an outcome already obtained is still recorded. Failures during shutdown are not logged.
+The worker context derives from the process signal context, so the worker stops at the signal, in parallel with the HTTP drain; only the wait for it happens after `serve` returns (order: [Startup and shutdown](../operations/startup-shutdown.md)). `drainEvents` and `drainContracts` check the context between items; an in-flight event is handed back untouched. Writes that follow a Stripe result use `persistCtx` (`persistBudget`, 5 s, detached from cancellation), so an outcome already obtained is still recorded. Failures during shutdown are not logged.
 
 ## File map
 
 | File | Contents |
 |---|---|
 | `worker.go`, top | Timing constants, due predicates, lease SQL, sentinel errors, `lease` |
-| `worker.go`, `worker loop and queues` | `Run`, `drain`, `claimEvents`, `drainEvents`, `drainContracts`, `processEvent`, `backoff`, `logFailure` |
-| `worker.go`, `webhook event routing` | `handleEvent`, `paymentIntentOf` |
+| `worker.go`, `worker loop and queues` | `Run`, `drain`, `claimEvent`, `drainEvents`, `drainContracts`, `processEvent`, `backoff`, `logFailure`, `isNotFound`, `ignoreMissing` |
+| `worker.go`, `webhook event routing` | `handleEvent`, `syncSession`, `paymentIntentOf` |
 | `worker.go`, `leases` | `withContract`, `release`, `renew`, `leased`, `leasedStudent`, `markContract`, `mark` |
-| `worker.go`, `checkout attempts and funding` | `syncAttempt`, `resumeCreate`, `moveAttempt`, `fund` |
-| `worker.go`, `payments` | `paymentFrom`, `reviewState`, `savePayment`, `syncPayment` |
-| `worker.go`, `invoices` | `invoiceStateOf`, `syncInvoice`, `holdInvoice`, `store` |
-| `worker.go`, `invoice creation (later tuition, reinstatement fee)` | `scheduleInvoices`, `scheduleOne`, `createInvoice`, `createItem`, `adopt`, `arm`, `sendFee`, `ensureDefaultPaymentMethod` |
-| `worker.go`, `contract reconciliation` | `syncContract`, `reconcileContract`, `syncCustomerContact`, `markSynced`, `nextSyncAt` |
-| `suspension.go` | `deadlineWindow`, deadline policy, `RequestReinstatement`, `cancelFees`, `evaluateReactivation` |
+| `worker.go`, `contract reconciliation` | `syncContract`, `reconcileContract`, `contactOf`, `syncCustomerContact`, `markSynced`, `nextSync`, `nextSyncAt` |
+| `checkout.go`, `checkout attempts and funding` | `syncAttempt`, `resumeCreate`, `moveAttempt`, `recordDecline`, `fund`, `paidInvoicePayments` |
+| `checkout.go`, `payments` | `paymentFrom`, `reviewState`, `savePayment`, `syncPayment` |
+| `invoices.go`, `invoices` | `invoiceStateOf`, `syncInvoice`, `holdInvoice`, `store` |
+| `invoices.go`, `invoice creation (later tuition, reinstatement fee)` | `scheduleInvoices`, `scheduleOne`, `createInvoice`, `createItem`, `adopt`, `arm`, `sendFee`, `reviewObligation`, `ensureDefaultPaymentMethod` |
+| `invoices.go`, `fee cancellation` | `cancelFees`, `cancelFee` |
+| `suspension.go` | `deadlineWindow`, deadline policy, `RequestReinstatement`, `evaluateReactivation` |
 | `contact.go` | `UpdateContact` (customer edit) and `TouchContract` (staff edit) set `next_sync_at` to now and wake the worker; `ContactEditable` is the lock-free pre-check for showing the edit link |
 
-The package has four jobs in pipeline order: queue and lease mechanics, mirroring Stripe state and creating invoices in Stripe (all three in `worker.go`), and the school's policy (`suspension.go`). `suspension.go` reuses the invoice pipeline (`scheduleOne`, `invoicesOf`, `adopt`) for the reinstatement fee; `contact.go` feeds step 3. Whole package: [Billing overview](overview.md).
+The worker's work splits by file: queue and lease mechanics plus contract reconciliation (`worker.go`), mirroring Checkout attempts, funding and payments (`checkout.go`), mirroring and creating invoices (`invoices.go`), and the school's policy (`suspension.go`). `suspension.go` reuses the invoice pipeline (`scheduleOne`) for the reinstatement fee; `contact.go` feeds step 3. Whole package: [Billing overview](overview.md).
 
 ## Deliberate choices
 
 | Choice | Why |
 |---|---|
-| Event lease renewed before handling, outcome guarded by `lease_token` | A late event in a 25-event batch may be past 60 s; a slow handler can be reclaimed and the stale finish must write nothing |
+| Each event claimed just before it runs, outcome guarded by `lease_token` | No lease ages behind earlier events, so nothing renews it; a handler slower than 60 s can be reclaimed, and its stale finish writes nothing |
+| Funding schedules no invoices | `reconcileContract` stays the single scheduling owner ([Funding and scheduling](#funding-and-scheduling)) |
 | `errContractBusy` retries after 5 s without raising the count | Staff or another caller holding the lease must not inflate the backoff |
 | Contracts use a plain select plus compare-and-set, not `SKIP LOCKED` | The lease update is the fence; a lost race costs one idle update |
 | Contract retry is a fixed minute | No retry counter column exists (`ponytail` note on `contractRetry`) |
@@ -173,10 +182,12 @@ The package has four jobs in pipeline order: queue and lease mechanics, mirrorin
 
 ## Source
 
-- `internal/billing/worker.go`: `Run`, `drain`, `claimEvents`, `drainEvents`, `drainContracts`, `processEvent`, `backoff`, `logFailure`, `handleEvent`, `paymentIntentOf`, `withContract`, `release`, `renew`, `leased`, `leasedStudent`, `markContract`, `mark`, `syncAttempt`, `resumeCreate`, `moveAttempt`, `fund`, `savePayment`, `syncPayment`, `syncInvoice`, `holdInvoice`, `store`, `syncContract`, `reconcileContract`, `syncCustomerContact`, `markSynced`, `nextSyncAt`, `workerTick`, `eventBatch`, `contractBatch`, `retryMin`, `retryMax`, `contractRetry`, `activeSyncEvery`, `auditEvery`, `leaseSQL`, `skipLocked`, `errContractBusy`, `errLeaseLost`, `ignoreMissing`
-- `internal/billing/billing.go`: `withStaffContract`, `ReconcileStudent`, `ErrPaymentPending`, `persistCtx`, `wakeWorker`
-- `internal/billing/suspension.go`: `deadlineWindow`, `RequestReinstatement`, `evaluateDeadlines`, `cancelFees`, `evaluateReactivation`
+- `internal/billing/worker.go`: `Run`, `drain`, `claimEvent`, `drainEvents`, `drainContracts`, `processEvent`, `backoff`, `logFailure`, `handleEvent`, `syncSession`, `paymentIntentOf`, `withContract`, `release`, `renew`, `leased`, `leasedStudent`, `markContract`, `mark`, `syncContract`, `reconcileContract`, `syncCustomerContact`, `markSynced`, `nextSyncAt`, `workerTick`, `eventBatch`, `contractBatch`, `retryMin`, `retryMax`, `contractRetry`, `activeSyncEvery`, `auditEvery`, `leaseSQL`, `eventsDue`, `errContractBusy`, `errLeaseLost`, `ignoreMissing`
+- `internal/billing/checkout.go`: `syncAttempt`, `recordDecline`, `resumeCreate`, `creatingGrace`, `moveAttempt`, `fund`, `savePayment`, `syncPayment`
+- `internal/billing/invoices.go`: `scheduleInvoices`, `syncInvoice`, `holdInvoice`, `store`, `cancelFees`
+- `internal/billing/billing.go`: `withStaffContract`, `ReconcileStudent`, `ErrPaymentPending`, `providerBudget`, `persistBudget`, `persistCtx`, `wakeWorker`
+- `internal/billing/suspension.go`: `deadlineWindow`, `RequestReinstatement`, `evaluateDeadlines`, `evaluateReactivation`
 - `internal/billing/contact.go`: `TouchContract`, `UpdateContact`, `ContactEditable`, `touch`
 - `internal/billing/webhook.go`: `Webhook`, `webhookEvents`
-- `internal/billing/models.go`: `WebhookEvent`, `Contract`
+- `internal/billing/models.go`: `WebhookEvent`, `idx_pending_events`, `Contract`
 - `main.go`: `run`

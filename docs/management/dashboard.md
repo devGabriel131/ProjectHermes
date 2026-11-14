@@ -12,8 +12,8 @@ flowchart LR
     Handler --> Count["students.Store.Count: one query"]
     Handler --> Overview["billing.Service.Overview: three queries"]
     Links --> Loop["Go loop over links and enrollments"]
-    Loop --> Sent["LinksSent, ActiveLinks"]
-    Loop --> Started["EnrollmentsStarted, LinksWaiting"]
+    Loop --> Sent["LinksCreated, ActiveLinks"]
+    Loop --> Started["EnrollmentsStarted, LinksInProgress"]
     Loop --> Forms["FormsCompleted"]
     Overview --> Q1["Query 1: tuition obligations of funded contracts"]
     Overview --> Q2["Query 2: every billing_payments row"]
@@ -35,7 +35,7 @@ flowchart LR
 
 | Figure | Window |
 |---|---|
-| Links created (`LinksSent`) | `links.created_at` not before `now - 30 d` |
+| Links created (`LinksCreated`) | `links.created_at` not before `now - 30 d` |
 | Enrollments started (`EnrollmentsStarted`) | `enrollments.created_at` not before `now - 30 d` |
 | Forms completed (`FormsCompleted`) | `enrollments.submitted_at` not before `now - 30 d` |
 | Due in the next 30 days (`DueSoon`) | `now <= due_at < now + 30 d` (looks ahead) |
@@ -47,7 +47,7 @@ flowchart LR
 |---|---|---|
 | Students | Active | `students` rows with `is_active` true |
 | Students | Suspended | `students` rows with `is_active` false |
-| Students | Total enrolled | Active + Suspended, so every Student row; a Student exists only after payment |
+| Students | Total enrolled | Active + Suspended, so every Student row; an enrollment's Student exists only after payment, and staff-added students count too |
 | Tuition | Collected | `SUM(gross_received_cents - gross_refunded_cents)` over **every** `billing_payments` row. After refunds, before Stripe fees. No funding or obligation-kind filter, so reinstatement fee cash is included |
 | Tuition | Outstanding | `SUM(amount_remaining_cents)` over tuition obligations of funded contracts, due or not. Reinstatement fee obligations and unfunded contracts are excluded |
 | Tuition | Overdue (amount and count) | Amount: remaining cents of those obligations with `due_at < now`. Count: the same obligations with remaining above zero |
@@ -95,7 +95,7 @@ Nothing publishes an event for the clock alone. A figure that changes only becau
 
 ## Source
 
-- `internal/management/dashboard.go`: `dashboardWindow`, `dashboardData`, `NeedsAttention`, `registerDashboardRoutes`, `LinksSent`, `ActiveLinks`, `EnrollmentsStarted`, `FormsCompleted`, `LinksWaiting`
+- `internal/management/dashboard.go`: `dashboardWindow`, `dashboardData`, `NeedsAttention`, `dashboard`, `LinksCreated`, `ActiveLinks`, `EnrollmentsStarted`, `FormsCompleted`, `LinksInProgress`
 - `internal/management/templates/dashboard.html`: `dashboard-content`, `dashboard-attention`, `dashboard-alert`, `management-changed`
 - `internal/billing/overview.go`: `Overview`, `CollectedCents`, `OutstandingCents`, `OverdueInstallments`, `DueSoonInstallments`, `FailedInstallments`, `ContractsInReview`, `PaymentsInReview`, `FundedRecently`
 - `internal/students/students.go`: `Counts`, `Count`, `Total`

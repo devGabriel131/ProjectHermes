@@ -24,14 +24,10 @@ func TestPaymentReturnRoute(t *testing.T) {
 		t.Fatalf("expected 404 for empty query, got %d", rec.Code)
 	}
 
-	// 2. Cancelled return returns 200 with "No completado"
-	rec = customerRequest(t, handler, http.MethodGet, "/payments/return?cancelled=1", "", false)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 for cancelled=1, got %d", rec.Code)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "No completado") {
-		t.Fatalf("expected 'No completado' in cancelled body: %s", body)
+	// 2. Unknown attempt reference returns 404
+	rec = customerRequest(t, handler, http.MethodGet, "/payments/return?attempt=UNKNOWNREF", "", false)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown attempt, got %d", rec.Code)
 	}
 
 	// 3. Unknown session_id returns 404
@@ -70,10 +66,10 @@ func TestPaymentReturnRoute(t *testing.T) {
 		t.Fatalf("create link: %v", err)
 	}
 	student := students.Student{
-		EnrollmentID:   &link.ID,
-		Details:        link.Details,
-		IsActive:       true,
-		Cohort:         "2026-11",
+		EnrollmentID: &link.ID,
+		Details:      link.Details,
+		IsActive:     true,
+		Cohort:       "2026-11",
 	}
 	if err := db.Create(&student).Error; err != nil {
 		t.Fatalf("create student: %v", err)
@@ -107,7 +103,7 @@ func TestPaymentReturnRoute(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 for valid session_id, got %d: %s", rec.Code, rec.Body.String())
 	}
-	body = rec.Body.String()
+	body := rec.Body.String()
 	if !strings.Contains(body, "Pagado") || !strings.Contains(body, "$600.00") {
 		t.Fatalf("expected status 'Pagado' and amount '$600.00' in body: %s", body)
 	}
@@ -145,6 +141,37 @@ func TestPaymentReturnRoute(t *testing.T) {
 	}
 	if !strings.Contains(body, `<meta http-equiv="refresh"`) {
 		t.Fatalf("expected noscript refresh in pending body: %s", body)
+	}
+
+	// 5b. Checkout's back link names the attempt: a declined try shows its reason group, never polls,
+	// and never leaks student details; an unpaid end without a decline reads as not completed.
+	declineCode := "insufficient_funds"
+	declined := billing.CheckoutAttempt{
+		ContractID:        contract.ID,
+		Reference:         rand.Text(),
+		PlanID:            "full",
+		FirstAmountCents:  60000,
+		StripePriceID:     "pr_full",
+		CreationStartedAt: now,
+		State:             "failed",
+		DeclineCode:       &declineCode,
+	}
+	expired := declined
+	expired.Reference, expired.State, expired.DeclineCode = rand.Text(), "expired", nil
+	if err := db.Create(&[]billing.CheckoutAttempt{declined, expired}).Error; err != nil {
+		t.Fatalf("create declined and expired attempts: %v", err)
+	}
+	rec = customerRequest(t, handler, http.MethodGet, "/payments/return?attempt="+declined.Reference, "", false)
+	body = rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, "Pago rechazado") || !strings.Contains(body, "fondos") {
+		t.Fatalf("declined attempt: status %d, want 200 with decline reason: %s", rec.Code, body)
+	}
+	if strings.Contains(body, "hx-trigger") || strings.Contains(body, "Return Student") {
+		t.Fatalf("declined page must not poll or leak student details: %s", body)
+	}
+	rec = customerRequest(t, handler, http.MethodGet, "/payments/return?attempt="+expired.Reference, "", false)
+	if body = rec.Body.String(); rec.Code != http.StatusOK || !strings.Contains(body, "No completado") {
+		t.Fatalf("expired attempt: status %d, want 200 No completado: %s", rec.Code, body)
 	}
 
 	// 6. HX-Request returns only the partial

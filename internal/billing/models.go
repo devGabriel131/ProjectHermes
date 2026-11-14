@@ -20,10 +20,10 @@ type Contract struct {
 	EnrollmentID        uint64            `gorm:"not null;uniqueIndex"`
 	Enrollment          *links.Enrollment `gorm:"foreignKey:EnrollmentID;references:ID;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 	Reference           string            `gorm:"not null;uniqueIndex"`
-	PlanID              string      `gorm:"not null"`
-	PlanName            string      `gorm:"not null"`
-	InstallmentCount    int         `gorm:"not null;check:contract_installment_count,installment_count > 0"`
-	TotalCents          int64       `gorm:"not null;check:contract_total_cents,total_cents > 0"`
+	PlanID              string            `gorm:"not null"`
+	PlanName            string            `gorm:"not null"`
+	InstallmentCount    int               `gorm:"not null;check:contract_installment_count,installment_count > 0"`
+	TotalCents          int64             `gorm:"not null;check:contract_total_cents,total_cents > 0"`
 	FundedAt            *time.Time
 	StripeCustomerID    *string `gorm:"uniqueIndex"`
 	SyncedCustomerName  string
@@ -79,6 +79,7 @@ type CheckoutAttempt struct {
 	CreationStartedAt time.Time `gorm:"not null"`
 	StripeSessionID   *string   `gorm:"uniqueIndex"`
 	CheckoutURL       *string
+	DeclineCode       *string   // Stripe code of the latest failed payment try
 	State             string    `gorm:"not null;check:attempt_state,state IN ('creating', 'open', 'processing', 'expiring', 'uncertain', 'expired', 'failed', 'paid')"`
 	CreatedAt         time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt         time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
@@ -122,11 +123,11 @@ type WebhookEvent struct {
 	EventType      string `gorm:"not null"`
 	ResourceID     string `gorm:"not null"`
 	ProcessedAt    *time.Time
-	RetryAt        *time.Time `gorm:"index"`
-	RetryCount     int        `gorm:"not null;default:0"`
+	RetryAt        *time.Time
+	RetryCount     int `gorm:"not null;default:0"`
 	LeaseToken     *string
 	LeaseExpiresAt *time.Time
-	CreatedAt      time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
+	CreatedAt      time.Time `gorm:"not null;default:CURRENT_TIMESTAMP;index:idx_pending_events,where:processed_at IS NULL"`
 	UpdatedAt      time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 }
 

@@ -6,6 +6,8 @@
 
 `newServer` in `main.go` builds a separate `managementMux`, registers `GET /management/events` on it, lets `management.RegisterRoutes` add every staff page, then mounts the whole mux at `/management/` behind `auth.Require` and `logging.Routes`. The package checks no session itself: its `staff` function is `auth.Staff`, which only reads the username `Require` already verified, for the audit trail. `POST /management/login` and `POST /management/logout` belong to the auth package and sit outside `Require` ([Staff auth](../staff-auth.md)). The full mounted-route table and middleware order are in [Architecture](../architecture.md).
 
+`RegisterRoutes` parses the templates once into a `site` (the template set, the links, students and settings stores, the billing service and `staff`) and registers every route from one table; each handler is a `site` method. `timed` runs a handler under a 5 s request context (`dbTimeout`), and only handlers whose work is all database get it. The enrollment cancel and the student billing actions call Stripe through billing, which bounds that work with its own `providerBudget` (8 s) that a 5 s parent would cut short. They run on the request context, and the enrollment cancel builds a 5 s context only for the page reads after the billing call.
+
 ```mermaid
 flowchart TD
     Request["Request under /management/"] --> Require{"auth.Require: valid session?"}
@@ -35,6 +37,9 @@ flowchart TD
 | `POST /management/bootcamp-date` | 303 to `/management/settings?bootcamp-date-saved`, or 422 `settings.html` "Enter a valid date (YYYY-MM-DD)." | none | Ordinary form post. Saves `settings.bootcamp_date`, the next Bootcamp Militarizado, which ProjectHephaestus prints on its employer letter and treats as over once the day has passed. |
 | `GET /management/dashboard` | `dashboard.html` | `dashboard-content` | [Dashboard](dashboard.md). |
 | `GET /management/students` | `students.html` | `student-records` + `HX-Replace-Url` | Filters in [Students](students.md). |
+| `GET /management/students/new` | `add-students.html` | none | Add students: one form for a single student and a roster import. `?added={id}` confirms the student just added. |
+| `POST /management/students` | 303 to `/management/students/new?added={id}`, or `add-students.html`: 422 for an invalid group or field, 409 when a PIN was just taken | none | Ordinary form post; adds one staff-added student through `students.Store.Add`. |
+| `POST /management/students/import` | `add-students.html` with the import report, or with the reason: 413 over 2 MB, 422 for a missing or unreadable file or an invalid group, 409 when a PIN was just taken | none | Multipart `.xlsx` or `.csv` roster (`readRoster`), at most 1000 student rows (`maxRosterRows`); rows `Add` refuses come back as a downloadable rows-to-fix workbook (`fixWorkbook`). |
 | `GET /management/students/{id}` | `students.html` (details page) | `student-detail` (dialog) | |
 | `GET`, `POST /management/students/{id}/fields/{field}` | `students.html` | `student-field`, or `student-save` after a save | Non-HTMX save answers 303 to `?saved={field}`. |
 | `GET /management/students/{id}/billing` | same fragment | `student-billing` | Read-only; never calls Stripe. |
@@ -46,18 +51,21 @@ flowchart TD
 
 `list` renders `index.html` instead of `link-rows` whenever the status is not 200, even for an HTMX request, so an error page is never a fragment. A signed-in request to an unknown path under `/management/` gets the mux's plain 404 after `Require`.
 
-All staff templates are parsed together from `templates/*.html`, so `header`, `navigation`, `link-icon` and `trash-icon` defined in `index.html` serve every page. Only the login page ([Staff auth](../staff-auth.md)) has its own template set.
+On the links page `list` also loads `DeclinedEnrollments` (skipped for Trash, which holds no `Awaiting payment` rows) and each `linkRow` carries it, so an `Awaiting payment` enrollment whose first payment was declined shows a "Payment declined" badge next to its status. Billing's change signal refreshes it live ([Live updates](../live-updates.md)).
+
+All staff templates are parsed together from `templates/*.html`, so `brand`, `account`, `navigation`, `time`, `link-icon` and `trash-icon` defined in `index.html` serve every page. Only the login page ([Staff auth](../staff-auth.md)) has its own template set.
 
 | File | Defines |
 |---|---|
-| `index.html` | `index.html`, `link`, `link-rows`, `result`, `header`, `navigation`, `link-icon`, `trash-icon` |
-| `students.html` | `students.html`, `student-records`, `student-row`, `student-detail`, `student-field`, `student-save`, `billing-time`, `student-billing`, `student-billing-portal` |
+| `index.html` | `index.html`, `link`, `link-rows`, `result`, `brand`, `account`, `time`, `navigation`, `link-icon`, `trash-icon` |
+| `students.html` | `students.html`, `student-records`, `student-row`, `student-detail`, `student-field`, `student-save`, `student-billing`, `student-billing-portal` |
+| `add-students.html` | `add-students.html` |
 | `dashboard.html` | `dashboard.html`, `dashboard-content` |
 | `settings.html` | `settings.html` |
 
 ## Response headers
 
-`render` sets `Content-Type: text/html; charset=utf-8`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and `Vary: HX-Request`, then writes the status and template. `Vary` is required because one URL returns a full page to a browser and a fragment to htmx. The invoice redirect sets `no-store` itself. Plain-text errors (`http.Error`) skip `render`.
+`site.render` sets `Content-Type: text/html; charset=utf-8`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and `Vary: HX-Request`, then writes the status and template. `Vary` is required because one URL returns a full page to a browser and a fragment to htmx. The invoice redirect sets `no-store` itself. Plain-text errors (`http.Error`) skip `render`.
 
 Staff pages carry the same server-wide CSP and browser headers as every response ([Frontend](../frontend.md)), so the settings slider's output is updated by `/static/settings.js`, not an inline handler. Cross-origin POSTs are rejected server-wide by `CrossOriginProtection` ([Architecture](../architecture.md)), not by this package.
 
@@ -72,7 +80,7 @@ Every live region re-fetches itself on the `management-changed` event, which com
 | Student billing | `#student-billing-{id}` | `GET /management/students/{id}/billing` | `student-billing` | outer |
 | Dashboard | `.dashboard` | `GET /management/dashboard` | `dashboard-content` | inner |
 
-- **Only refreshes write rows.** Link actions (`acknowledge`) answer with a notice plus `HX-Trigger: management-changed`, and the cancel forms use `hx-swap="none"`. The list is replaced only by a GET, so a slower, older render never overwrites a newer one.
+- **One answer for link and enrollment actions.** Create, rename and both cancels report through `answer`. A browser gets `index.html` with the notice, at the action's status. htmx gets a refusal (any status but 200) as plain text, 204 when the ID names nothing, and otherwise `result` with `HX-Trigger: management-changed`. The forms use `hx-swap="none"`, and the list is replaced only by a GET, so a slower, older render never overwrites a newer one.
 - **Create.** `POST /management/links` answers `result` (an out-of-band swap filling `#link-status`) with `HX-Trigger: management-changed`; the refreshed rows render each link's permanent `/customer/{token}` URL and Copy link button directly.
 - **Dialogs.** A student row link loads `student-detail` into `#student-dialog-content` and `students.js` opens the `<dialog>`; see [Students](students.md).
 - **Signed out.** An HTMX request without a valid session gets 401 and `HX-Redirect: /management/`, which sends the whole window to the login page rather than swapping a login form into a fragment. `HX-Refresh` is customer-only; management 404s and 500s are plain text, and staff pages do not swap 4xx or 5xx responses (`management.js` shows the server text in a status element; `students.js` shows plain-text server replies for billing actions and fixed client messages for field or roster failures).
@@ -81,17 +89,20 @@ Every live region re-fetches itself on the `management-changed` event, which com
 
 | Surface | Limit |
 |---|---|
-| `POST /management/links/{id}/rename`, `/management/program-start-date`, `/management/bootcamp-date` and `/management/settings` body | 1 KiB (`http.MaxBytesReader`) |
-| `POST .../fields/{field}` body | 4 KiB; larger is 413 "This value is too large.", unreadable is 400 |
-| Billing actions (reconcile, reinstatement, portal, invoice) | No 5 s handler context. Each billing method bounds its own provider work with `providerBudget` (8 s, under the 10 s server write timeout) |
-| `{id}` and `{obligation}` path values | Must parse as a positive PostgreSQL BIGINT, else 404 without a query |
+| `POST /management/links/{id}/rename`, `/management/program-start-date` and `/management/bootcamp-date` body | 1 KiB and exactly one value (`postedValue`); otherwise 400 for a rename, 422 for a date |
+| `POST /management/settings` body | 1 KiB (`http.MaxBytesReader`) |
+| `POST .../fields/{field}` and `POST /management/students` body | 4 KiB (`readForm`); larger is 413 "This form is too large.", unreadable is 400 "Could not read this form. Please try again." |
+| `POST /management/students/import` body | 2 MB multipart; larger is 413 with "The file is larger than 2 MB." on `add-students.html` |
+| Billing actions (reconcile, reinstatement, portal, invoice) and enrollment cancel | No 5 s handler context around the billing call. Each billing method bounds its own provider work with `providerBudget` (8 s, under the 10 s server write timeout) |
+| Every other handler | 5 s request context (`timed`) |
+| `{id}` and `{obligation}` path values, `?added=` | Must parse as a positive PostgreSQL BIGINT (`pathID`), else the route's not-found answer without a query: 404 for students, 204 or the unchanged page for link and enrollment actions, no confirmation for `?added=` |
 
 Other POST handlers read no body. `GET /management/events` clears its own write deadline ([Live updates](../live-updates.md)).
 
 ## Lists and live regions
 
 - **Unpaginated.** `links.Store.ListGroups` returns every link with its enrollments, oldest first, and `list` filters by tab in Go; `students.Store.List` returns every matching student, newest first. Both carry `ponytail` ceilings; see [Go-live](../go-live.md).
-- **Pages with a stream.** Links, Trash, students list, student details and the dashboard load `management-live.js`. Settings loads only `settings.js`, login loads no script; neither opens a stream.
+- **Pages with a stream.** Links, Trash, students list, student details and the dashboard load `management-live.js`. Settings loads only `settings.js`, Add students and login load no script; none of them opens a stream.
 - **Settings publish no event.** `settings.Store` has no `changed` callback, so a start date, bootcamp date or lifetime write does not refresh other tabs.
 - **Auth is checked when the stream connects.** A tab signed out later keeps its open stream; the next event triggers a refresh, which the 401 plus `HX-Redirect` turns into the login page.
 
@@ -105,16 +116,19 @@ Other POST handlers read no body. `GET /management/events` clears its own write 
 ## Source
 
 - `main.go`: `newServer`, `managementMux`, `RegisterRoutes`
-- `internal/management/management.go`: `RegisterRoutes`, `render`, `htmx`, `pageData`, `settingsData`, `acknowledge`, `cancelEnrollmentNotice`, `MaxBytesReader`
-- `internal/management/students.go`: `registerStudentRoutes`, `billingFailure`, `pathID`
-- `internal/management/dashboard.go`: `registerDashboardRoutes`
-- `internal/management/templates/index.html`: `link-rows`, `result`, `navigation`
+- `internal/management/management.go`: `RegisterRoutes`, `site`, `timed`, `dbTimeout`, `render`, `htmx`, `answer`, `list`, `postedValue`, `readForm`, `pageData`, `linkRow`, `settingsData`, `cancelEnrollment`, `cancelEnrollmentNotice`, `plural`, `MaxBytesReader`
+- `internal/management/students.go`: `pathID`, `billingFailure`, `act`
+- `internal/management/addstudents.go`: `addStudentsPage`, `addStudent`, `importStudents`, `readRoster`, `maxRosterRows`, `fixWorkbook`
+- `internal/management/dashboard.go`: `dashboard`
+- `internal/management/templates/index.html`: `link-rows`, `link`, `result`, `navigation`, `brand`, `account`, `time`
 - `internal/management/templates/students.html`: `student-records`, `student-detail`, `student-billing`
 - `internal/management/templates/dashboard.html`: `dashboard-content`
+- `internal/management/templates/add-students.html`: `add-students.html`
 - `internal/management/templates/settings.html`: `settings.js`
 - `internal/auth/http.go`: `Require`
 - `internal/billing/billing.go`: `providerBudget`, `ErrCancelBlocked`
 - `internal/billing/cancel.go`: `CancelEnrollment`
+- `internal/billing/summary.go`: `DeclinedEnrollments`
 - `internal/live/live.go`: `Feed`
 - `internal/links/links.go`: `ListGroups`, `Archived`, `Trashed`, `RenameLink`, `CancelLink`, `CancelEnrollmentTx`
 - `static/management-live.js`: `management-changed`

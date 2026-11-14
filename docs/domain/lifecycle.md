@@ -10,7 +10,7 @@ The central fact: a Student does not exist until the first payment is confirmed.
 |---|---|
 | **submitted** | `enrollments.submitted_at` is set by `links.Store.Submit`. No Student and no money exist yet. |
 | **paid / funded** | `enrollments.paid_at` and `billing_contracts.funded_at` are set, to the same instant: the paid time of the first Stripe invoice. Set once, in one transaction. |
-| **enrolled** | A `students` row exists. It is created only at funding, by `links.Enroll`. |
+| **enrolled** | A `students` row exists. For an enrollment it is created only at funding, by `links.Enroll`; staff can also add students directly (`students.Store.Add`), with no enrollment, contract or cohort. |
 | **Finished** | The Enrollment status once it is paid. |
 | Link | One reusable customer URL in `links`: name, token, lifetime, audit. [Links](links.md) |
 | Enrollment | One customer's session in `enrollments`: session digest, drafts, PIN, agreement snapshot. [Links](links.md) |
@@ -78,7 +78,7 @@ sequenceDiagram
 | Later installments | [Invoices](../billing/invoices.md) |
 | 14-day sweep, reinstatement | [Suspension](../billing/suspension.md) |
 
-Only the worker (event handling or contract sync) first-funds a contract. Staff Reconcile and Reinstatement run the same sync, but they find the contract through the `students` row, which exists only after funding, so in production they re-sync an already funded contract ([Billing overview](../billing/overview.md) lists who can reach `fund`). The app never charges a card itself: Stripe collects the invoices.
+Only the worker (event handling or contract sync) first-funds a contract. Staff Reconcile and Reinstatement run the same sync, but they find the contract through the `students` row, which for an enrollment exists only after funding (a staff-added student has no contract), so in production they re-sync an already funded contract ([Billing overview](../billing/overview.md) lists who can reach `fund`). The app never charges a card itself: Stripe collects the invoices.
 
 ## Who owns which state
 
@@ -149,7 +149,9 @@ Inside Finished the Enrollment status stays Finished while the Student alternate
 - `internal/billing/checkout.go`: `StartCheckout`
 - `internal/billing/contact.go`: `UpdateContact`
 - `internal/billing/webhook.go`: `Webhook`
-- `internal/billing/worker.go`: `fund`, `reconcileContract`, `scheduleInvoices`
+- `internal/billing/checkout.go`: `fund`
+- `internal/billing/worker.go`: `reconcileContract`
+- `internal/billing/invoices.go`: `scheduleInvoices`
 - `internal/billing/suspension.go`: `evaluateDeadlines`, `evaluateReactivation`, `deadlineWindow`
 - `internal/billing/models.go`: `Contract`, `Obligation`, `CheckoutAttempt`, `Suspension`, `ReviewReason`
 - `internal/settings/settings.go`: `Settings`

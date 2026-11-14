@@ -22,12 +22,12 @@ The deadline control works through `http.ResponseController`, which reaches the 
 
 | Publisher | Calls `Changed` after |
 |---|---|
-| links store | `CreateLink`, `RenameLink`, `StartEnrollment` (new enrollment), `AcceptTerms`, draft and submit saves (`saveResult`), `CancelLink`, `CancelEnrollment`, and `billing.Service.CancelEnrollment` (via `CancelEnrollmentTx` + `changed`) |
+| links store | `CreateLink`, `RenameLink`, `StartEnrollment` (new enrollment), `AcceptTerms`, draft and submit saves (`SaveDraft`, `Submit`), `CancelLink`, and `billing.Service.CancelEnrollment` (via `CancelEnrollmentTx` + `changed`) |
 | students store | `UpdateField` when the value actually changed (a normalized no-op notifies nobody) |
 | billing | `StartCheckout` attempt changes, `UpdateContact`, `requestFee`, `evaluateDeadlines`, `evaluateReactivation`, and worker writes that change stored state (`fund`, `moveAttempt`, `store`, `mark`, `reviewObligation`) |
 | settings store | **Never.** `settings.New(db)` takes no callback, so saving the link lifetime or program start date publishes no event. |
 
-`Changed` takes one mutex and does a non-blocking send into each stream's one-slot channel. A stream with an event already pending absorbs further wake-ups, so a burst of writes costs each page one refresh and a slow or stalled stream can never block a write path.
+`Changed` takes one mutex and does a non-blocking send into each stream's one-slot channel. A stream with an event already pending absorbs further wake-ups, so a slow or stalled stream can never block a write path. The script then folds the messages of each second into one refresh ([Client](#client)).
 
 ## Stream flow
 
@@ -48,12 +48,12 @@ sequenceDiagram
         F->>F: clear the server write deadline
         F->>F: register a one-slot channel that already holds one event
         F-->>JS: 200 text/event-stream with data: change
-        JS->>P: htmx.trigger body management-changed
+        JS->>P: htmx.trigger body management-changed, 1 s later
         P->>M: live regions re-fetch through Require
         loop while connected
             S->>F: Changed after a committed write
             F-->>JS: data: change
-            JS->>P: management-changed, regions re-fetch
+            JS->>P: management-changed within 1 s, regions re-fetch
             F-->>JS: heartbeat comment every 30 s
         end
     end
@@ -80,13 +80,13 @@ stateDiagram-v2
 
 ## Client
 
-`static/management-live.js` opens one `EventSource("/management/events")` and turns every message into `htmx.trigger(document.body, "management-changed")`. It does nothing when `window.htmx` is missing. The browser's own reconnect handles dropped connections; the script adds a fixed retry for the case the browser gives up.
+`static/management-live.js` opens one `EventSource("/management/events")`. The first message starts a 1 s timer (`due`) that then fires `htmx.trigger(document.body, "management-changed")`; messages arriving while it is pending share it, so a tab refreshes at most once per second from the stream however fast commits land. It does nothing when `window.htmx` is missing. The browser's own reconnect handles dropped connections; the script adds a fixed retry for the case the browser gives up.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Connecting: page loads the script
     Connecting --> Active: 200 event stream
-    Active --> Active: message triggers management-changed
+    Active --> Active: message schedules management-changed in 1 s unless one is due
     Active --> Reconnecting: connection dropped
     Reconnecting --> Active: browser retry succeeds
     Connecting --> Closed: failed response such as a 303 to login or a 502
@@ -95,7 +95,7 @@ stateDiagram-v2
 ```
 
 - While the browser is reconnecting (`readyState` is not `CLOSED`) the script does nothing. The server sends no `retry:` field, so the delay is the browser's default; every successful reconnect delivers the on-connect event and refreshes the page.
-- A failed response (a deploy's 502, a sign-in redirect) leaves `EventSource` permanently closed. The script then fires `management-changed` once and calls `listenForChanges` again after a **fixed 5 seconds**. There is no growing backoff.
+- A failed response (a deploy's 502, a sign-in redirect) leaves `EventSource` permanently closed. The script then fires `management-changed` once, immediately rather than through `due`, and calls `listenForChanges` again after a **fixed 5 seconds**. There is no growing backoff.
 - Signed out, that single refresh is what recovers the page: the regions' request carries `HX-Request`, gets 401 with `HX-Redirect: /management/` ([Staff authentication](staff-auth.md)), and htmx navigates to the sign-in page.
 
 ### Live regions
@@ -110,7 +110,7 @@ Only the pages below load `management-live.js`. The settings page and the sign-i
 | Dashboard | `/management/dashboard` | `.dashboard` |
 | Settings, sign-in | `/management/settings`, `/management/` signed out | none |
 
-Link create, cancel and cancel-all answers to htmx requests also send `HX-Trigger: management-changed` (the `acknowledge` helper in `management.go`), so the acting tab refreshes without waiting for its own event; see [Management overview](management/overview.md). The number of tabs a browser can hold open locally is covered in [Local development](operations/local-development.md).
+Link create, rename and cancel and enrollment cancel answers to htmx requests also send `HX-Trigger: management-changed` (the `answer` helper in `management.go`), so the acting tab refreshes without waiting for its own event; see [Management overview](management/overview.md). The number of tabs a browser can hold open locally is covered in [Local development](operations/local-development.md).
 
 ## Authorization
 
@@ -148,24 +148,27 @@ The feed is an in-process map of channels. A write handled by another process ne
 - Clearing the deadline and then setting one per write lets a stream outlive the server's `WriteTimeout` while still dropping stalled readers (`TestStreamCatchesUpFollowsChangesAndEndsOnClose`, `TestStreamStalledReaderExpires`).
 - `closeDeadline` and `lateDeadline` keep a stalled stream from holding `Shutdown` past 5 seconds and still end late connections.
 - The script retries on its own because `EventSource` never retries a failed response, which is exactly what a deploy or a sign-out produces.
+- The 1 s trailing refresh trades a second of staleness for one re-render per region during an enrollment burst; every region re-renders its whole unpaginated list, so per-commit refreshes would multiply that work by the commit rate.
 - Events carry no data on purpose: there is nothing to authorize per event.
 
 ## Source
 
 - `internal/live/live.go`: `Feed`, `New`, `Changed`, `Close`, `ServeHTTP`, `heartbeat`, `writeTimeout`, `closeDeadline`
 - `internal/live/live_test.go`: `TestStreamCatchesUpFollowsChangesAndEndsOnClose`, `TestStreamStalledReaderExpires`, `TestStreamShutdownSharesWriteBudget`, `TestStreamIdleLifetimeAndHeartbeatsHTTP2`
-- `static/management-live.js`: `listenForChanges`, `EventSource`, `management-changed`
+- `static/management-live.js`: `listenForChanges`, `due`, `EventSource`, `management-changed`
 - `main.go`: `newServer`, `serve`, `RegisterOnShutdown`, `live.New`
 - `internal/auth/http.go`: `Require`
 - `internal/logging/http.go`: `statusWriter`, `Unwrap`
-- `internal/links/links.go`: `Store.CreateLink`, `Store.StartEnrollment`, `Store.AcceptTerms`, `saveResult`, `Store.CancelLink`, `Store.CancelEnrollment`
+- `internal/links/links.go`: `Store.CreateLink`, `Store.StartEnrollment`, `Store.AcceptTerms`, `Store.SaveDraft`, `Store.Submit`, `Store.CancelLink`, `CancelEnrollmentTx`
 - `internal/students/students.go`: `UpdateField`
 - `internal/billing/checkout.go`: `StartCheckout`
 - `internal/billing/contact.go`: `UpdateContact`
 - `internal/billing/suspension.go`: `requestFee`, `evaluateDeadlines`, `evaluateReactivation`
-- `internal/billing/worker.go`: `fund`, `moveAttempt`, `store`, `mark`, `reviewObligation`
+- `internal/billing/checkout.go`: `fund`, `moveAttempt`
+- `internal/billing/worker.go`: `mark`
+- `internal/billing/invoices.go`: `store`, `reviewObligation`
 - `internal/settings/settings.go`: `New`
 - `internal/management/templates/index.html`: `management-live.js`, `management-changed`, `generated-links`
 - `internal/management/templates/students.html`: `management-live.js`, `student-records`, `student-billing`
 - `internal/management/templates/dashboard.html`: `management-live.js`, `management-changed`
-- `internal/management/management.go`: `acknowledge`
+- `internal/management/management.go`: `answer`

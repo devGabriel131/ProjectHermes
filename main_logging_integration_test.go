@@ -1,6 +1,6 @@
 //go:build integration
 
-package logging_test
+package main
 
 import (
 	"bytes"
@@ -17,16 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alexedwards/argon2id"
 	"gorm.io/gorm"
 
 	"projecthermes/internal/auth"
-	"projecthermes/internal/billing"
-	"projecthermes/internal/billing/billingtest"
-	"projecthermes/internal/customer"
 	"projecthermes/internal/links"
 	"projecthermes/internal/logging"
-	"projecthermes/internal/management"
 	"projecthermes/internal/settings"
 	"projecthermes/internal/students"
 	"projecthermes/internal/testdb"
@@ -38,7 +33,12 @@ const (
 	httpPassword  = "PRIVATE_HTTP_PASSWORD"
 	httpQuery     = "PRIVATE_HTTP_QUERY"
 	httpHeader    = "PRIVATE_HTTP_HEADER"
+	// privateQuery rides on every logged request; no event may carry it.
+	privateQuery = "?private=" + httpQuery
 )
+
+// loggedHeader fixes the request ID and adds a private header no event may carry.
+var loggedHeader = http.Header{"X-Railway-Request-Id": {httpRequestID}, "X-Private-Header": {httpHeader}}
 
 func TestCustomerRolledBackRequestsLogOnce(t *testing.T) {
 	fixture := newHTTPLoggingFixture(t)
@@ -50,25 +50,17 @@ func TestCustomerRolledBackRequestsLogOnce(t *testing.T) {
 	if err := tx.Rollback().Error; err != nil {
 		t.Fatal(err)
 	}
-	handler := fixture.routes(t, links.New(tx, nil))
+	handler := serverHandler(t, fixture.db, tx, fixture.log)
 	sessionCookie := &http.Cookie{Name: "enrollment_session", Value: cookieToken}
-	for _, tc := range []struct {
-		name, suffix, route string
-	}{
-		{"name draft", "/draft/name", "POST /customer/{token}/draft/{field}"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			form := httpContactForm("Private rolled back name")
-			rec := serveHTTPLogging(t, handler, http.MethodPost, "/customer/"+entry.Token+tc.suffix, form, sessionCookie)
-			private := append(httpContactValues(form), entry.Token, cookieToken, httpUsername)
-			fixture.requireFailure(t, rec, httpFailure{
-				method: http.MethodPost, route: tc.route,
-				stage: "save", kind: "transaction_done",
-			}, private...)
-			if !strings.Contains(rec.Body.String(), `role="alert"`) || strings.Contains(rec.Body.String(), "data-validation=") {
-				t.Fatal("rolled-back write lost its save-error response")
-			}
-		})
+	form := httpContactForm("Private rolled back name")
+	rec := send(t, handler, http.MethodPost, "/customer/"+entry.Token+"/draft/name"+privateQuery, sessionCookie, form, loggedHeader)
+	private := append(httpContactValues(form), entry.Token, cookieToken, httpUsername)
+	fixture.requireFailure(t, rec, httpFailure{
+		method: http.MethodPost, route: "POST /customer/{token}/draft/{field}",
+		stage: "save", kind: "transaction_done",
+	}, private...)
+	if !strings.Contains(rec.Body.String(), `role="alert"`) || strings.Contains(rec.Body.String(), "data-validation=") {
+		t.Fatal("rolled-back write lost its save-error response")
 	}
 }
 
@@ -83,8 +75,8 @@ func TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging(t *testing.T) {
 	if err := settings.New(fixture.db).SetProgramStartDate(t.Context(), programStart, "staff"); err != nil {
 		t.Fatal(err)
 	}
-	if accepted, err := fixture.store.AcceptTerms(t.Context(), entry.Token, cookieToken, programStart); err != nil || accepted == nil {
-		t.Fatalf("accept agreement: link=%+v, err=%v", accepted, err)
+	if accepted, err := fixture.store.AcceptTerms(t.Context(), entry.Token, cookieToken, programStart); err != nil || !accepted {
+		t.Fatalf("accept agreement: accepted=%v, err=%v", accepted, err)
 	}
 	source := fixture.enrollment(t, entry.Token, cookieToken)
 	now := time.Now().UTC()
@@ -97,31 +89,22 @@ func TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging(t *testing.T) {
 	if err := fixture.db.WithContext(t.Context()).Where("enrollment_id = ?", source.ID).Take(&original).Error; err != nil {
 		t.Fatal(err)
 	}
-	user := fixture.createUser(t)
-	handler := fixture.routes(t, fixture.store)
-	login := serveHTTPLogging(t, handler, http.MethodPost, "/management/login", url.Values{"username": {user.Username}, "password": {httpPassword}}, nil)
-	if login.Code != http.StatusSeeOther || login.Header().Get("Location") != "/management/" {
-		t.Fatalf("sign in status = %d, want 303 to management", login.Code)
-	}
-	var cookie *http.Cookie
-	for _, issued := range login.Result().Cookies() {
-		if issued.Name == "management_session" && issued.MaxAge > 0 {
-			cookie = issued
-		}
-	}
-	if cookie == nil {
-		t.Fatal("successful sign-in did not issue a staff session")
-	}
+	handler := serverHandler(t, fixture.db, fixture.db, fixture.log)
+	cookie := signInStaff(t, fixture.db, handler)
 	fixture.requireQuiet(t)
+	var user auth.User
+	if err := fixture.db.WithContext(t.Context()).Take(&user, "username = ?", "staff").Error; err != nil {
+		t.Fatal(err)
+	}
 	cookieDigest := sha256.Sum256([]byte(cookie.Value))
-	private := []string{httpUsername, httpPassword, user.PasswordHash, user.AuthVersion, cookie.Value, hex.EncodeToString(cookieDigest[:]),
+	private := []string{user.Username, user.PasswordHash, user.AuthVersion, cookie.Value, hex.EncodeToString(cookieDigest[:]),
 		entry.Token, originalDetails.Name, originalDetails.Email, originalDetails.Phone, originalDetails.Municipality,
 		"Rejected by database", "reject_test_student_name", "unavailable_students"}
 	path := fmt.Sprintf("/management/students/%d/fields/name", original.ID)
 	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE students ADD CONSTRAINT reject_test_student_name CHECK (name <> 'Rejected by database')").Error; err != nil {
 		t.Fatal(err)
 	}
-	rec := serveHTTPLogging(t, handler, http.MethodPost, path, url.Values{"value": {"Rejected by database"}}, cookie)
+	rec := send(t, handler, http.MethodPost, path+privateQuery, cookie, url.Values{"value": {"Rejected by database"}}, loggedHeader)
 	fixture.requireFailure(t, rec, httpFailure{
 		method: http.MethodPost, route: "POST /management/students/{id}/fields/{field}",
 		stage: "save", kind: "database", sqlstate: "23514",
@@ -130,7 +113,7 @@ func TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging(t *testing.T) {
 	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE students RENAME TO unavailable_students").Error; err != nil {
 		t.Fatal(err)
 	}
-	rec = serveHTTPLogging(t, handler, http.MethodPost, path, url.Values{"value": {"Rejected by database"}}, cookie)
+	rec = send(t, handler, http.MethodPost, path+privateQuery, cookie, url.Values{"value": {"Rejected by database"}}, loggedHeader)
 	fixture.requireFailure(t, rec, httpFailure{
 		method: http.MethodPost, route: "POST /management/students/{id}/fields/{field}",
 		stage: "load", kind: "database", sqlstate: "42P01",
@@ -139,23 +122,22 @@ func TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging(t *testing.T) {
 
 func TestSessionLoadFailureKeepsPublicHeadQuiet(t *testing.T) {
 	fixture := newHTTPLoggingFixture(t)
-	handler := fixture.routes(t, fixture.store)
+	handler := serverHandler(t, fixture.db, fixture.db, fixture.log)
 	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE sessions RENAME TO unavailable_sessions").Error; err != nil {
 		t.Fatal(err)
 	}
 	cookie := &http.Cookie{Name: "management_session", Value: "PRIVATE_FORGED_STAFF_SESSION"}
-	token := strings.Repeat("A", 43)
-	rec := serveHTTPLogging(t, handler, http.MethodHead, "/customer/"+token, nil, cookie)
+	rec := send(t, handler, http.MethodHead, "/customer/"+unknownToken+privateQuery, cookie, nil, loggedHeader)
 	if rec.Code != http.StatusNotFound || rec.Body.Len() != 0 || rec.Header().Get("Cache-Control") != "no-store" ||
 		rec.Header().Get("Referrer-Policy") != "no-referrer" || strings.Contains(rec.Header().Get("Vary"), "Cookie") || len(rec.Result().Cookies()) != 0 {
 		t.Fatal("public HEAD consulted staff sessions or changed its existing quiet 404")
 	}
 	fixture.requireQuiet(t)
-	rec = serveHTTPLogging(t, handler, http.MethodGet, "/management/", nil, cookie)
+	rec = send(t, handler, http.MethodGet, "/management/"+privateQuery, cookie, nil, loggedHeader)
 	fixture.requireFailure(t, rec, httpFailure{
 		method: http.MethodGet, route: "/management/",
 		stage: "session", kind: "database", sqlstate: "42P01",
-	}, cookie.Value, token, "unavailable_sessions")
+	}, cookie.Value, unknownToken, "unavailable_sessions")
 	if rec.Body.String() != "Internal Server Error\n" {
 		t.Fatal("session load failure exposed database detail or changed the SCS 500")
 	}
@@ -165,8 +147,8 @@ func TestSignInCommitFailureLogsActualStatusWithoutCredentials(t *testing.T) {
 	// A fresh, empty session store and no incoming cookie make the failure occur
 	// in redirect commit, not session load or RenewToken's old-token deletion.
 	fixture := newHTTPLoggingFixture(t)
-	user := fixture.createUser(t)
-	handler := fixture.routes(t, fixture.store)
+	user := addStaff(t, fixture.db, httpUsername, httpPassword)
+	handler := serverHandler(t, fixture.db, fixture.db, fixture.log)
 	var count int64
 	if err := fixture.db.WithContext(t.Context()).Model(&auth.Session{}).Count(&count).Error; err != nil || count != 0 {
 		t.Fatalf("fresh sessions: count = %d, error = %v", count, err)
@@ -174,7 +156,7 @@ func TestSignInCommitFailureLogsActualStatusWithoutCredentials(t *testing.T) {
 	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE sessions ADD CONSTRAINT reject_session_commit CHECK (false)").Error; err != nil {
 		t.Fatal(err)
 	}
-	rec := serveHTTPLogging(t, handler, http.MethodPost, "/management/login", url.Values{"username": {user.Username}, "password": {httpPassword}}, nil)
+	rec := send(t, handler, http.MethodPost, "/management/login"+privateQuery, nil, url.Values{"username": {user.Username}, "password": {httpPassword}}, loggedHeader)
 	fixture.requireFailure(t, rec, httpFailure{
 		method: http.MethodPost, route: "POST /management/login",
 		stage: "session", kind: "database", sqlstate: "23514",
@@ -198,7 +180,7 @@ func TestAgreementFailuresLogOnceWithoutContactData(t *testing.T) {
 	if err := settings.New(fixture.db).SetProgramStartDate(t.Context(), date, httpUsername); err != nil {
 		t.Fatal(err)
 	}
-	handler := fixture.routes(t, fixture.store)
+	handler := serverHandler(t, fixture.db, fixture.db, fixture.log)
 	path := "/customer/" + entry.Token
 	sessionCookie := &http.Cookie{Name: "enrollment_session", Value: cookieToken}
 	private := []string{details.Name, details.Email, details.Phone, details.Municipality, entry.Token, cookieToken,
@@ -207,7 +189,7 @@ func TestAgreementFailuresLogOnceWithoutContactData(t *testing.T) {
 	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE settings RENAME TO unavailable_settings").Error; err != nil {
 		t.Fatal(err)
 	}
-	rec := serveHTTPLogging(t, handler, http.MethodGet, path+"/agreement", nil, sessionCookie)
+	rec := send(t, handler, http.MethodGet, path+"/agreement"+privateQuery, sessionCookie, nil, loggedHeader)
 	fixture.requireFailure(t, rec, httpFailure{
 		method: http.MethodGet, route: "GET /customer/{token}/agreement",
 		stage: "load", kind: "database", sqlstate: "42P01",
@@ -220,10 +202,10 @@ func TestAgreementFailuresLogOnceWithoutContactData(t *testing.T) {
 		t.Fatal(err)
 	}
 	consent := url.Values{"accept_terms": {"yes"}, "program_start_date": {date}}
-	rec = serveHTTPLogging(t, handler, http.MethodPost, path+"/agreement", consent, sessionCookie)
+	rec = send(t, handler, http.MethodPost, path+"/agreement"+privateQuery, sessionCookie, consent, loggedHeader)
 	fixture.requireFailure(t, rec, httpFailure{
 		method: http.MethodPost, route: "POST /customer/{token}/agreement",
-		stage: "save", kind: "database", sqlstate: "23514",
+		stage: "accept", kind: "database", sqlstate: "23514",
 	}, private...)
 	if after := fixture.enrollment(t, entry.Token, cookieToken); !reflect.DeepEqual(after, before) {
 		t.Fatal("failed agreement changed contact or consent")
@@ -232,7 +214,7 @@ func TestAgreementFailuresLogOnceWithoutContactData(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.out.Reset()
-	rec = serveHTTPLogging(t, handler, http.MethodPost, path+"/agreement", consent, sessionCookie)
+	rec = send(t, handler, http.MethodPost, path+"/agreement"+privateQuery, sessionCookie, consent, loggedHeader)
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != path+"/payments" || rec.Body.Len() != 0 {
 		t.Fatal("agreement retry did not advance quietly")
 	}
@@ -266,6 +248,7 @@ func httpContactValues(form url.Values) []string {
 	return private
 }
 
+// httpLoggingFixture captures every event the server and its queries log, over an isolated database.
 type httpLoggingFixture struct {
 	db    *gorm.DB
 	store *links.Store
@@ -277,35 +260,9 @@ func newHTTPLoggingFixture(t *testing.T) *httpLoggingFixture {
 	t.Helper()
 	fixture := &httpLoggingFixture{}
 	fixture.log = logging.New(&fixture.out)
-	models := append([]any{&auth.User{}, &auth.Session{}, &links.Link{}, &links.Enrollment{}, &students.Student{}, &settings.Settings{}}, billing.Models()...)
-	db := testdb.Open(t, models...)
-	fixture.db = db.Session(&gorm.Session{Logger: logging.NewDBLogger(fixture.log)})
+	fixture.db = testdb.Open(t, models()...).Session(&gorm.Session{Logger: logging.NewDBLogger(fixture.log)})
 	fixture.store = links.New(fixture.db, nil)
 	return fixture
-}
-
-func (fixture *httpLoggingFixture) routes(t *testing.T, store *links.Store) http.Handler {
-	t.Helper()
-	manager, err := auth.New(fixture.db, false, fixture.log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(manager.Close)
-	child := http.NewServeMux()
-	biller, err := billing.New(fixture.db, billingtest.Client(t, nil), billingtest.Config(), billingtest.Catalog(), nil, fixture.log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := management.RegisterRoutes(child, store, students.New(fixture.db, nil), settings.New(fixture.db), auth.Staff, biller); err != nil {
-		t.Fatal(err)
-	}
-	root := http.NewServeMux()
-	manager.RegisterRoutes(root)
-	root.Handle("/management/", manager.Require(logging.Routes(child)))
-	if err := customer.RegisterRoutes(root, store, students.New(fixture.db, nil), settings.New(fixture.db), biller, false); err != nil {
-		t.Fatal(err)
-	}
-	return logging.Requests(fixture.log, http.NewCrossOriginProtection().Handler(logging.Routes(root)))
 }
 
 func (fixture *httpLoggingFixture) createAndStart(t *testing.T) (links.LinkEntry, string) {
@@ -323,38 +280,11 @@ func (fixture *httpLoggingFixture) createAndStart(t *testing.T) (links.LinkEntry
 
 func (fixture *httpLoggingFixture) enrollment(t *testing.T, linkToken, cookieToken string) links.Enrollment {
 	t.Helper()
-	sess, err := fixture.store.LookupSession(t.Context(), linkToken, cookieToken)
-	if err != nil || sess == nil || sess.Enrollment == nil {
-		t.Fatalf("read source enrollment: present = %t, error = %v", sess != nil && sess.Enrollment != nil, err)
+	enrollment, _, err := fixture.store.LookupSession(t.Context(), linkToken, cookieToken)
+	if err != nil || enrollment == nil {
+		t.Fatalf("read source enrollment: present = %t, error = %v", enrollment != nil, err)
 	}
-	return *sess.Enrollment
-}
-
-func (fixture *httpLoggingFixture) createUser(t *testing.T) auth.User {
-	t.Helper()
-	hash, err := argon2id.CreateHash(httpPassword, &argon2id.Params{Memory: 16, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32})
-	if err != nil {
-		t.Fatal(err)
-	}
-	user := auth.User{Username: httpUsername, PasswordHash: hash, AuthVersion: "PRIVATE_HTTP_AUTH_VERSION"}
-	if err := fixture.db.WithContext(t.Context()).Create(&user).Error; err != nil {
-		t.Fatal(err)
-	}
-	return user
-}
-
-func serveHTTPLogging(t *testing.T, handler http.Handler, method, path string, form url.Values, cookie *http.Cookie) *httptest.ResponseRecorder {
-	t.Helper()
-	r := httptest.NewRequestWithContext(t.Context(), method, path+"?private="+httpQuery, strings.NewReader(form.Encode()))
-	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r.Header.Set("X-Railway-Request-Id", httpRequestID)
-	r.Header.Set("X-Private-Header", httpHeader)
-	if cookie != nil {
-		r.AddCookie(cookie)
-	}
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, r)
-	return rec
+	return *enrollment
 }
 
 type httpFailure struct {

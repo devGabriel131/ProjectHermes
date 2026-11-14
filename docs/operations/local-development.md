@@ -49,13 +49,14 @@ This repository owns the `hermes` database. ProjectHephaestus (`../ProjectHephae
 
 ## Air
 
-Air is configured in [.air.toml](../../.air.toml), which sets only three things.
+Air is configured in [.air.toml](../../.air.toml), which sets only four things.
 
 | Setting | Value | Effect |
 |---|---|---|
 | `env_files` | `[".env"]` | Air loads `.env` into the app's environment. A variable already set in your shell wins. **The app never reads `.env` itself.** |
 | `build.entrypoint` | `./tmp/main` | The binary Air runs; the build is Air's default `go build -o ./tmp/main .`. |
-| `build.include_ext` | `go`, `html`, `css`, `js` | A change to any such file rebuilds and restarts. Air skips `_test.go` files by default; edits under `loadtest/` also rebuild. |
+| `build.include_ext` | `go`, `html`, `css`, `js` | A change to any such file rebuilds and restarts. Air skips `_test.go` files by default. |
+| `build.exclude_dir` | `tmp`, `loadtest` | Air ignores its own build output and the k6 scripts, so editing a load test never restarts the server. The repository has none of Air's other default exclusions (`assets`, `vendor`, `testdata`). |
 
 Consequences:
 
@@ -99,7 +100,7 @@ Every open links, Trash, students or dashboard page holds one server-sent-event 
 ## Source
 
 - `compose.yaml`: `postgres:17`, `POSTGRES_DB`, `postgres_data`, `pg_isready`
-- `.air.toml`: `env_files`, `entrypoint`, `include_ext`
+- `.air.toml`: `env_files`, `entrypoint`, `include_ext`, `exclude_dir`
 - `.env.example`: `DATABASE_URL`, `SESSION_COOKIE_SECURE`, `STRIPE_WEBHOOK_SECRET`, `PUBLIC_BASE_URL`
 - `main.go`: `assets`, `run`, `newServer`, `models`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`, `readNewPassword`

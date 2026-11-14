@@ -62,8 +62,6 @@ func TestSignIn(t *testing.T) {
 		t.Fatalf("sign in over an existing session: status %d, cookie %v; want a new token", rec.Code, second)
 	}
 	requireSignedOut(t, app, first)
-	manager.Close()
-	manager.Close()
 
 	restarted, _ := newApp(t, db)
 	requireSignedIn(t, restarted, second)
@@ -161,7 +159,7 @@ func TestSessionCleanupDeletesOnlyExpired(t *testing.T) {
 	var out bytes.Buffer
 	log := logging.New(&out)
 	db := testdb.Open(t, &Session{}).Session(&gorm.Session{Logger: logging.NewDBLogger(log)})
-	manager := &Manager{db: db}
+	manager := &Manager{db: db, log: log}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	sessions := []Session{
 		{Token: "PRIVATE-EXPIRED-TOKEN", Data: []byte("PRIVATE-EXPIRED-DATA"), Expiry: now.Add(-time.Hour)},
@@ -171,7 +169,7 @@ func TestSessionCleanupDeletesOnlyExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	manager.deleteExpiredSessions(t.Context(), log)
+	manager.deleteExpiredSessions(t.Context())
 	var remaining []Session
 	if err := db.WithContext(t.Context()).Find(&remaining).Error; err != nil {
 		t.Fatal(err)
@@ -187,7 +185,7 @@ func TestSessionCleanupDeletesOnlyExpired(t *testing.T) {
 	if err := db.WithContext(t.Context()).Exec("ALTER TABLE sessions RENAME TO unavailable_cleanup_sessions").Error; err != nil {
 		t.Fatal(err)
 	}
-	manager.deleteExpiredSessions(t.Context(), log)
+	manager.deleteExpiredSessions(t.Context())
 	lines := bytes.Split(bytes.TrimSpace(out.Bytes()), []byte{'\n'})
 	if len(lines) != 1 || !bytes.HasSuffix(out.Bytes(), []byte{'\n'}) {
 		t.Fatalf("cleanup failure emitted %d lines, want one newline-terminated event: %s", len(lines), out.Bytes())
@@ -226,7 +224,7 @@ func TestSessionCleanupDeletesOnlyExpired(t *testing.T) {
 	out.Reset()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	manager.deleteExpiredSessions(ctx, log)
+	manager.deleteExpiredSessions(ctx)
 	if out.Len() != 0 {
 		t.Fatalf("canceled cleanup emitted logs: %s", out.Bytes())
 	}
@@ -240,7 +238,6 @@ func newApp(t *testing.T, db *gorm.DB) (http.Handler, *Manager) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(manager.Close)
 	mux := http.NewServeMux()
 	manager.RegisterRoutes(mux)
 	mux.Handle("/management/", manager.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

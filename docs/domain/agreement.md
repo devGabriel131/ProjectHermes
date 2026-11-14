@@ -4,7 +4,7 @@ This page covers how a customer accepts the agreement against the program start 
 
 ## Acceptance
 
-`GET /customer/{token}/agreement` shows the static terms and the date from `settings.Current`. The date travels in a hidden `program_start_date` input; the checkbox `accept_terms` is never rendered checked. `POST` calls `links.Store.AcceptTerms`.
+`GET /customer/{token}/agreement` shows the static terms and the date from `settings.Current`. The date travels in a hidden `program_start_date` input; the checkbox `accept_terms` is never rendered checked. `POST` validates the body and calls `links.Store.AcceptTerms` first, with no prior lookup: an accepted POST is one statement. The page's reads run only for a `GET`, or to answer a `POST` that accepted nothing.
 
 ```mermaid
 sequenceDiagram
@@ -13,21 +13,23 @@ sequenceDiagram
     participant Store as links.Store
     participant DB as PostgreSQL
     Customer->>Handler: GET /customer/{token}/agreement
+    Handler->>Store: LookupSession (resolveSession)
     Handler->>DB: settings.Current
     Handler-->>Customer: terms, date, unchecked box
     Customer->>Handler: POST accept_terms=yes and program_start_date
     Handler->>Store: AcceptTerms(linkToken, cookieToken, shownStartDate)
-    Store->>DB: UPDATE enrollments SET terms_accepted_at = now() and program_start_date WHERE submitted, not yet accepted, and shown date equals the settings row read FOR SHARE
+    Store->>DB: one UPDATE enrollments SET terms_accepted_at = now() and program_start_date WHERE usable session, submitted, not yet accepted, and shown date equals the settings row read FOR SHARE
     alt one row updated
-        Store-->>Handler: accepted enrollment
+        Store-->>Handler: true
         Handler-->>Customer: 303 to /payments
     else no row updated
-        Store->>DB: re-read activeSubmitted
-        alt already accepted meanwhile
-            Store-->>Handler: existing enrollment, first values kept
-            Handler-->>Customer: 303 to /payments
+        Store-->>Handler: false
+        Handler->>Store: LookupSession (resolveSession)
+        alt session unusable
+            Handler-->>Customer: 404
+        else already accepted (a replay or another tab)
+            Handler-->>Customer: 303 to /payments, first values kept
         else date differs
-            Store-->>Handler: ErrProgramStartChanged
             Handler->>DB: settings.Current
             Handler-->>Customer: 422 with the current date, box unchecked
         end
@@ -36,8 +38,8 @@ sequenceDiagram
 
 | Case | Result |
 |---|---|
-| Link not submitted | `GET` and `POST` redirect to `/forms`; `AcceptTerms` itself returns nothing for an unsubmitted link |
-| `POST` on an already accepted link | Redirect to `/payments` before the body is parsed |
+| Enrollment not submitted | `GET` and `POST` redirect to `/forms`; `AcceptTerms` updates nothing for an unsubmitted enrollment |
+| `POST` on an already accepted enrollment | Redirect to `/payments`, for any body: the first acceptance stands |
 | Body unreadable or oversized | 400 or 413 with a generic message ([Customer flow](customer-flow.md)) |
 | `accept_terms` repeated, or `program_start_date` not sent exactly once | 400 |
 | `accept_terms` not `yes` | 422 on `accept_terms`; the store is not called |
@@ -49,7 +51,7 @@ Acceptance time is the database clock (`now()`). The agreement text is static in
 
 ## links and settings share raw SQL
 
-`AcceptTerms` reads `settings` by table name: `(SELECT program_start_date FROM settings WHERE id = 1 FOR SHARE)`, and reuses `settings.ParseProgramStartDate`. The table and column names are therefore a contract between the two packages. The `FOR SHARE` lock serializes acceptance against a staff date change, so a customer cannot accept a date that was replaced a moment earlier. Renaming either name means editing both packages.
+`AcceptTerms` reads `settings` by table name, in a subquery `(SELECT s.program_start_date FROM settings s WHERE s.id = 1 AND e.terms_accepted_at IS NULL FOR SHARE)`, and parses the shown date with `settings.ParseDate`. The table and column names are therefore a contract between the two packages. The `FOR SHARE` lock serializes acceptance against a staff date change, so a customer cannot accept a date that was replaced a moment earlier. Correlating the subquery on the enrollment makes PostgreSQL plan it as a SubPlan that locks the settings row only for a candidate enrollment; uncorrelated, it would be an InitPlan that takes the lock, and so writes WAL, on every POST. Renaming either name means editing both packages.
 
 ## Start date to cohort
 
@@ -105,7 +107,7 @@ flowchart LR
 | One row | `id` is always 1 (`settings_single_row`). `Current` returns defaults without writing when the row is missing. |
 | Lifetime | `link_lifetime_days` between 2 and 14 (`MinLinkLifetimeDays`, `MaxLinkLifetimeDays`), default 7 (`DefaultLinkLifetimeDays`). The `link_lifetime_days_range` check repeats the constants, so even a bypass of the store cannot violate it. |
 | Applies to | New links only, at creation, on the application clock. Issued links keep their own expiry, and submit resets it to 168 hours ([Links](links.md)). |
-| Start date format | `ParseProgramStartDate`: trimmed, valid `YYYY-MM-DD`, nonzero year, re-formatting must reproduce the input. Only Go validates it; the column has no check. |
+| Start date format | `ParseDate`: trimmed, valid `YYYY-MM-DD`, nonzero year, re-formatting must reproduce the input (`ErrDate` otherwise). The bootcamp date uses the same parser. Only Go validates it; the column has no check. |
 | Replace, never clear | An empty date is rejected, so once saved it can only be replaced. Before the first save no agreement can be accepted. |
 | Independent writers | Each setter upserts only its own column plus `updated_at` and `updated_by`; the first save of either creates the row with the other column's default. Concurrent edits to different settings do not overwrite each other. |
 | Audit | `updated_by` and `updated_at` are row-level: the last writer of either setting. The settings page shows "Last changed by" and may show a start-date change. Both setters refuse an empty staff name. |
@@ -123,13 +125,14 @@ Page structure and fragments are in [Management overview](../management/overview
 ## Deliberate choices
 
 - The raw-SQL read of `settings` inside `links` is intentional: the `FOR SHARE` lock closes the acceptance race, which a separate read through `settings.Store` could not.
-- `ProgramStartDate` has no database check, so the format guarantee comes only from `ParseProgramStartDate`; every writer and `AcceptTerms` must call it.
+- `ProgramStartDate` has no database check, so the format guarantee comes only from `ParseDate`; every writer and `AcceptTerms` must call it.
 
 ## Source
 
-- `internal/links/links.go`: `Store.AcceptTerms`, `ErrProgramStartChanged`, `Enroll`, `Store.LookupSession`
-- `internal/settings/settings.go`: `Settings`, `Store.Current`, `Store.SetLinkLifetimeDays`, `Store.SetProgramStartDate`, `ParseProgramStartDate`, `MinLinkLifetimeDays`, `MaxLinkLifetimeDays`, `DefaultLinkLifetimeDays`, `ErrProgramStartDate`, `ErrLinkLifetimeRange`
-- `internal/customer/agreement.go`: `agreement`
+- `internal/links/links.go`: `Store.AcceptTerms`, `usableSession`, `Enroll`, `Store.LookupSession`
+- `internal/settings/settings.go`: `Settings`, `Store.Current`, `Store.SetLinkLifetimeDays`, `Store.SetProgramStartDate`, `Store.SetBootcampDate`, `ParseDate`, `ErrDate`, `MinLinkLifetimeDays`, `MaxLinkLifetimeDays`, `DefaultLinkLifetimeDays`, `ErrLinkLifetimeRange`
+- `internal/customer/agreement.go`: `site.agreement`
+- `internal/customer/customer.go`: `spanishDate`
 - `internal/customer/templates/agreement.html`: `accept_terms`, `program_start_date`
 - `internal/management/management.go`: `RegisterRoutes`
 - `internal/management/templates/index.html`: `program-start-date`

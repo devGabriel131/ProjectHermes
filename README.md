@@ -24,7 +24,7 @@ Go 1.27, PostgreSQL 17 via GORM, Stripe Go SDK v87, Argon2id, and HTMX.
 
 | Area | Path | Description |
 |---|---|---|
-| Index & conventions | [docs/README.md](docs/README.md) | Full 29-page catalog, reading order, and documentation conventions |
+| Index & conventions | [docs/README.md](docs/README.md) | Catalog of all 28 pages, reading order, and documentation conventions |
 | Architecture | [docs/architecture.md](docs/architecture.md) | Package graph, middleware pipeline, mounted route table |
 | Data model | [docs/data-model.md](docs/data-model.md) | 12 PostgreSQL tables, ER diagram, DB-enforced constraints |
 | Domain | [docs/domain/lifecycle.md](docs/domain/lifecycle.md) | Vocabulary, links lifecycle, customer forms, student registry |

@@ -3,11 +3,13 @@
 package billing_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -19,7 +21,6 @@ import (
 	"projecthermes/internal/billing"
 	"projecthermes/internal/billing/billingtest"
 	"projecthermes/internal/links"
-	"projecthermes/internal/payments"
 	"projecthermes/internal/students"
 	"projecthermes/internal/testdb"
 )
@@ -38,6 +39,7 @@ type mockStripeServer struct {
 	receivedCurrency          string
 	receivedCustomer          string
 	receivedPMC               string
+	receivedCancelURL         string
 	receivedAllowed           []string
 	customersCreated          map[string]string         // contractRef -> customerID
 	sessionsCreated           map[string]string         // attemptRef -> sessionID
@@ -94,6 +96,7 @@ func newMockStripeServer() *mockStripeServer {
 		m.receivedCurrency = r.FormValue("currency")
 		m.receivedCustomer = r.FormValue("customer")
 		m.receivedPMC = r.FormValue("payment_method_configuration")
+		m.receivedCancelURL = r.FormValue("cancel_url")
 		m.receivedAllowed = m.receivedAllowed[:0]
 		for key, values := range r.Form {
 			if strings.HasPrefix(key, "allowed_payment_method_types[") {
@@ -183,12 +186,13 @@ func newMockStripeServer() *mockStripeServer {
 	})
 
 	mux.HandleFunc("GET /v1/checkout/sessions", func(w http.ResponseWriter, r *http.Request) {
-		customer := r.URL.Query().Get("customer")
+		customer, intent := r.URL.Query().Get("customer"), r.URL.Query().Get("payment_intent")
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		data := []map[string]any{}
 		for _, sess := range m.sessions {
-			if customer == "" || sess["customer"] == customer {
+			pi, _ := sess["payment_intent"].(map[string]any)
+			if (customer == "" || sess["customer"] == customer) && (intent == "" || pi["id"] == intent) {
 				data = append(data, sess)
 			}
 		}
@@ -211,9 +215,7 @@ func (m *mockStripeServer) with(f func()) {
 	f()
 }
 
-// setupTestEnvironment seeds a Link and, only so staff-keyed entry points (ForStudent, ReconcileStudent)
-// can reach the contract, a Student. Production creates the Student at funding (links.Enroll), so a
-// contract never has one before funding.
+// seedLink creates a parent Link for test Enrollments.
 func seedLink(t *testing.T, db *gorm.DB) uint64 {
 	t.Helper()
 	var b [32]byte
@@ -230,6 +232,9 @@ func seedLink(t *testing.T, db *gorm.DB) uint64 {
 	return l.ID
 }
 
+// setupTestEnvironment seeds an Enrollment and, only so staff-keyed entry points (ForStudent, ReconcileStudent)
+// can reach the contract, a Student. Production creates the Enrollment's Student at funding (links.Enroll), so a
+// contract never has one before funding.
 func setupTestEnvironment(t *testing.T, mock *mockStripeServer) (*gorm.DB, *billing.Service, uint64, uint64) {
 	t.Helper()
 	allModels := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)
@@ -239,7 +244,7 @@ func setupTestEnvironment(t *testing.T, mock *mockStripeServer) (*gorm.DB, *bill
 	rand.Read(tokenHash)
 
 	now := time.Now().UTC()
-	link := links.Enrollment{
+	enrollment := links.Enrollment{
 		LinkID:      seedLink(t, db),
 		SessionHash: tokenHash,
 		Details: students.Details{
@@ -254,16 +259,16 @@ func setupTestEnvironment(t *testing.T, mock *mockStripeServer) (*gorm.DB, *bill
 		ProgramStartDate: "2026-11-01",
 		ExpiresAt:        now.Add(7 * 24 * time.Hour),
 	}
-	if err := db.Create(&link).Error; err != nil {
-		t.Fatalf("create test link: %v", err)
+	if err := db.Create(&enrollment).Error; err != nil {
+		t.Fatalf("create test enrollment: %v", err)
 	}
 
 	student := students.Student{
-		EnrollmentID: &link.ID,
-		Details:        link.Details,
-		CreatedAt:      now,
-		IsActive:       true,
-		Cohort:         "2026-11",
+		EnrollmentID: &enrollment.ID,
+		Details:      enrollment.Details,
+		CreatedAt:    now,
+		IsActive:     true,
+		Cohort:       "2026-11",
 	}
 	if err := db.Create(&student).Error; err != nil {
 		t.Fatalf("create test student: %v", err)
@@ -271,7 +276,7 @@ func setupTestEnvironment(t *testing.T, mock *mockStripeServer) (*gorm.DB, *bill
 
 	svc := billingtest.New(t, db, mock.mux)
 
-	return db, svc, link.ID, student.ID
+	return db, svc, enrollment.ID, student.ID
 }
 
 func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
@@ -294,7 +299,7 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 
 	t.Run("unknown_plan_rejected", func(t *testing.T) {
 		_, err := svc.StartCheckout(context.Background(), enrollmentID, "invalid_plan")
-		if err != payments.ErrUnknownPlan {
+		if err != billing.ErrUnknownPlan {
 			t.Fatalf("expected ErrUnknownPlan, got %v", err)
 		}
 	})
@@ -377,7 +382,7 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 		otherHash := make([]byte, 32)
 		rand.Read(otherHash)
 		now := time.Now().UTC()
-		link := links.Enrollment{
+		enrollment := links.Enrollment{
 			LinkID:      seedLink(t, db),
 			SessionHash: otherHash,
 			Details: students.Details{
@@ -389,12 +394,12 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 			ProgramStartDate: "2026-11-01",
 			ExpiresAt:        now.Add(7 * 24 * time.Hour),
 		}
-		db.Create(&link)
+		db.Create(&enrollment)
 		student := students.Student{
-			EnrollmentID: &link.ID,
-			Details:        link.Details,
-			IsActive:       true,
-			Cohort:         "2026-11",
+			EnrollmentID: &enrollment.ID,
+			Details:      enrollment.Details,
+			IsActive:     true,
+			Cohort:       "2026-11",
 		}
 		db.Create(&student)
 
@@ -402,7 +407,7 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 		mock.createSessionError = true
 		mock.mu.Unlock()
 
-		res, err := svc.StartCheckout(context.Background(), link.ID, "full")
+		res, err := svc.StartCheckout(context.Background(), enrollment.ID, "full")
 		if err != nil {
 			t.Fatalf("expected nil error (graceful pending), got %v", err)
 		}
@@ -724,4 +729,82 @@ func TestCheckoutCreateResumes(t *testing.T) {
 			t.Fatalf("expected 2 attempts, got %d", n)
 		}
 	})
+}
+
+// A card decline leaves Checkout's Session open and sends only payment_intent.payment_failed. The app
+// must record it on the attempt and show it until a newer try supersedes it.
+func TestCheckoutDeclineIsRecorded(t *testing.T) {
+	ctx := context.Background()
+	mock := newMockStripeServer()
+	db, svc, enrollmentID, _ := setupTestEnvironment(t, mock)
+
+	if _, err := svc.StartCheckout(ctx, enrollmentID, "full"); err != nil {
+		t.Fatalf("StartCheckout: %v", err)
+	}
+	a := latestAttempt(t, db)
+	// Checkout's back link must name this attempt: /payments/return resolves it by reference.
+	mock.with(func() {
+		if want := "http://127.0.0.1:3000/payments/return?attempt=" + a.Reference; mock.receivedCancelURL != want {
+			t.Fatalf("cancel_url = %q; want %q", mock.receivedCancelURL, want)
+		}
+	})
+	mock.with(func() {
+		mock.sessions[*a.StripeSessionID]["payment_intent"] = map[string]any{
+			"id": "pi_declined", "object": "payment_intent", "status": "requires_payment_method",
+			"last_payment_error": map[string]any{"type": "card_error", "code": "card_declined", "decline_code": "insufficient_funds"},
+		}
+	})
+
+	payload := makeStripeEventJSON("evt_pi_failed", "payment_intent.payment_failed", "pi_declined", false, "2026-09-30.endive")
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/stripe", bytes.NewReader(payload))
+	req.Header.Set("Stripe-Signature", signWebhookPayload(t, payload, billingtest.Config().WebhookSecret, time.Now()))
+	rec := httptest.NewRecorder()
+	svc.Webhook(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("webhook status = %d: %s", rec.Code, rec.Body.String())
+	}
+	svc.DrainForTest(ctx)
+
+	declinedStatus := billing.ReturnStatus{Status: "declined", Decline: "funds", AmountCents: 60000}
+	pendingStatus := billing.ReturnStatus{Status: "pending", AmountCents: 60000}
+	assertDeclined := func(wantDeclined bool, wantCancel billing.ReturnStatus) {
+		t.Helper()
+		if got, err := svc.CancelStatus(ctx, a.Reference); err != nil || got != wantCancel {
+			t.Fatalf("CancelStatus = %+v, %v; want %+v", got, err, wantCancel)
+		}
+		summary, err := svc.ForEnrollment(ctx, enrollmentID)
+		if err != nil || summary == nil {
+			t.Fatalf("ForEnrollment = %+v, %v", summary, err)
+		}
+		declined, err := svc.DeclinedEnrollments(ctx)
+		if err != nil {
+			t.Fatalf("DeclinedEnrollments: %v", err)
+		}
+		wantReason := ""
+		if wantDeclined {
+			wantReason = "funds"
+		}
+		if summary.Decline != wantReason || declined[enrollmentID] != wantDeclined {
+			t.Fatalf("Summary.Decline = %q, DeclinedEnrollments = %v; want declined=%v", summary.Decline, declined, wantDeclined)
+		}
+	}
+
+	if got := latestAttempt(t, db); got.State != "open" || got.DeclineCode == nil || *got.DeclineCode != "insufficient_funds" {
+		t.Fatalf("attempt = state %q, decline %v; want open with insufficient_funds", got.State, got.DeclineCode)
+	}
+	assertDeclined(true, declinedStatus)
+	// The success_url return stays pending: a decline followed by a successful retry must not read as declined.
+	if got, err := svc.ReturnStatus(ctx, *a.StripeSessionID); err != nil || got != pendingStatus {
+		t.Fatalf("ReturnStatus = %+v, %v; want %+v", got, err, pendingStatus)
+	}
+
+	// A newer try in flight supersedes the stored decline.
+	if err := db.Model(&billing.CheckoutAttempt{}).Where("id = ?", a.ID).Update("state", "processing").Error; err != nil {
+		t.Fatalf("move attempt to processing: %v", err)
+	}
+	assertDeclined(false, pendingStatus)
+
+	if _, err := svc.CancelStatus(ctx, "UNKNOWN"); err != billing.ErrUnavailable {
+		t.Fatalf("CancelStatus(unknown) = %v; want ErrUnavailable", err)
+	}
 }

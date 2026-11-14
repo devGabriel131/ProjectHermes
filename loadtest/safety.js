@@ -5,8 +5,8 @@ import http from 'k6/http';
 import exec from 'k6/execution';
 import { check, group } from 'k6';
 import {
-  ORIGIN, OFFSET, baseOptions, call, encode, expect, expectPlain, formValues, has, hdr, hdrEnds, loadTokens, randomToken, spec,
-  summarize, target, tokenAt,
+  AGREEMENT, NOT_FOUND, ORIGIN, OFFSET, PLAN_SELECTION, SAVED, WELCOME, baseOptions, call, encode, expect, expectPlain, formValues, has, hdr,
+  hdrEnds, loadTokens, newSession, randomToken, spec, start, summarize, target, tokenAt,
 } from './lib.js';
 
 export const options = {
@@ -18,26 +18,21 @@ export const options = {
 };
 
 const tokens = loadTokens();
-const NOT_FOUND = 'Este enlace ya no es válido'; // not-found.html
-const WELCOME = 'Bienvenidos a Masterminds';
 const EVIL = { Origin: 'https://evil.example', 'Sec-Fetch-Site': 'cross-site' };
 const SAME_ORIGIN = { Origin: ORIGIN, 'Sec-Fetch-Site': 'same-origin' };
 const JSON_BODY = { 'Content-Type': 'application/json' };
-const redirectsTo = (suffix) => (r) => target(r).endsWith(suffix);
+const redirectsTo = (suffix) => hdrEnds('Location', suffix);
 
 let used = 0;
 function fresh() {
-  http.cookieJar().clear(ORIGIN);
   const i = used++;
+  newSession(i);
   const token = tokenAt(tokens, i);
   if (!token) exec.test.abort(`safety.js needs a token at slice index ${i}; widen OFFSET/COUNT`);
   const form = formValues(OFFSET + i);
   return { token, path: `/customer/${token}`, form, body: encode(form) };
 }
-const start = (c) =>
-  expect(call('POST', `${c.path}/start`), 'POST /customer/:token/start sets cookie and redirects to forms', 303, {
-    'Location ends /forms': redirectsTo('/forms'),
-  });
+const begin = (c) => start(c.path, { label: 'POST /customer/:token/start sets cookie and redirects to forms', step: false });
 const submit = (c, opts = {}) => call('POST', c.path, { body: c.body, htmx: true, ...opts });
 export default function () {
   group('1 token boundaries', () => {
@@ -77,7 +72,7 @@ export default function () {
 
   group('2 draft endpoint', () => {
     const c = fresh();
-    start(c);
+    begin(c);
     const draft = (field, body) => call('POST', `${c.path}/draft/${field}`, { body, htmx: true });
     expect(draft('nope', encode({ nope: 'x' })), 'autosave of an unknown field is refused', 404);
     expect(draft('name', encode({ name: ['Ana Pérez', 'Luis Soto'] })), 'autosave with duplicate values is rejected', 400);
@@ -87,9 +82,9 @@ export default function () {
     expect(draft('email', encode({ email: 'not-an-email' })), 'autosave of an invalid email is refused, not saved', 422, {
       'says not saved': has('No se guardó'),
     });
-    expect(draft('name', encode({ name: c.form.name })), 'autosave of a valid value saves', 200, { 'says Guardado.': has('Guardado.') });
+    expect(draft('name', encode({ name: c.form.name })), 'autosave of a valid value saves', 200, { 'says Guardado.': has(SAVED) });
     expect(draft('name', encode({ name: c.form.name })), 'autosave replay of the same value is idempotent', 200, {
-      'says Guardado.': has('Guardado.'),
+      'says Guardado.': has(SAVED),
     });
     expect(call('GET', `${c.path}/forms`), 'a saved draft is restored on the form page', 200, {
       'has the saved name': has(`value="${c.form.name}"`),
@@ -98,7 +93,7 @@ export default function () {
 
   group('3 final submit', () => {
     const c = fresh();
-    start(c);
+    begin(c);
     const invalid = {
       'email mismatch': { email_confirm: 'other@example.com' },
       'one-word name': { name: 'María' },
@@ -137,19 +132,19 @@ export default function () {
 
   group('4 concurrent final submit', () => {
     const c = fresh();
-    start(c);
+    begin(c);
     const responses = http.batch(Array.from({ length: 20 }, () => spec('POST', c.path, { body: c.body, htmx: true })));
     for (const r of responses) {
       expect(r, '20 racing identical submits are each accepted or replayed as a redirect, never 4xx/5xx', [200, 303], {
-        'redirects to the agreement': redirectsTo('/agreement'),
+        'redirects to the agreement': (r) => target(r).endsWith('/agreement'),
       });
     }
-    expect(call('GET', `${c.path}/agreement`), 'the agreement is reachable after the submit race', 200, { 'has agreement marker': has('Revisa y acepta el acuerdo') });
+    expect(call('GET', `${c.path}/agreement`), 'the agreement is reachable after the submit race', 200, { 'has agreement marker': has(AGREEMENT) });
   });
 
   group('5 agreement and payment gating', () => {
     const c = fresh();
-    start(c);
+    begin(c);
     const agreementPost = (form) => call('POST', `${c.path}/agreement`, { body: encode(form) });
     expect(call('GET', `${c.path}/agreement`), 'agreement before submit sends the customer back to the form', 303, { 'Location ends /forms': redirectsTo('/forms') });
     expect(call('GET', `${c.path}/payments`), 'payments before submit sends the customer back to the form', 303, { 'Location ends /forms': redirectsTo('/forms') });
@@ -190,7 +185,7 @@ export default function () {
       'Location ends /payments': redirectsTo('/payments'),
     });
     expect(call('GET', `${c.path}/agreement`), 'agreement after acceptance shows it as accepted', 200, { 'says already accepted': has('Ya aceptaste este acuerdo') });
-    expect(call('GET', `${c.path}/payments`), 'payments after acceptance shows plan selection', 200, { 'has plan-selection marker': has('Elige tu plan de pago') });
+    expect(call('GET', `${c.path}/payments`), 'payments after acceptance shows plan selection', 200, { 'has plan-selection marker': has(PLAN_SELECTION) });
     // Rejected before StartCheckout, so no Stripe call is made.
     expect(call('POST', `${c.path}/payments`, { body: encode({ payment_plan: 'bogus' }) }), 'unknown payment plan is refused without starting checkout', 422);
     expect(call('POST', `${c.path}/payments`, { body: encode({ payment_plan: ['full', 'six'] }) }), 'two payment plans in one request are rejected', 400);
@@ -200,7 +195,7 @@ export default function () {
     const c = fresh();
     const blocked = (what, r) => expectPlain(r, `cross-origin ${what} is blocked before any handler runs`, 403, { 'says cross-origin': has('cross-origin request detected') });
     blocked('start', call('POST', `${c.path}/start`, { headers: EVIL }));
-    start(c);
+    begin(c);
     blocked('autosave', call('POST', `${c.path}/draft/name`, { body: encode({ name: 'Evil Name' }), htmx: true, headers: EVIL }));
     blocked('final submit', submit(c, { headers: EVIL }));
     blocked('autosave with Origin only (no Sec-Fetch-Site)', call('POST', `${c.path}/draft/name`, { body: encode({ name: 'Evil Name' }), htmx: true, headers: { Origin: EVIL.Origin } }));
@@ -213,7 +208,7 @@ export default function () {
     expect(call('GET', `${c.path}/forms`), 'blocked cross-origin writes saved nothing', 200, { 'no evil draft stored': (r) => !r.body.includes('Evil Name') });
     expect(call('GET', c.path), 'blocked cross-origin submit did not submit the link', 200, { 'still shows the welcome page': has(WELCOME) });
     expect(call('POST', `${c.path}/draft/name`, { body: encode({ name: c.form.name }), htmx: true, headers: SAME_ORIGIN }), 'same-origin writes pass the guard', 200, {
-      'says Guardado.': has('Guardado.'),
+      'says Guardado.': has(SAVED),
     });
   });
 

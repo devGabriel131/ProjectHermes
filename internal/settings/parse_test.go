@@ -3,9 +3,10 @@ package settings
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
-func TestParseProgramStartDate(t *testing.T) {
+func TestParseDate(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		raw  string
@@ -31,15 +32,15 @@ func TestParseProgramStartDate(t *testing.T) {
 		{"zero month", "2027-00-01", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := ParseProgramStartDate(tc.raw)
+			got, err := ParseDate(tc.raw)
 			if tc.want == "" {
-				if got != "" || !errors.Is(err, ErrProgramStartDate) {
-					t.Fatalf("ParseProgramStartDate(%q) = %q, %v, want empty and %v", tc.raw, got, err, ErrProgramStartDate)
+				if !got.IsZero() || !errors.Is(err, ErrDate) {
+					t.Fatalf("ParseDate(%q) = %v, %v, want zero and %v", tc.raw, got, err, ErrDate)
 				}
 				return
 			}
-			if err != nil || got != tc.want {
-				t.Fatalf("ParseProgramStartDate(%q) = %q, %v, want %q", tc.raw, got, err, tc.want)
+			if err != nil || got.Format(time.DateOnly) != tc.want {
+				t.Fatalf("ParseDate(%q) = %v, %v, want %q", tc.raw, got, err, tc.want)
 			}
 		})
 	}

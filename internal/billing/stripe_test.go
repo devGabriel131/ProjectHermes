@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
-	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -132,74 +132,33 @@ func TestConfigValidation(t *testing.T) {
 }
 
 func TestLoadConfigFromEnv(t *testing.T) {
-	cleanEnv := func() {
-		os.Unsetenv("STRIPE_API_KEY")
-		os.Unsetenv("STRIPE_MODE")
-		os.Unsetenv("PUBLIC_BASE_URL")
-		os.Unsetenv("STRIPE_WEBHOOK_SECRET")
-		os.Unsetenv("STRIPE_PAYMENT_METHOD_CONFIGURATION_ID")
-		os.Unsetenv("STRIPE_PORTAL_CONFIGURATION_ID")
+	tests := []struct {
+		name, apiKey, mode string
+		wantErr            bool
+	}{
+		{"missing_api_key", "", "sandbox", true},
+		{"invalid_mode", "sk_test_123", "staging", true},
+		{"mismatched_key_prefix_sandbox", "sk_live_123", "sandbox", true},
+		{"mismatched_key_prefix_live", "sk_test_123", "live", true},
+		{"valid_sandbox_config", "rk_test_abc123", "sandbox", false},
 	}
-	defer cleanEnv()
-
-	t.Run("missing_api_key", func(t *testing.T) {
-		cleanEnv()
-		_, _, err := billing.LoadConfigFromEnv()
-		if err == nil {
-			t.Fatal("expected error for missing STRIPE_API_KEY")
-		}
-	})
-
-	t.Run("invalid_mode", func(t *testing.T) {
-		cleanEnv()
-		os.Setenv("STRIPE_API_KEY", "sk_test_123")
-		os.Setenv("STRIPE_MODE", "staging")
-		_, _, err := billing.LoadConfigFromEnv()
-		if err == nil {
-			t.Fatal("expected error for invalid STRIPE_MODE")
-		}
-	})
-
-	t.Run("mismatched_key_prefix_sandbox", func(t *testing.T) {
-		cleanEnv()
-		os.Setenv("STRIPE_API_KEY", "sk_live_123")
-		os.Setenv("STRIPE_MODE", "sandbox")
-		_, _, err := billing.LoadConfigFromEnv()
-		if err == nil {
-			t.Fatal("expected error for sk_live_ key in sandbox mode")
-		}
-	})
-
-	t.Run("mismatched_key_prefix_live", func(t *testing.T) {
-		cleanEnv()
-		os.Setenv("STRIPE_API_KEY", "sk_test_123")
-		os.Setenv("STRIPE_MODE", "live")
-		_, _, err := billing.LoadConfigFromEnv()
-		if err == nil {
-			t.Fatal("expected error for sk_test_ key in live mode")
-		}
-	})
-
-	t.Run("valid_sandbox_config", func(t *testing.T) {
-		cleanEnv()
-		os.Setenv("STRIPE_API_KEY", "rk_test_abc123")
-		os.Setenv("STRIPE_MODE", "sandbox")
-		os.Setenv("PUBLIC_BASE_URL", "http://localhost:3000")
-		os.Setenv("STRIPE_WEBHOOK_SECRET", "whsec_mock")
-		os.Setenv("STRIPE_PAYMENT_METHOD_CONFIGURATION_ID", "pmc_mock")
-		os.Setenv("STRIPE_PORTAL_CONFIGURATION_ID", "bpc_mock")
-
-		cfg, key, err := billing.LoadConfigFromEnv()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if key != "rk_test_abc123" {
-			t.Errorf("got key %q, want rk_test_abc123", key)
-		}
-		if cfg.Live {
-			t.Error("got Live=true, want Live=false")
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("STRIPE_API_KEY", tt.apiKey)
+			t.Setenv("STRIPE_MODE", tt.mode)
+			t.Setenv("PUBLIC_BASE_URL", "http://localhost:3000")
+			t.Setenv("STRIPE_WEBHOOK_SECRET", "whsec_mock")
+			t.Setenv("STRIPE_PAYMENT_METHOD_CONFIGURATION_ID", "pmc_mock")
+			t.Setenv("STRIPE_PORTAL_CONFIGURATION_ID", "bpc_mock")
+			cfg, key, err := billing.LoadConfigFromEnv()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("LoadConfigFromEnv() error = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && (key != tt.apiKey || cfg.Live) {
+				t.Fatalf("got key %q, Live=%v; want %q, Live=false", key, cfg.Live, tt.apiKey)
+			}
+		})
+	}
 }
 
 func mockStripePrice(id, lookupKey string, cents int64, currency string, active, livemode bool, billingScheme stripe.PriceBillingScheme, priceType stripe.PriceType) map[string]any {
@@ -216,6 +175,17 @@ func mockStripePrice(id, lookupKey string, cents int64, currency string, active,
 	}
 }
 
+// loadCatalog runs sandbox LoadCatalog against a Stripe whose price list is prices.
+func loadCatalog(t *testing.T, prices []map[string]any) (billing.Catalog, error) {
+	t.Helper()
+	client := billingtest.Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": prices, "has_more": false})
+	}))
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	return billing.LoadCatalog(ctx, client, false)
+}
+
 func TestLoadCatalogValidation(t *testing.T) {
 	validPrices := []map[string]any{
 		mockStripePrice("pr_full", "asvab_full_initial_usd", 60000, "usd", true, false, stripe.PriceBillingSchemePerUnit, stripe.PriceTypeOneTime),
@@ -227,19 +197,7 @@ func TestLoadCatalogValidation(t *testing.T) {
 	}
 
 	t.Run("valid_catalog", func(t *testing.T) {
-		client := billingtest.Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			resp := map[string]any{
-				"object":   "list",
-				"data":     validPrices,
-				"has_more": false,
-			}
-			_ = json.NewEncoder(w).Encode(resp)
-		}))
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		catalog, err := billing.LoadCatalog(ctx, client, false)
+		catalog, err := loadCatalog(t, validPrices)
 		if err != nil {
 			t.Fatalf("unexpected error loading catalog: %v", err)
 		}
@@ -257,67 +215,23 @@ func TestLoadCatalogValidation(t *testing.T) {
 	})
 
 	t.Run("missing_price", func(t *testing.T) {
-		incompletePrices := validPrices[:5] // omit reinstatement
-		client := billingtest.Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			resp := map[string]any{
-				"object":   "list",
-				"data":     incompletePrices,
-				"has_more": false,
-			}
-			_ = json.NewEncoder(w).Encode(resp)
-		}))
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		_, err := billing.LoadCatalog(ctx, client, false)
-		if err == nil {
+		if _, err := loadCatalog(t, validPrices[:5]); err == nil { // omit reinstatement
 			t.Fatal("expected error when price is missing from catalog")
 		}
 	})
 
 	t.Run("wrong_unit_amount", func(t *testing.T) {
-		corruptedPrices := make([]map[string]any, len(validPrices))
-		copy(corruptedPrices, validPrices)
-		corruptedPrices[0] = mockStripePrice("pr_full", "asvab_full_initial_usd", 59999, "usd", true, false, stripe.PriceBillingSchemePerUnit, stripe.PriceTypeOneTime)
-
-		client := billingtest.Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			resp := map[string]any{
-				"object":   "list",
-				"data":     corruptedPrices,
-				"has_more": false,
-			}
-			_ = json.NewEncoder(w).Encode(resp)
-		}))
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		_, err := billing.LoadCatalog(ctx, client, false)
-		if err == nil {
+		prices := slices.Clone(validPrices)
+		prices[0] = mockStripePrice("pr_full", "asvab_full_initial_usd", 59999, "usd", true, false, stripe.PriceBillingSchemePerUnit, stripe.PriceTypeOneTime)
+		if _, err := loadCatalog(t, prices); err == nil {
 			t.Fatal("expected error when price amount does not match plan registry")
 		}
 	})
 
 	t.Run("wrong_livemode", func(t *testing.T) {
-		corruptedPrices := make([]map[string]any, len(validPrices))
-		copy(corruptedPrices, validPrices)
-		corruptedPrices[0] = mockStripePrice("pr_full", "asvab_full_initial_usd", 60000, "usd", true, true, stripe.PriceBillingSchemePerUnit, stripe.PriceTypeOneTime)
-
-		client := billingtest.Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			resp := map[string]any{
-				"object":   "list",
-				"data":     corruptedPrices,
-				"has_more": false,
-			}
-			_ = json.NewEncoder(w).Encode(resp)
-		}))
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		_, err := billing.LoadCatalog(ctx, client, false)
-		if err == nil {
+		prices := slices.Clone(validPrices)
+		prices[0] = mockStripePrice("pr_full", "asvab_full_initial_usd", 60000, "usd", true, true, stripe.PriceBillingSchemePerUnit, stripe.PriceTypeOneTime)
+		if _, err := loadCatalog(t, prices); err == nil {
 			t.Fatal("expected error when price livemode does not match configuration")
 		}
 	})

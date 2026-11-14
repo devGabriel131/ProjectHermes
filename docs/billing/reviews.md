@@ -79,10 +79,12 @@ No code path outside the table above writes `review_reason`. Management only dis
 
 ## Source
 
-- `internal/billing/billing.go`: `reviewUnresolvedProviderCreate`, `reviewInvoiceMismatch`, `reviewMissingInvoice`, `reviewPaymentReview`, `reviewUnsupportedPaymentMethod`, `reviewConfigurationMismatch`, `ErrNeedsReview`, `Summary`
-- `internal/billing/worker.go`: `markContract`, `mark`, `reviewFor`, `invoiceStateOf`, `syncInvoice`, `holdInvoice`, `store`, `reviewObligation`, `adopt`, `arm`, `scheduleInvoices`, `ensureDefaultPaymentMethod`, `syncAttempt`, `resumeCreate`, `fund`, `reviewState`
+- `internal/billing/billing.go`: `reviewUnresolvedProviderCreate`, `reviewInvoiceMismatch`, `reviewMissingInvoice`, `reviewPaymentReview`, `reviewUnsupportedPaymentMethod`, `reviewConfigurationMismatch`, `ErrNeedsReview`
+- `internal/billing/worker.go`: `markContract`, `mark`
+- `internal/billing/invoices.go`: `reviewFor`, `invoiceStateOf`, `syncInvoice`, `holdInvoice`, `store`, `reviewObligation`, `adopt`, `arm`, `scheduleInvoices`, `ensureDefaultPaymentMethod`
+- `internal/billing/checkout.go`: `syncAttempt`, `resumeCreate`, `fund`, `reviewState`
 - `internal/billing/suspension.go`: `hasReview`, `reinstatable`, `evaluateReactivation`
-- `internal/billing/summary.go`: `summarize`
+- `internal/billing/summary.go`: `summarize`, `Summary`
 - `internal/billing/overview.go`: `ContractsInReview`
 - `internal/billing/models.go`: `Contract`, `Obligation`
 - `internal/management/students.go`: `billingRefusals`

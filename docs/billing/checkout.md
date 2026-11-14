@@ -48,12 +48,12 @@ stateDiagram-v2
 
 ## `StartCheckout`
 
-`StartCheckout(ctx, enrollmentID, planID)` creates or resumes the single hosted first-payment attempt for an Enrollment. It runs `beginCheckout`, one transaction that locks the Enrollment, then the Contract, then the active attempt (all `FOR UPDATE`), and persists the new attempt before any Session call. Rows are checked in this order:
+`StartCheckout(ctx, enrollmentID, planID)` creates or resumes the single hosted first-payment attempt for an Enrollment. It rejects an unknown plan first, then runs `beginCheckout`, one transaction that locks the Enrollment, then the Contract, then the active attempt (all `FOR UPDATE`), and persists the new attempt before any Session call. Conditions are checked in this order:
 
 | Condition | Outcome |
 |---|---|
-| ID is 0 or overflows `BIGINT`, or the Enrollment is unusable, unsubmitted or has no accepted terms | `ErrUnavailable` |
-| Unknown plan ID | `payments.ErrUnknownPlan` (the handler validates the plan first) |
+| Unknown plan ID | `ErrUnknownPlan` (the handler validates the plan first) |
+| No such Enrollment, or it is unusable, unsubmitted or has no accepted terms | `ErrUnavailable` |
 | No contract yet | Contract and one tuition obligation per installment are created from the plan, with `next_sync_at` one minute ahead; a new attempt follows |
 | Funded, same plan | `Funded` |
 | Funded, other plan | `ErrPlanLocked` |
@@ -63,7 +63,7 @@ stateDiagram-v2
 | No active attempt, other plan | Tuition obligations are deleted and recreated, the contract's plan columns updated, a live event published; a new attempt follows |
 | No active attempt, same plan | A new attempt follows |
 
-A new attempt first creates the Stripe Customer if the contract has none, inserts the attempt as `creating`, commits, and only then calls `createSession`. Switching plans only deletes obligations when every earlier attempt is terminal; unfunded contracts have no provider invoices, so the old obligations are plain rows.
+A new attempt first creates the Stripe Customer if the contract has none, inserts the attempt as `creating`, writes the contract columns this start changed (plan, Customer) in one `Select(...).Updates`, commits, and only then calls `createSession`. Switching plans only deletes obligations when every earlier attempt is terminal; unfunded contracts have no provider invoices, so the old obligations are plain rows.
 
 ```mermaid
 sequenceDiagram
@@ -142,7 +142,7 @@ sequenceDiagram
 | `invoice_creation` | Enabled, with the metadata keys below on the invoice | all |
 | `adaptive_pricing.enabled` | `false` | all |
 | `success_url` | `<PUBLIC_BASE_URL>/payments/return?session_id={CHECKOUT_SESSION_ID}` | all |
-| `cancel_url` | `<PUBLIC_BASE_URL>/payments/return?cancelled=1` | all |
+| `cancel_url` | `<PUBLIC_BASE_URL>/payments/return?attempt=<attempt reference>` | all |
 | `allowed_payment_method_types` | `["card"]` | `three`, `six` |
 | `payment_intent_data.setup_future_usage` | `off_session` | `three`, `six` |
 | `payment_intent_data.metadata` | The metadata keys below | `three`, `six` |
@@ -160,24 +160,35 @@ sequenceDiagram
 | Budget | Value | Where |
 |---|---|---|
 | `providerBudget` | 8 s | One `StartCheckout` call end to end, plus `InvoiceURL`, `PortalURL`, `ReconcileStudent` and `RequestReinstatement`. Stays under the server's 10 s write timeout, so a slower outcome is recorded and resumed instead of holding the browser |
-| `persistCtx` | 5 s, detached from the request | Recording a Stripe outcome after a call, for example `setAttempt` in `createSession` and `expireAttempt`, so a closed browser or spent budget still saves it |
+| `persistCtx` | `persistBudget`, 5 s, detached from the request | Recording a Stripe outcome after a call, for example `setAttempt` in `createSession` and `expireAttempt`, so a closed browser or spent budget still saves it |
 | Stripe HTTP client | 5 s timeout, 2 network retries, SDK logging off | `NewStripeClient` |
 | `checkoutKeyRetention` | 23 h | How long the worker replays a Session create under its original idempotency key; Stripe may prune keys after 24 h |
-| `creating` grace | 15 s | A fresh `creating` attempt is left to its own request before the worker touches it |
+| `creatingGrace` | 15 s | A fresh `creating` attempt is left to its own request before the worker touches it: that request's `providerBudget` plus `persistBudget` plus 2 s |
 
 `setAttempt` writes `WHERE id = ? AND state = from`, so a newer state is never overwritten by a slower writer.
 
 ## Return status
 
-`ReturnStatus(sessionID)` (in `summary.go`) reads one attempt by `stripe_session_id` and returns only a status and the attempt's first amount in cents; it never funds and never exposes identity.
+`ReturnStatus(sessionID)` (the `success_url` return) and `CancelStatus(attemptRef)` (the `cancel_url` back link) in `summary.go` read one attempt, by `stripe_session_id` or by `reference`. Both share `attemptOutcome` and return only a status, the attempt's first amount in cents and, for `declined`, a reason group. Neither funds and neither exposes identity.
 
-| Attempt state | `Status` |
-|---|---|
-| `paid` | `paid` |
-| `expired`, `failed` | `not_completed` |
-| `creating`, `open`, `processing`, `expiring`, `uncertain` | `pending` |
+| Attempt state | `ReturnStatus` | `CancelStatus` |
+|---|---|---|
+| `paid` | `paid` | `paid` |
+| `open` | `pending`: Checkout redirects to `success_url` only after completion, so a decline followed by a successful retry never reads as declined | `declined` when `decline_code` is set, else `not_completed` |
+| `expired`, `failed` | `declined` when `decline_code` is set, else `not_completed` | same |
+| `creating`, `processing`, `expiring`, `uncertain` | `pending` | `pending` |
 
-An empty or unknown `session_id` is `ErrUnavailable` (the page answers 404). `?cancelled=1` shows `not_completed` without a database read. Polling limits are in [Customer flow](../domain/customer-flow.md).
+An empty or unknown `session_id` or attempt reference is `ErrUnavailable` (the page answers 404). Polling limits are in [Customer flow](../domain/customer-flow.md).
+
+### Declines
+
+A card decline on hosted Checkout leaves the Session `open`: Stripe shows the error inline and sends no `checkout.session.*` event. Only `payment_intent.payment_failed` arrives. The worker finds the Session by `payment_intent` and re-syncs it, and `syncAttempt` stores the PaymentIntent's `last_payment_error` (decline code, else error code, else type) in `billing_checkout_attempts.decline_code`. The attempt's state is untouched, so the same Session stays payable. The 15-minute in-flight re-sync records a decline whose webhook was missed.
+
+A stored code only counts while nothing is paying (`idleAttemptStates`: `open`, `failed`, `expired`), so a later try in `processing` or `paid` supersedes it. `declineReason` groups the code for customers: `funds` (`insufficient_funds`, `card_velocity_exceeded`), `card_details` (expired card, bad CVC, number, ZIP or expiry), `authentication`, and `generic` for everything else, including lost, stolen and fraud codes, as Stripe advises. The group shows in three places:
+
+- the "Pago rechazado" variant of `/payments/return`, reached through the back link;
+- a callout on `/customer/{token}/payments` (`Summary.Decline`, set only while the unfunded contract's newest attempt is declined);
+- the "Payment declined" badge on `Awaiting payment` rows of the staff links list (`DeclinedEnrollments`).
 
 ## Deliberate choices
 
@@ -189,13 +200,12 @@ An empty or unknown `session_id` is `ErrUnavailable` (the page answers 404). `?c
 
 ## Source
 
-- `internal/billing/checkout.go`: `StartCheckout`, `beginCheckout`, `expireAttempt`, `createSession`, `sessionParams`, `createObligations`, `setAttempt`, `activeAttemptStates`, `integrationIdentifier`, `errCheckoutMismatch`, `idx_active_checkout_attempt`
-- `internal/billing/billing.go`: `CheckoutResult`, `ReturnStatus`, `ErrUnavailable`, `ErrPlanLocked`, `providerBudget`, `persistCtx`, `outcomeUnknown`
+- `internal/billing/checkout.go`: `StartCheckout`, `CheckoutResult`, `beginCheckout`, `claimExpiringAttempt`, `expireAttempt`, `createSession`, `sessionParams`, `createObligations`, `setAttempt`, `outcomeUnknown`, `activeAttemptStates`, `integrationIdentifier`, `errCheckoutMismatch`, `syncAttempt`, `recordDecline`, `resumeCreate`, `moveAttempt`, `checkoutKeyRetention`, `creatingGrace`, `sessionMatches`, `fund`
+- `internal/billing/billing.go`: `ErrUnavailable`, `ErrPlanLocked`, `ErrUnknownPlan`, `providerBudget`, `persistBudget`, `persistCtx`
 - `internal/billing/contact.go`: `inFlightAttemptStates`, `UpdateContact`, `ContactEditable`
-- `internal/billing/summary.go`: `ReturnStatus`
-- `internal/billing/worker.go`: `syncAttempt`, `resumeCreate`, `moveAttempt`, `checkoutKeyRetention`, `sessionMatches`, `fund`
+- `internal/billing/summary.go`: `ReturnStatus`, `CancelStatus`, `attemptOutcome`, `declined`, `declineReason`, `idleAttemptStates`, `DeclinedEnrollments`
 - `internal/billing/stripe.go`: `stripeLocale`, `NewStripeClient`, `priceKey`
 - `internal/billing/models.go`: `CheckoutAttempt`, `idx_active_checkout_attempt`
-- `internal/billing/checkout_test.go`: `TestCheckoutCreateResumes`
+- `internal/billing/checkout_test.go`: `TestCheckoutCreateResumes`, `TestCheckoutDeclineIsRecorded`
 - `internal/customer/payments.go`: `payments`, `paymentReturn`, `maxReturnPolls`
 - `internal/customer/customer.go`: `redirectCustomer`

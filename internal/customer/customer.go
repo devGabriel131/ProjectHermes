@@ -5,6 +5,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 	"projecthermes/internal/links"
 	"projecthermes/internal/logging"
 	"projecthermes/internal/payments"
+	"projecthermes/internal/puertorico"
 	"projecthermes/internal/settings"
 	"projecthermes/internal/students"
 )
@@ -29,6 +31,9 @@ type pageData struct {
 	students.Details
 	Path              string
 	View              string
+	DobDay            string
+	DobMonth          string
+	DobYear           string
 	Error             string
 	EmailConfirm      string
 	Pin               string
@@ -38,18 +43,14 @@ type pageData struct {
 	ProgramStartLabel string
 	TermsAcceptedAt   *time.Time
 	PaymentPlan       string
-	SelectedPlan      string
 	Plans             []planView
 	// Billing is the contract summary; Processing marks a checkout the provider has not finished.
 	Billing    *billing.Summary
 	Processing bool
 	// Return is the token-free outcome shown after Stripe Checkout.
 	Return *billing.ReturnStatus
-	// ReturnSessionID and ReturnPollsNext rebuild the payment-return poll URL;
-	// ReturnStopPoll ends polling after maxReturnPolls requests.
-	ReturnSessionID string
-	ReturnPollsNext int
-	ReturnStopPoll  bool
+	// ReturnPollURL is the payment-return page's next poll; empty ends polling.
+	ReturnPollURL string
 	// Editing marks the contact form reopened after submit.
 	Editing         bool
 	ContactEditable bool
@@ -57,6 +58,12 @@ type pageData struct {
 	HasEnrollment bool
 	Completed     bool
 	CanStartNew   bool
+}
+
+// fill shows stored contact details, with the birth date split for its three controls.
+func (data *pageData) fill(details students.Details) {
+	data.Details = details
+	data.DobDay, data.DobMonth, data.DobYear = splitDateOfBirth(details.DateOfBirth)
 }
 
 // site is the customer-facing handler set: one template set over the stores the pages read and write.
@@ -69,13 +76,24 @@ type site struct {
 	secureCookies bool
 }
 
+var spanishMonths = [...]string{
+	"enero", "febrero", "marzo", "abril", "mayo", "junio",
+	"julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+}
+
+// spanishDate formats the calendar date in its existing location.
+func spanishDate(date time.Time) string {
+	year, month, day := date.Date()
+	return fmt.Sprintf("%d de %s de %d", day, spanishMonths[month-1], year)
+}
+
 func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Store, configuration *settings.Store, biller *billing.Service, secureCookies bool) error {
 	page, err := template.New("index.html").Funcs(template.FuncMap{
 		"municipalities": students.MunicipalityOptions,
 		"trim":           strings.TrimSpace,
 		"money":          payments.Money,
-		"spanishDate":    payments.SpanishDate,
-		"billingDate":    func(t time.Time) string { return payments.SpanishDate(t.In(payments.PuertoRico)) },
+		"spanishDate":    spanishDate,
+		"billingDate":    func(t time.Time) string { return spanishDate(t.In(puertorico.Zone)) },
 	}).ParseFS(templates, "templates/*.html")
 	if err != nil {
 		return err
@@ -150,30 +168,26 @@ func (s *site) render(w http.ResponseWriter, r *http.Request, name string, data 
 	}
 }
 
-// resolveSession resolves the customer's enrollment session for inner routes.
-// Missing/unusable sessions redirect GET/HEAD to the welcome page when the link is still usable, and render 404 otherwise.
+// resolveSession resolves the customer's usable enrollment session for inner routes.
+// Without one, GET/HEAD redirect to the welcome page while the link takes new enrollments; anything else renders 404.
 func (s *site) resolveSession(w http.ResponseWriter, r *http.Request, name string, data *pageData, token string) (*links.Enrollment, bool) {
 	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
 	defer cancel()
-	sess, err := s.links.LookupSession(ctx, token, readSessionCookie(r))
+	enrollment, canStart, err := s.links.LookupSession(ctx, token, readSessionCookie(r))
 	switch {
 	case err != nil:
 		logging.RecordError(r, "lookup", err)
-		data.Error = "No pudimos abrir este enlace. Intenta de nuevo."
+		data.Error = openFailedMessage
 		s.render(w, r, name, *data, http.StatusInternalServerError)
 		return nil, false
-	case sess == nil:
-		s.render(w, r, name, *data, http.StatusNotFound)
-		return nil, false
-	case sess.Enrollment == nil || !sess.Usable:
-		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && sess.LinkUsable {
-			redirectCustomer(w, r, "/customer/"+url.PathEscape(token))
-			return nil, false
-		}
-		s.render(w, r, name, *data, http.StatusNotFound)
+	case enrollment != nil:
+		return enrollment, true
+	case canStart && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		redirectCustomer(w, r, "/customer/"+url.PathEscape(token))
 		return nil, false
 	default:
-		return sess.Enrollment, true
+		s.render(w, r, name, *data, http.StatusNotFound)
+		return nil, false
 	}
 }
 
@@ -194,46 +208,30 @@ func (s *site) welcome(w http.ResponseWriter, r *http.Request) {
 	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "welcome"}
 	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
 	defer cancel()
-	sess, err := s.links.LookupSession(ctx, token, readSessionCookie(r))
-	if err != nil {
+	enrollment, canStart, err := s.links.LookupSession(ctx, token, readSessionCookie(r))
+	status := http.StatusOK
+	switch {
+	case err != nil:
 		logging.RecordError(r, "lookup", err)
-		data.Error = "No pudimos abrir este enlace. Intenta de nuevo."
-		s.render(w, r, "index.html", data, http.StatusInternalServerError)
-		return
-	}
-	if sess == nil {
-		s.render(w, r, "index.html", data, http.StatusNotFound)
-		return
-	}
-	if sess.Enrollment != nil {
-		switch sess.EnrollmentStatus {
-		case links.AwaitingPayment:
-			if sess.Usable {
-				if r.Method == http.MethodHead {
-					w.WriteHeader(http.StatusOK)
-					return
-				}
-				redirectCustomer(w, r, data.Path+"/agreement")
-				return
-			}
-		case links.Finished:
-			data.Completed = true
-			data.CanStartNew = sess.LinkUsable
-			s.render(w, r, "index.html", data, http.StatusOK)
-			return
-		case links.InProgress:
-			if sess.Usable {
-				data.HasEnrollment = true
-				s.render(w, r, "index.html", data, http.StatusOK)
-				return
-			}
+		data.Error = openFailedMessage
+		status = http.StatusInternalServerError
+	case enrollment == nil:
+		if !canStart {
+			status = http.StatusNotFound
 		}
-	}
-	if !sess.LinkUsable {
-		s.render(w, r, "index.html", data, http.StatusNotFound)
+	case enrollment.PaidAt != nil:
+		data.Completed, data.CanStartNew = true, canStart
+	case enrollment.SubmittedAt != nil:
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		redirectCustomer(w, r, data.Path+"/agreement")
 		return
+	default:
+		data.HasEnrollment = true
 	}
-	s.render(w, r, "index.html", data, http.StatusOK)
+	s.render(w, r, "index.html", data, status)
 }
 
 // start begins or resumes a browser's enrollment session on a reusable link and sets its cookie.
@@ -246,7 +244,7 @@ func (s *site) start(w http.ResponseWriter, r *http.Request) {
 	enrollment, newCookie, err := s.links.StartEnrollment(ctx, token, readSessionCookie(r))
 	if err != nil {
 		logging.RecordError(r, "start", err)
-		data.Error = "No pudimos abrir este enlace. Intenta de nuevo."
+		data.Error = openFailedMessage
 		s.render(w, r, "index.html", data, http.StatusInternalServerError)
 		return
 	}
@@ -268,11 +266,11 @@ func (s *site) start(w http.ResponseWriter, r *http.Request) {
 func (s *site) forms(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "form"}
-	link, ok := s.resolveSession(w, r, "index.html", &data, token)
+	enrollment, ok := s.resolveSession(w, r, "index.html", &data, token)
 	if !ok {
 		return
 	}
-	if link.SubmittedAt != nil {
+	if enrollment.SubmittedAt != nil {
 		if r.Method == http.MethodHead {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -280,7 +278,7 @@ func (s *site) forms(w http.ResponseWriter, r *http.Request) {
 		redirectCustomer(w, r, data.Path+"/agreement")
 		return
 	}
-	data.Details = link.Details
+	data.fill(enrollment.Details)
 	s.render(w, r, "index.html", data, http.StatusOK)
 }
 
@@ -298,24 +296,15 @@ func (s *site) submit(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	status := parseCustomerForm(w, r)
 	if status != http.StatusOK {
-		data.Error = "No pudimos leer tu información. Intenta de nuevo."
+		data.Error = readFailedMessage
 	} else if parsed, pin, ok := readSubmission(r.PostForm, &data); !ok {
 		status = http.StatusUnprocessableEntity
-	} else if allowed, err := s.links.SpendPinCheck(ctx, token, cookieToken); err != nil {
-		logging.RecordError(r, "save", err)
-		data.Error = "No pudimos guardar tu información. Intenta de nuevo."
-		s.render(w, r, name, data, http.StatusInternalServerError)
-		return
-	} else if !allowed {
-		// Out of PIN answers, or no usable open enrollment: the lookup below tells which.
-		data.FieldErrors["pin"] = pinLimitMessage
-		status = http.StatusTooManyRequests
 	} else {
 		result, err := s.links.Submit(ctx, token, cookieToken, parsed, pin)
 		switch {
 		case err != nil:
 			logging.RecordError(r, "save", err)
-			data.Error = "No pudimos guardar tu información. Intenta de nuevo."
+			data.Error = saveFailedMessage
 			s.render(w, r, name, data, http.StatusInternalServerError)
 			return
 		case result == links.Saved, result == links.AlreadySubmitted:
@@ -325,74 +314,72 @@ func (s *site) submit(w http.ResponseWriter, r *http.Request) {
 			// Another submitted enrollment or enrolled student holds the PIN: redraw below with what was typed.
 			data.FieldErrors["pin"] = pinTakenMessage
 			status = http.StatusUnprocessableEntity
+		case result == links.PinLimited:
+			data.FieldErrors["pin"] = pinLimitMessage
+			status = http.StatusTooManyRequests
 		default:
 			s.render(w, r, name, data, http.StatusNotFound)
 			return
 		}
 	}
 
-	link, ok := s.resolveSession(w, r, name, &data, token)
+	enrollment, ok := s.resolveSession(w, r, name, &data, token)
 	if !ok {
 		return
 	}
-	if link.SubmittedAt != nil {
+	if enrollment.SubmittedAt != nil {
 		redirectCustomer(w, r, data.Path+"/agreement")
 		return
 	}
 	// A 422 keeps the attempted values; any other rejection shows what is stored.
 	if status != http.StatusUnprocessableEntity {
-		data.Details = link.Details
+		data.fill(enrollment.Details)
 	}
 	s.render(w, r, name, data, status)
 }
 
-// draft autosaves one field on blur. It answers only with status so it never redraws fields in use.
-// An unknown field is refused before the body is read or the database is touched.
+// draft autosaves one field on change and answers only with status, so it never redraws fields in use.
+// An unknown field is refused before the body is read or the database is touched. Rejected input still asks
+// the store whether the form is open, so 404 and 409 precede 400, 413 and 422.
 func (s *site) draft(w http.ResponseWriter, r *http.Request) {
 	token, key, cookieToken := r.PathValue("token"), r.PathValue("field"), readSessionCookie(r)
-	data := pageData{View: "save-status"}
 	field, known := students.FindField(key)
 	if !known {
-		s.render(w, r, "save-status", data, http.StatusNotFound)
+		s.render(w, r, "save-status", pageData{}, http.StatusNotFound)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
-	defer cancel()
+	var data pageData
 	status := parseCustomerForm(w, r)
 	if status == http.StatusOK && len(r.PostForm[key]) != 1 {
 		status = http.StatusBadRequest
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
+	defer cancel()
+	var result links.SaveResult
+	var err error
+	stage, failure := "lookup", openFailedMessage
 	if status != http.StatusOK {
-		data.Error = "No pudimos leer tu información. Intenta de nuevo."
-	} else if value, err := field.Parse(r.PostForm.Get(key), false); err != nil {
-		data.FieldErrors = map[string]string{key: fieldError(key)}
+		data.Error = readFailedMessage
+		result, err = s.links.FormState(ctx, token, cookieToken)
+	} else if value, invalid := field.Parse(r.PostForm.Get(key), false); invalid != nil {
+		data.FieldErrors = map[string]string{key: fieldMessages[key]}
 		status = http.StatusUnprocessableEntity
+		result, err = s.links.FormState(ctx, token, cookieToken)
 	} else {
-		result, err := s.links.SaveDraft(ctx, token, cookieToken, key, value)
-		switch {
-		case err != nil:
-			logging.RecordError(r, "save", err)
-			data.Error = "No pudimos guardar tu información. Intenta de nuevo."
-			s.render(w, r, "save-status", data, http.StatusInternalServerError)
-		case result == links.Saved:
-			s.render(w, r, "save-status", data, http.StatusOK)
-		case result == links.AlreadySubmitted:
-			locked(w, r)
-		default:
-			s.render(w, r, "save-status", data, http.StatusNotFound)
-		}
-		return
+		stage, failure = "save", saveFailedMessage
+		result, err = s.links.SaveDraft(ctx, token, cookieToken, key, value)
 	}
-
-	link, ok := s.resolveSession(w, r, "save-status", &data, token)
-	if !ok {
-		return
-	}
-	if link.SubmittedAt != nil {
+	switch {
+	case err != nil:
+		logging.RecordError(r, stage, err)
+		s.render(w, r, "save-status", pageData{Error: failure}, http.StatusInternalServerError)
+	case result == links.Unavailable:
+		s.render(w, r, "save-status", data, http.StatusNotFound)
+	case result == links.AlreadySubmitted:
 		locked(w, r)
-		return
+	default:
+		s.render(w, r, "save-status", data, status)
 	}
-	s.render(w, r, "save-status", data, status)
 }
 
 // locked answers an autosave against a submitted form: the page is stale, so HTMX reloads it.
@@ -403,26 +390,26 @@ func locked(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusConflict)
 }
 
-// edit reopens the contact form of a submitted link until payment is confirmed or in flight.
-// The edit has no autosave: one POST updates the link's contact snapshot, then returns to the agreement.
+// edit reopens the contact form of a submitted enrollment until payment is confirmed or in flight.
+// The edit has no autosave: one POST updates the enrollment's contact snapshot, then returns to the agreement.
 // Submission time, expiry and accepted terms never change.
 func (s *site) edit(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "form", Editing: true}
 	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
 	defer cancel()
-	link, ok := s.resolveSession(w, r, "index.html", &data, token)
+	enrollment, ok := s.resolveSession(w, r, "index.html", &data, token)
 	if !ok {
 		return
 	}
-	if link.SubmittedAt == nil {
+	if enrollment.SubmittedAt == nil {
 		redirectCustomer(w, r, data.Path+"/forms")
 		return
 	}
-	editable, err := s.billing.ContactEditable(ctx, link.ID)
+	editable, err := s.billing.ContactEditable(ctx, enrollment)
 	if err != nil {
 		logging.RecordError(r, "load", err)
-		data.Error = "No pudimos abrir este enlace. Intenta de nuevo."
+		data.Error = openFailedMessage
 		s.render(w, r, "index.html", data, http.StatusInternalServerError)
 		return
 	}
@@ -431,18 +418,18 @@ func (s *site) edit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := http.StatusOK
-	data.Details = link.Details
+	data.fill(enrollment.Details)
 	if r.Method == http.MethodPost {
 		if status = parseCustomerForm(w, r); status != http.StatusOK {
-			data.Error = "No pudimos leer tu información. Intenta de nuevo."
+			data.Error = readFailedMessage
 		} else if parsed, ok := readContact(r.PostForm, &data); !ok {
 			status = http.StatusUnprocessableEntity
-		} else if parsed == link.Details {
+		} else if parsed == enrollment.Details {
 			// Nothing changed: skip the write, the management refresh and the provider sync.
 			redirectCustomer(w, r, data.Path+"/agreement")
 			return
 		} else {
-			err = s.billing.UpdateContact(ctx, link.ID, parsed)
+			err = s.billing.UpdateContact(ctx, enrollment.ID, parsed)
 			switch {
 			case errors.Is(err, billing.ErrContactLocked):
 				redirectCustomer(w, r, data.Path+"/payments")
@@ -452,7 +439,7 @@ func (s *site) edit(w http.ResponseWriter, r *http.Request) {
 				return
 			case err != nil:
 				logging.RecordError(r, "save", err)
-				data.Error = "No pudimos guardar tu información. Intenta de nuevo."
+				data.Error = saveFailedMessage
 				status = http.StatusInternalServerError
 			default:
 				redirectCustomer(w, r, data.Path+"/agreement")
@@ -476,15 +463,38 @@ func parseCustomerForm(w http.ResponseWriter, r *http.Request) int {
 }
 
 // readContact records the attempted contact form on data, so a rejection redraws what was typed,
-// and reports the validated details and whether every field passed.
+// and reports the validated details and whether every field and the email confirmation passed.
 func readContact(form url.Values, data *pageData) (parsed students.Details, ok bool) {
+	dateOfBirth, day, month, year := readDateOfBirth(form)
 	data.Details = students.Details{
 		Name: form.Get("name"), Email: form.Get("email"),
 		Phone: form.Get("phone"), Municipality: form.Get("municipality"),
-		DateOfBirth: form.Get("date_of_birth"), Gender: form.Get("gender"),
+		DateOfBirth: dateOfBirth, Gender: form.Get("gender"),
 	}
+	data.DobDay, data.DobMonth, data.DobYear = day, month, year
 	data.EmailConfirm = form.Get("email_confirm")
-	parsed, data.FieldErrors, data.EmailMismatch = parseContact(form)
+	data.FieldErrors = make(map[string]string)
+	parse := func(key, raw string, parser func(string, bool) (string, error)) string {
+		value, err := parser(raw, true)
+		if err != nil {
+			data.FieldErrors[key] = fieldMessages[key]
+		}
+		return value
+	}
+	parsed = students.Details{
+		Name:         parse("name", data.Name, students.ParseName),
+		Email:        parse("email", data.Email, students.ParseEmail),
+		Phone:        parse("phone", data.Phone, students.ParsePhone),
+		Municipality: parse("municipality", data.Municipality, students.ParseMunicipality),
+		DateOfBirth:  parse("date_of_birth", data.DateOfBirth, students.ParseDateOfBirth),
+		Gender:       parse("gender", data.Gender, students.ParseGender),
+	}
+	if confirmation, err := students.ParseEmail(data.EmailConfirm, true); err != nil {
+		data.FieldErrors["email_confirm"] = fieldMessages["email"]
+	} else if data.FieldErrors["email"] == "" && confirmation != parsed.Email {
+		data.EmailMismatch = true
+		data.FieldErrors["email_confirm"] = "Los correos electrónicos no coinciden."
+	}
 	return parsed, len(data.FieldErrors) == 0
 }
 
@@ -495,120 +505,129 @@ func readSubmission(form url.Values, data *pageData) (parsed students.Details, p
 	data.Pin = form.Get("pin")
 	pin, err := students.ParsePin(data.Pin, true)
 	if err != nil {
-		data.FieldErrors["pin"] = fieldError("pin")
+		data.FieldErrors["pin"] = fieldMessages["pin"]
 		ok = false
 	}
 	return parsed, pin, ok
 }
 
-// checkPin tells the form whether a PIN is free before the final submit. It saves nothing:
-// it checks whether the PIN is held by a student or a submitted link, and the unique index decides at submit. It is a POST
-// so the PIN stays out of URLs and access logs.
+// checkPin tells the form whether a PIN is free before the final submit. It saves nothing but the spent check:
+// it asks whether a student or a submitted enrollment holds the PIN, and the unique index decides at submit.
+// It is a POST so the PIN stays out of URLs and access logs. A readable PIN spends its check with no prior
+// lookup; anything refused asks the store whether the form is open, so 404 and 409 precede 400, 413, 422 and 429.
 func (s *site) checkPin(w http.ResponseWriter, r *http.Request) {
 	token, cookieToken := r.PathValue("token"), readSessionCookie(r)
-	data := pageData{View: "pin-status"}
-	link, ok := s.resolveSession(w, r, "pin-status", &data, token)
-	if !ok {
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
-	defer cancel()
-	if link.SubmittedAt != nil {
-		locked(w, r)
-		return
-	}
+	var data pageData
 	status := parseCustomerForm(w, r)
 	if status == http.StatusOK && len(r.PostForm["pin"]) != 1 {
 		status = http.StatusBadRequest
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
+	defer cancel()
 	if status != http.StatusOK {
-		data.Error = "No pudimos leer tu información. Intenta de nuevo."
-		s.render(w, r, "pin-status", data, status)
-		return
-	}
-	pin, err := students.ParsePin(r.PostForm.Get("pin"), true)
-	if err != nil {
-		data.FieldErrors = map[string]string{"pin": fieldError("pin")}
-		s.render(w, r, "pin-status", data, http.StatusUnprocessableEntity)
-		return
-	}
-	allowed, err := s.links.SpendPinCheck(ctx, token, cookieToken)
-	if err != nil {
-		logging.RecordError(r, "lookup", err)
-		data.Error = "No pudimos verificar el PIN. Intenta de nuevo."
-		s.render(w, r, "pin-status", data, http.StatusInternalServerError)
-		return
-	}
-	if !allowed {
+		data.Error = readFailedMessage
+	} else if pin, invalid := students.ParsePin(r.PostForm.Get("pin"), true); invalid != nil {
+		data.FieldErrors = map[string]string{"pin": fieldMessages["pin"]}
+		status = http.StatusUnprocessableEntity
+	} else {
+		spent, err := s.links.SpendPinCheck(ctx, token, cookieToken)
+		taken := false
+		if err == nil && spent {
+			taken, err = s.roster.PinTaken(ctx, pin)
+		}
+		switch {
+		case err != nil:
+			logging.RecordError(r, "lookup", err)
+			s.render(w, r, "pin-status", pageData{Error: "No pudimos verificar el PIN. Intenta de nuevo."}, http.StatusInternalServerError)
+			return
+		case spent:
+			if taken {
+				data.FieldErrors = map[string]string{"pin": pinTakenMessage}
+				status = http.StatusUnprocessableEntity
+			}
+			s.render(w, r, "pin-status", data, status)
+			return
+		}
+		// Out of PIN answers, or the form is not open: the form state below tells which.
 		data.Error = pinLimitMessage
-		s.render(w, r, "pin-status", data, http.StatusTooManyRequests)
-		return
+		status = http.StatusTooManyRequests
 	}
-	taken, err := s.roster.PinTaken(ctx, pin)
+	state, err := s.links.FormState(ctx, token, cookieToken)
 	switch {
 	case err != nil:
 		logging.RecordError(r, "lookup", err)
-		data.Error = "No pudimos verificar el PIN. Intenta de nuevo."
-		status = http.StatusInternalServerError
-	case taken:
-		data.FieldErrors = map[string]string{"pin": pinTakenMessage}
-		status = http.StatusUnprocessableEntity
+		s.render(w, r, "pin-status", pageData{Error: openFailedMessage}, http.StatusInternalServerError)
+	case state == links.Unavailable:
+		s.render(w, r, "pin-status", data, http.StatusNotFound)
+	case state == links.AlreadySubmitted:
+		locked(w, r)
+	default:
+		s.render(w, r, "pin-status", data, status)
 	}
-	s.render(w, r, "pin-status", data, status)
 }
 
-// parseContact validates every contact field and the email confirmation, collecting all errors.
-func parseContact(form url.Values) (parsed students.Details, fieldErrors map[string]string, emailMismatch bool) {
-	fieldErrors = make(map[string]string)
-	for _, field := range students.Fields() {
-		value, err := field.Parse(form.Get(field.Key), true)
-		if err != nil {
-			fieldErrors[field.Key] = fieldError(field.Key)
+// fieldMessages tell the customer how to fix a rejected field, by field key.
+var fieldMessages = map[string]string{
+	"name":          "Escribe el nombre y los apellidos del estudiante usando solo letras y espacios.",
+	"email":         "Escribe un correo electrónico válido.",
+	"phone":         "Escribe un número válido de Puerto Rico o Estados Unidos, con código de área.",
+	"municipality":  "Selecciona un municipio o “Fuera de Puerto Rico”.",
+	"date_of_birth": "Escribe una fecha de nacimiento válida.",
+	"gender":        "Selecciona masculino o femenino.",
+	"pin":           "Escribe un PIN de 4 a 6 dígitos.",
+}
+
+// Messages more than one handler shows.
+const (
+	openFailedMessage      = "No pudimos abrir este enlace. Intenta de nuevo."
+	readFailedMessage      = "No pudimos leer tu información. Intenta de nuevo."
+	saveFailedMessage      = "No pudimos guardar tu información. Intenta de nuevo."
+	selectionFailedMessage = "No pudimos leer tu selección. Intenta de nuevo."
+	pinTakenMessage        = "Este PIN ya está en uso. Elige otro."
+	pinLimitMessage        = "Este enlace alcanzó el límite de intentos de PIN. Comunícate con el equipo."
+)
+
+func splitDateOfBirth(raw string) (day, month, year string) {
+	parts := strings.Split(strings.TrimSpace(raw), "-")
+	if len(parts) != 3 || !asciiDigits(parts[0], 4, 4) || !asciiDigits(parts[1], 1, 2) || !asciiDigits(parts[2], 1, 2) {
+		return "", "", ""
+	}
+	if len(parts[1]) == 1 {
+		parts[1] = "0" + parts[1]
+	}
+	return parts[2], parts[1], parts[0]
+}
+
+// readDateOfBirth joins the day, month and year controls into YYYY-MM-DD, zero-padding day and month, and leaves
+// judging the date to students.ParseDateOfBirth. A lone date_of_birth field is the fallback tests and load tests post.
+func readDateOfBirth(form url.Values) (raw, day, month, year string) {
+	if !form.Has("dob_day") && !form.Has("dob_month") && !form.Has("dob_year") {
+		raw = form.Get("date_of_birth")
+		day, month, year = splitDateOfBirth(raw)
+		return raw, day, month, year
+	}
+	day, month, year = form.Get("dob_day"), form.Get("dob_month"), form.Get("dob_year")
+	d, m, y := strings.TrimSpace(day), strings.TrimSpace(month), strings.TrimSpace(year)
+	if d+m+y == "" {
+		return "", day, month, year
+	}
+	pad := func(part string) string {
+		if len(part) == 1 {
+			return "0" + part
 		}
-		switch field.Key {
-		case "name":
-			parsed.Name = value
-		case "email":
-			parsed.Email = value
-		case "phone":
-			parsed.Phone = value
-		case "municipality":
-			parsed.Municipality = value
-		case "date_of_birth":
-			parsed.DateOfBirth = value
-		case "gender":
-			parsed.Gender = value
+		return part
+	}
+	return y + "-" + pad(m) + "-" + pad(d), day, month, year
+}
+
+func asciiDigits(s string, minLen, maxLen int) bool {
+	if len(s) < minLen || len(s) > maxLen {
+		return false
+	}
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return false
 		}
 	}
-	confirmation, err := students.ParseEmail(form.Get("email_confirm"), true)
-	if err != nil {
-		fieldErrors["email_confirm"] = fieldError("email")
-	} else if fieldErrors["email"] == "" && confirmation != parsed.Email {
-		emailMismatch = true
-		fieldErrors["email_confirm"] = "Los correos electrónicos no coinciden."
-	}
-	return parsed, fieldErrors, emailMismatch
+	return true
 }
-
-func fieldError(key string) string {
-	switch key {
-	case "name":
-		return "Escribe el nombre y los apellidos del estudiante usando solo letras y espacios."
-	case "email":
-		return "Escribe un correo electrónico válido."
-	case "phone":
-		return "Escribe un número válido de Puerto Rico o Estados Unidos, con código de área."
-	case "municipality":
-		return "Selecciona un municipio o “Fuera de Puerto Rico”."
-	case "date_of_birth":
-		return "Escribe una fecha de nacimiento válida."
-	case "gender":
-		return "Selecciona masculino o femenino."
-	case "pin":
-		return "Escribe un PIN de 4 a 6 dígitos."
-	}
-	return ""
-}
-
-const pinTakenMessage = "Este PIN ya está en uso. Elige otro."
-const pinLimitMessage = "Este enlace alcanzó el límite de intentos de PIN. Comunícate con el equipo."

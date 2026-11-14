@@ -6,7 +6,7 @@ document.addEventListener("click", (event) => {
   if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   const row = event.target.closest(".student-table tr[data-student-id]");
   if (!row) return;
-  const control = event.target.closest("a, button, input, select, textarea, label, summary, [contenteditable], [tabindex], [role='button']");
+  const control = event.target.closest("a, button, input, select, label, summary, [contenteditable], [tabindex], [role='button']");
   if (control && row.contains(control)) return;
   if (window.getSelection()?.toString()) return;
   row.querySelector("[data-student-link]")?.click();
@@ -69,7 +69,7 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   if (request.fieldID && event.target.id === request.fieldID) {
     const field = document.getElementById(request.fieldID);
     if (field?.closest("dialog") && !studentDialog?.open) return;
-    field?.querySelector("input:not([type='hidden']), select, textarea, .student-edit-link")?.focus();
+    field?.querySelector("input:not([type='hidden']), select, .student-edit-link")?.focus();
   }
 });
 

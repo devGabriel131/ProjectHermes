@@ -22,18 +22,19 @@ The browser side of the site: server-rendered templates, htmx 2.0.11 and six sma
 | Dashboard | yes | no | yes | none |
 | Settings | no | no | no | `settings.js` |
 | Login | no | no | no | none |
-| Customer form and edit view | yes | no | no | `customer.js` |
+| Customer form | yes | no | no | `customer.js` |
+| Customer edit view | no | no | no | `customer.js` |
 | Customer payment return | yes | no | no | none |
 | Customer welcome, agreement, payments, not-found | no | no | no | none |
 
 | Script | Behavior |
 |---|---|
-| `management-live.js` | Opens `EventSource("/management/events")`; each message triggers `management-changed` on `body`. If the stream is closed (a deploy's 502, a sign-in redirect) it triggers one refresh, which sends a signed-out tab to login through `HX-Redirect`, and reconnects after 5 s. Does nothing unless `window.htmx` exists. |
+| `management-live.js` | Opens `EventSource("/management/events")`; a message schedules `management-changed` on `body` 1 s later, and messages inside that second share it (`due`), so a tab refreshes at most once per second from the stream. If the stream is closed (a deploy's 502, a sign-in redirect) it triggers one refresh at once, which sends a signed-out tab to login through `HX-Redirect`, and reconnects after 5 s. Does nothing unless `window.htmx` exists. |
 | `management-time.js` | `htmx.onLoad` rewrites every `<time datetime>` into the staff member's own time zone (`Intl.DateTimeFormat`, medium date, short time), including swapped-in rows. The server renders UTC. Settings does not load this script, so its "last changed" time stays UTC. |
 | `management.js` | Links page. Shows absolute URLs, preserves open `<details>` states (enrollment trees and rename panels), rename drafts, and active input caret selection across HTMX swaps, copy buttons, the copy toast, and errors in `#link-status` and `#link-refresh-error`. |
 | `students.js` | Student pages. A click anywhere on a row opens it (ignoring controls, modifier keys and text selection); `showModal()` when content arrives in `#student-dialog-content`; forces a swap on a 422 from the field editor and blocks swaps for other 4xx and 5xx; moves focus to the first input or the edit link after a field swap; returns focus to the opening row on close; shows per-field, billing and roster errors ([Students](management/students.md)). |
 | `settings.js` | Settings page. Mirrors the lifetime slider into its `<output>` because the site CSP blocks inline handlers. |
-| `customer.js` | Customer form. Live email and confirmation check through `setCustomValidity`; ignores autosave responses for controls that left the page; keeps `aria-invalid` in step with the status region; focuses the first invalid field after a 422; on status 0 shows "No se guardó. Verifica tu conexión e intenta de nuevo." |
+| `customer.js` | Customer form. Live email and confirmation check through `setCustomValidity`; syncs the 3-part date of birth controls (`dob_day`, `dob_month`, `dob_year`) into the hidden `date_of_birth` draft control only once complete (or when cleared/left partial); ignores autosave responses for controls that left the page; keeps `aria-invalid` in step with the status region (across all three date parts for `date_of_birth`); focuses the first invalid field after a 422; on status 0 shows "No se guardó. Verifica tu conexión e intenta de nuevo." |
 
 ## Management refresh
 
@@ -78,19 +79,19 @@ Every visible link row renders its permanent `/customer/{token}` URL and Copy li
 | Surface | Configuration | Effect |
 |---|---|---|
 | Staff pages | htmx defaults | 2xx swaps, 204 does not, 4xx and 5xx never swap. `students.js` allows one exception: 422 from the field editor. |
-| Customer form and edit view | `htmx-config` meta | `reportValidityOfForms: true`; `includeIndicatorStyles: false`; 204 no swap, 2xx and 3xx swap, 422 swaps and is not an error, other 4xx and 5xx swap as errors. |
+| Customer form | `htmx-config` meta | `reportValidityOfForms: true`; `includeIndicatorStyles: false`; 204 no swap, 2xx and 3xx swap, 422 swaps and is not an error, other 4xx and 5xx swap as errors. |
 | Customer payment return | `htmx-config` meta | `includeIndicatorStyles: false`; 204 and 4xx no swap (4xx is an error), 2xx, 3xx and 5xx swap (5xx is an error). |
 
 ### Customer autosave trigger
 
-Draft controls use `hx-trigger="change"`, not `blur`: the browser's `change` event fires when focus leaves a text, email or telephone input **after its value was edited**, and immediately when a select option, radio button or date is chosen. A field focused and left unchanged sends nothing.
+Draft controls use `hx-trigger="change"`, not `blur`: the browser's `change` event fires when focus leaves a text, email or telephone input **after its value was edited**, and immediately when a select option or radio button is chosen. Date of birth uses separate day (`dob_day`), month (`dob_month`) and year (`dob_year`) controls rather than `<input type="date">` so browsers never impose calendar-year limits or fire premature `change` events mid-typing; `customer.js` updates the hidden `#date_of_birth_draft` input and dispatches `change` once all parts are complete, cleared, or left partial. A field focused and left unchanged sends nothing.
 
 | Control | Request |
 |---|---|
 | name, email, phone, date of birth, municipality, gender | `POST /customer/{token}/draft/{field}` carrying only that control (`hx-params`), `hx-sync="this:queue last"`, result into `#save-status-{field}` |
 | PIN | `POST /customer/{token}/pin`: an availability check that saves nothing |
 | email confirmation | none; `customer.js` checks it locally |
-| edit view (after submit) | none; the whole form posts to `/edit` |
+| edit view (after submit) | none; the whole form posts to `/edit` and the page loads no htmx |
 
 ## CSS and fonts
 
@@ -157,7 +158,7 @@ The same middleware sends `Strict-Transport-Security: max-age=31536000` (no `inc
 - `static/management-time.js`: `onLoad`, `Intl.DateTimeFormat`
 - `static/management.js`: `requestSequence`, `startAction`, `syncLinkRows`, `showCopyError`, `confirmCopy`, `openDetails`, `renameDrafts`, `focusedField`
 - `static/students.js`: `showModal`, `requestError`, `htmx:beforeSwap`
-- `static/customer.js`: `setCustomValidity`, `reconcileEmails`, `ignoreDetachedDraft`
+- `static/customer.js`: `setCustomValidity`, `reconcileEmails`, `syncDateDraft`, `ignoreDetachedDraft`
 - `static/styles.css`: `color-scheme`, `management-workspace`, `management-sidebar`, `prefers-reduced-motion`, `copy-toast`
 - `static/customer.css`: `color-scheme`, `--column`, `prefers-reduced-motion`
 - `internal/management/templates/index.html`: `copy-toast`, `hx-confirm`, `management-skip-link`

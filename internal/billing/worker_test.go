@@ -210,17 +210,6 @@ func newWorkerMockServer(paidAt time.Time, initialAmount int64) *workerMockServe
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	// 6.5 GET /v1/payment_methods/{id}
-	mux.HandleFunc("GET /v1/payment_methods/{id}", func(w http.ResponseWriter, r *http.Request) {
-		resp := map[string]any{
-			"id":       r.PathValue("id"),
-			"object":   "payment_method",
-			"type":     "card",
-			"customer": "cus_worker_test",
-		}
-		_ = json.NewEncoder(w).Encode(resp)
-	})
-
 	// 7. POST /v1/invoices (Stage 1 creation)
 	mux.HandleFunc("POST /v1/invoices", func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt64(&wms.invoicesCreated, 1)
@@ -335,19 +324,7 @@ func newWorkerMockServer(paidAt time.Time, initialAmount int64) *workerMockServe
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	// 12. GET /v1/charges/{id}
-	mux.HandleFunc("GET /v1/charges/{id}", func(w http.ResponseWriter, r *http.Request) {
-		resp := map[string]any{
-			"id":     r.PathValue("id"),
-			"object": "charge",
-			"payment_intent": map[string]any{
-				"id": "pi_worker_test",
-			},
-		}
-		_ = json.NewEncoder(w).Encode(resp)
-	})
-
-	// 13. POST /v1/invoices/{id}/finalize
+	// 12. POST /v1/invoices/{id}/finalize
 	mux.HandleFunc("POST /v1/invoices/{id}/finalize", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		wms.mu.Lock()
@@ -362,7 +339,7 @@ func newWorkerMockServer(paidAt time.Time, initialAmount int64) *workerMockServe
 		_ = json.NewEncoder(w).Encode(inv)
 	})
 
-	// 14. POST /v1/invoices/{id}/send
+	// 13. POST /v1/invoices/{id}/send
 	mux.HandleFunc("POST /v1/invoices/{id}/send", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		wms.mu.Lock()
@@ -371,103 +348,56 @@ func newWorkerMockServer(paidAt time.Time, initialAmount int64) *workerMockServe
 		_ = json.NewEncoder(w).Encode(inv)
 	})
 
-	// 15. POST /v1/invoices/{id}/void
-	mux.HandleFunc("POST /v1/invoices/{id}/void", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		wms.mu.Lock()
-		inv := wms.invoicesByID[id]
-		if inv != nil {
-			inv["status"] = "void"
-		}
-		wms.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(inv)
-	})
-
-	// 16. DELETE /v1/invoices/{id}
-	mux.HandleFunc("DELETE /v1/invoices/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		wms.mu.Lock()
-		delete(wms.invoicesByID, id)
-		wms.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "object": "invoice", "deleted": true})
-	})
-
 	wms.mux = mux
 	return wms
 }
 
-func TestFundingSchedulesLaterInvoicesOnce(t *testing.T) {
-	paidAt := time.Date(2026, time.November, 15, 4, 0, 0, 0, time.UTC)
-	mock := newWorkerMockServer(paidAt, 20834)
-
-	allModels := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)
-	db := testdb.Open(t, allModels...)
-
-	tokenHash := make([]byte, 32)
-	rand.Read(tokenHash)
+// seedThreePlanCheckout seeds a submitted Enrollment whose unfunded "three" contract has its quoted
+// obligations and an open attempt; the worker mock reports that attempt's Session paid.
+func seedThreePlanCheckout(t *testing.T) (*gorm.DB, links.Enrollment, billing.Contract, billing.CheckoutAttempt) {
+	t.Helper()
+	db := testdb.Open(t, append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)...)
+	sessionHash := make([]byte, 32)
+	rand.Read(sessionHash)
 	now := time.Now().UTC()
-	link := links.Enrollment{
-		LinkID:      seedLink(t, db),
-		SessionHash: tokenHash,
-		Details: students.Details{
-			Name:  "Test Student",
-			Email: "test@example.com",
-			Phone: "+17875551234",
-		},
+	enrollment := links.Enrollment{
+		LinkID:           seedLink(t, db),
+		SessionHash:      sessionHash,
+		Details:          students.Details{Name: "Test Student", Email: "test@example.com", Phone: "+17875551234"},
 		CreatedAt:        now,
 		SubmittedAt:      &now,
 		ProgramStartDate: "2026-11-01",
 		ExpiresAt:        now.Add(7 * 24 * time.Hour),
 	}
-	mustCreate(t, db, &link)
-	contractRef := rand.Text()
-	cusID := "cus_worker_test"
+	mustCreate(t, db, &enrollment)
+	customerID := "cus_worker_test"
 	contract := billing.Contract{
-		EnrollmentID:     link.ID,
-		Reference:        contractRef,
+		EnrollmentID:     enrollment.ID,
+		Reference:        rand.Text(),
 		PlanID:           "three",
 		PlanName:         "Plan de 3 Pagos Mensuales",
 		InstallmentCount: 3,
 		TotalCents:       62500,
-		StripeCustomerID: &cusID,
+		StripeCustomerID: &customerID,
 	}
 	mustCreate(t, db, &contract)
-	// Create 3 tuition obligations
-	obl1 := billing.Obligation{
-		ContractID:            contract.ID,
-		Reference:             "ref_first_obl",
-		Kind:                  "tuition",
-		Number:                1,
-		AmountCents:           20834,
-		AmountRemainingCents:  20834,
-		StripePriceID:         "pr_three_1",
-		CollectionDisposition: "collect",
+	for i, amount := range []int64{20834, 20833, 20833} {
+		price := "pr_three_2"
+		if i == 0 {
+			price = "pr_three_1"
+		}
+		mustCreate(t, db, &billing.Obligation{
+			ContractID:            contract.ID,
+			Reference:             rand.Text(),
+			Kind:                  "tuition",
+			Number:                i + 1,
+			AmountCents:           amount,
+			AmountRemainingCents:  amount,
+			StripePriceID:         price,
+			CollectionDisposition: "collect",
+		})
 	}
-	obl2 := billing.Obligation{
-		ContractID:            contract.ID,
-		Reference:             "ref_second_obl",
-		Kind:                  "tuition",
-		Number:                2,
-		AmountCents:           20833,
-		AmountRemainingCents:  20833,
-		StripePriceID:         "pr_three_2",
-		CollectionDisposition: "collect",
-	}
-	obl3 := billing.Obligation{
-		ContractID:            contract.ID,
-		Reference:             "ref_third_obl",
-		Kind:                  "tuition",
-		Number:                3,
-		AmountCents:           20833,
-		AmountRemainingCents:  20833,
-		StripePriceID:         "pr_three_2",
-		CollectionDisposition: "collect",
-	}
-	mustCreate(t, db, &obl1)
-	mustCreate(t, db, &obl2)
-	mustCreate(t, db, &obl3)
-
-	sessID := "cs_worker_sess"
+	sessionID := "cs_" + rand.Text()
 	attempt := billing.CheckoutAttempt{
 		ContractID:        contract.ID,
 		Reference:         rand.Text(),
@@ -475,18 +405,25 @@ func TestFundingSchedulesLaterInvoicesOnce(t *testing.T) {
 		FirstAmountCents:  20834,
 		StripePriceID:     "pr_three_1",
 		CreationStartedAt: now,
-		StripeSessionID:   &sessID,
+		StripeSessionID:   &sessionID,
 		State:             "open",
 	}
 	mustCreate(t, db, &attempt)
+	return db, enrollment, contract, attempt
+}
 
+func TestFundingSchedulesLaterInvoicesOnce(t *testing.T) {
+	paidAt := time.Date(2026, time.November, 15, 4, 0, 0, 0, time.UTC)
+	mock := newWorkerMockServer(paidAt, 20834)
+
+	db, enrollment, contract, attempt := seedThreePlanCheckout(t)
 	svc := billingtest.New(t, db, mock.mux)
 
 	// Insert checkout.session.completed webhook event into DB
 	evt := billing.WebhookEvent{
 		ID:         "evt_checkout_completed",
 		EventType:  "checkout.session.completed",
-		ResourceID: sessID,
+		ResourceID: *attempt.StripeSessionID,
 	}
 	mustCreate(t, db, &evt)
 
@@ -500,11 +437,11 @@ func TestFundingSchedulesLaterInvoicesOnce(t *testing.T) {
 	svc.DrainForTest(t.Context())
 
 	var enrolledStudent students.Student
-	if err := db.Where("enrollment_id = ?", link.ID).Take(&enrolledStudent).Error; err != nil {
+	if err := db.Where("enrollment_id = ?", enrollment.ID).Take(&enrolledStudent).Error; err != nil {
 		t.Fatalf("enrolled student: %v", err)
 	}
-	if enrolledStudent.Name != link.Name || enrolledStudent.Email != link.Email || enrolledStudent.Phone != link.Phone {
-		t.Fatalf("student details mismatch: %+v, want %+v", enrolledStudent.Details, link.Details)
+	if enrolledStudent.Name != enrollment.Name || enrolledStudent.Email != enrollment.Email || enrolledStudent.Phone != enrollment.Phone {
+		t.Fatalf("student details mismatch: %+v, want %+v", enrolledStudent.Details, enrollment.Details)
 	}
 	if !enrolledStudent.CreatedAt.Equal(paidAt) {
 		t.Fatalf("expected student created_at %v, got %v", paidAt, enrolledStudent.CreatedAt)
@@ -563,86 +500,7 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 	mock := newWorkerMockServer(paidAt, 20834)
 	secret := billingtest.Config().WebhookSecret
 
-	allModels := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)
-	db := testdb.Open(t, allModels...)
-
-	tokenHash := make([]byte, 32)
-	rand.Read(tokenHash)
-	now := time.Now().UTC()
-	link := links.Enrollment{
-		LinkID:      seedLink(t, db),
-		SessionHash: tokenHash,
-		Details: students.Details{
-			Name:  "Recurring Student",
-			Email: "recurring@example.com",
-			Phone: "+17875551234",
-		},
-		CreatedAt:        now,
-		SubmittedAt:      &now,
-		ProgramStartDate: "2026-11-01",
-		ExpiresAt:        now.Add(7 * 24 * time.Hour),
-	}
-	mustCreate(t, db, &link)
-	contractRef := rand.Text()
-	cusID := "cus_worker_test"
-	contract := billing.Contract{
-		EnrollmentID:     link.ID,
-		Reference:        contractRef,
-		PlanID:           "three",
-		PlanName:         "Plan de 3 Pagos Mensuales",
-		InstallmentCount: 3,
-		TotalCents:       62500,
-		StripeCustomerID: &cusID,
-	}
-	mustCreate(t, db, &contract)
-
-	obl1 := billing.Obligation{
-		ContractID:            contract.ID,
-		Reference:             "ref_rec_obl1",
-		Kind:                  "tuition",
-		Number:                1,
-		AmountCents:           20834,
-		AmountRemainingCents:  20834,
-		StripePriceID:         "pr_three_1",
-		CollectionDisposition: "collect",
-	}
-	obl2 := billing.Obligation{
-		ContractID:            contract.ID,
-		Reference:             "ref_rec_obl2",
-		Kind:                  "tuition",
-		Number:                2,
-		AmountCents:           20833,
-		AmountRemainingCents:  20833,
-		StripePriceID:         "pr_three_2",
-		CollectionDisposition: "collect",
-	}
-	obl3 := billing.Obligation{
-		ContractID:            contract.ID,
-		Reference:             "ref_rec_obl3",
-		Kind:                  "tuition",
-		Number:                3,
-		AmountCents:           20833,
-		AmountRemainingCents:  20833,
-		StripePriceID:         "pr_three_2",
-		CollectionDisposition: "collect",
-	}
-	mustCreate(t, db, &obl1)
-	mustCreate(t, db, &obl2)
-	mustCreate(t, db, &obl3)
-
-	sessID := "cs_recurring_sess"
-	attempt := billing.CheckoutAttempt{
-		ContractID:        contract.ID,
-		Reference:         rand.Text(),
-		PlanID:            "three",
-		FirstAmountCents:  20834,
-		StripePriceID:     "pr_three_1",
-		CreationStartedAt: now,
-		StripeSessionID:   &sessID,
-		State:             "open",
-	}
-	mustCreate(t, db, &attempt)
-
+	db, _, contract, attempt := seedThreePlanCheckout(t)
 	svc := billingtest.New(t, db, mock.mux)
 
 	postWebhook := func(evtID, evtType, resourceID string) {
@@ -658,7 +516,7 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 	}
 
 	// 1. Initial checkout payment arrives via webhook
-	postWebhook("evt_checkout_done", "checkout.session.completed", sessID)
+	postWebhook("evt_checkout_done", "checkout.session.completed", *attempt.StripeSessionID)
 	svc.DrainForTest(t.Context())
 
 	var c billing.Contract
@@ -786,7 +644,7 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 	}
 
 	// 6. Verify Overview figures
-	overview, err := svc.Overview(t.Context(), now.Add(6*time.Minute), 30*24*time.Hour)
+	overview, err := svc.Overview(t.Context(), time.Now().UTC().Add(6*time.Minute), 30*24*time.Hour)
 	if err != nil {
 		t.Fatalf("Overview: %v", err)
 	}
@@ -810,7 +668,7 @@ func TestRefundsAndFraudSignalsSurfaceWithoutWebhook(t *testing.T) {
 	tokenHash := make([]byte, 32)
 	rand.Read(tokenHash)
 	now := time.Now().UTC()
-	link := links.Enrollment{
+	enrollment := links.Enrollment{
 		LinkID:      seedLink(t, db),
 		SessionHash: tokenHash,
 		Details: students.Details{
@@ -822,17 +680,17 @@ func TestRefundsAndFraudSignalsSurfaceWithoutWebhook(t *testing.T) {
 		PaidAt:      &now,
 		ExpiresAt:   now.Add(7 * 24 * time.Hour),
 	}
-	mustCreate(t, db, &link)
+	mustCreate(t, db, &enrollment)
 	student := students.Student{
-		EnrollmentID: &link.ID,
-		Details:        link.Details,
-		IsActive:       true,
-		Cohort:         "2026-11",
+		EnrollmentID: &enrollment.ID,
+		Details:      enrollment.Details,
+		IsActive:     true,
+		Cohort:       "2026-11",
 	}
 	mustCreate(t, db, &student)
 	cusID := "cus_worker_test"
 	contract := billing.Contract{
-		EnrollmentID:     link.ID,
+		EnrollmentID:     enrollment.ID,
 		Reference:        rand.Text(),
 		PlanID:           "full",
 		PlanName:         "Pago Único",
@@ -953,28 +811,28 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 
 	now := time.Now().UTC()
 
-	// Helper to create link, student, contract
+	// Helper to create enrollment, student, contract
 	setupStudent := func(name, email string) (students.Student, billing.Contract) {
 		tokenHash := make([]byte, 32)
 		rand.Read(tokenHash)
-		link := links.Enrollment{
+		enrollment := links.Enrollment{
 			LinkID:      seedLink(t, db),
 			SessionHash: tokenHash,
 			Details:     students.Details{Name: name, Email: email},
 			CreatedAt:   now, SubmittedAt: &now, PaidAt: &now,
-			ExpiresAt:   now.Add(7 * 24 * time.Hour),
+			ExpiresAt: now.Add(7 * 24 * time.Hour),
 		}
-		mustCreate(t, db, &link)
+		mustCreate(t, db, &enrollment)
 		student := students.Student{
-			EnrollmentID: &link.ID,
-			Details:      link.Details,
+			EnrollmentID: &enrollment.ID,
+			Details:      enrollment.Details,
 			IsActive:     true,
 			Cohort:       "2026-11",
 		}
 		mustCreate(t, db, &student)
 		cusID := "cus_worker_" + rand.Text()[:8]
 		contract := billing.Contract{
-			EnrollmentID:     link.ID,
+			EnrollmentID:     enrollment.ID,
 			Reference:        rand.Text(),
 			PlanID:           "three",
 			PlanName:         "Plan de 3 Pagos Mensuales",
@@ -1263,10 +1121,10 @@ func TestWorkerSyncsCustomerContact(t *testing.T) {
 		}
 	})
 
-	// 2. Customer changes email on the link before funding
-	// Contract is unfunded, but customer syncs durable to Stripe from the Link
+	// 2. Customer changes email on the Enrollment before funding
+	// Contract is unfunded, but customer syncs durable to Stripe from the Enrollment
 	if err := db.Model(&links.Enrollment{}).Where("id = ?", enrollmentID).Update("email", "maria.updated@example.com").Error; err != nil {
-		t.Fatalf("update link: %v", err)
+		t.Fatalf("update enrollment: %v", err)
 	}
 	svc.TouchContract(ctx, &enrollmentID)
 	// One worker drain records exactly one customer update with new email
@@ -1283,7 +1141,7 @@ func TestWorkerSyncsCustomerContact(t *testing.T) {
 		t.Fatalf("customer update = %+v, want %+v", updates[0], wantUpdate)
 	}
 
-	// DB contract stamp equals the link's contact
+	// DB contract stamp equals the Enrollment's contact
 	if err := db.Where("id = ?", c.ID).Take(&c).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -1293,7 +1151,7 @@ func TestWorkerSyncsCustomerContact(t *testing.T) {
 
 	// 3. Mock fails update => contract stamp stays old and next drain succeeds
 	if err := db.Model(&links.Enrollment{}).Where("id = ?", enrollmentID).Update("name", "Maria Rivera").Error; err != nil {
-		t.Fatalf("update link name: %v", err)
+		t.Fatalf("update enrollment name: %v", err)
 	}
 	svc.TouchContract(ctx, &enrollmentID)
 	mock.with(func() {

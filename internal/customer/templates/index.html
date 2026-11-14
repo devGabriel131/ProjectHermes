@@ -6,13 +6,13 @@
   <meta name="theme-color" content="#eef4f4">
   <title>{{if eq .View "welcome"}}Bienvenidos{{else if eq .View "agreement"}}Acuerdo de Pago y Términos y Condiciones{{else if eq .View "payments"}}Selección del plan de pago{{else if eq .View "payment-return"}}Estado del pago{{else if .Editing}}Edita la información del estudiante{{else}}Agrega la información del estudiante{{end}} | Masterminds</title>
   <link rel="icon" type="image/vnd.microsoft.icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
-  {{if eq .View "form"}}
+  {{if and (eq .View "form") (not .Editing)}}
   <meta name="htmx-config" content='{"reportValidityOfForms":true,"includeIndicatorStyles":false,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"422","swap":true,"error":false},{"code":"[45]..","swap":true,"error":true}]}'>
   {{end}}
   {{if eq .View "payment-return"}}
   <meta name="htmx-config" content='{"includeIndicatorStyles":false,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"4..","swap":false,"error":true},{"code":"5..","swap":true,"error":true}]}'>
   {{end}}
-  {{if or (eq .View "form") (eq .View "payment-return")}}
+  {{if or (and (eq .View "form") (not .Editing)) (eq .View "payment-return")}}
   <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js"
     integrity="sha384-2OatzQy1H+Zd/IIrjr1TcuDGqLXeHhbooAyJY1KdQMKnr4LZ22k31GBLdYKHmVjg"
     crossorigin="anonymous" defer></script>
@@ -121,12 +121,48 @@
       </div>
     </div>
     <div class="customer-field">
-      <label for="date_of_birth">Fecha de nacimiento del estudiante</label>
-      <p class="customer-hint" id="date_of_birth-hint">Día, mes y año de nacimiento.</p>
-      <input id="date_of_birth" name="date_of_birth" type="date" autocomplete="bday" required value="{{.DateOfBirth}}"
-        aria-describedby="date_of_birth-hint save-status-date_of_birth"{{if index .FieldErrors "date_of_birth"}} aria-invalid="true"{{end}}
-        {{if not .Editing}}hx-post="{{.Path}}/draft/date_of_birth" hx-params="date_of_birth" hx-trigger="change" hx-sync="this:queue last"
-        hx-target="#save-status-date_of_birth" hx-swap="innerHTML"{{end}}>
+      <fieldset id="date_of_birth_group" aria-describedby="date_of_birth-hint save-status-date_of_birth">
+        <legend>Fecha de nacimiento del estudiante</legend>
+        <p class="customer-hint" id="date_of_birth-hint">Día, mes y año de nacimiento.</p>
+        {{if not .Editing}}
+        <input type="hidden" id="date_of_birth_draft" name="date_of_birth" value="{{.DateOfBirth}}"
+          hx-post="{{.Path}}/draft/date_of_birth" hx-params="date_of_birth" hx-trigger="change" hx-sync="this:queue last"
+          hx-target="#save-status-date_of_birth" hx-swap="innerHTML">
+        {{end}}
+        <div class="customer-date-parts">
+          <div class="customer-date-part">
+            <label for="dob_day">Día</label>
+            <input id="dob_day" name="dob_day" type="text" inputmode="numeric" pattern="[0-9]{1,2}" maxlength="2"
+              autocomplete="bday-day" enterkeyhint="next" required value="{{.DobDay}}" data-dob-part
+              {{if index .FieldErrors "date_of_birth"}} aria-invalid="true"{{end}}>
+          </div>
+          <div class="customer-date-part">
+            <label for="dob_month">Mes</label>
+            <select id="dob_month" name="dob_month" autocomplete="bday-month" required data-dob-part
+              {{if index .FieldErrors "date_of_birth"}} aria-invalid="true"{{end}}>
+              <option value=""{{if eq .DobMonth ""}} selected{{end}}>Mes</option>
+              <option value="01"{{if eq .DobMonth "01"}} selected{{end}}>Enero</option>
+              <option value="02"{{if eq .DobMonth "02"}} selected{{end}}>Febrero</option>
+              <option value="03"{{if eq .DobMonth "03"}} selected{{end}}>Marzo</option>
+              <option value="04"{{if eq .DobMonth "04"}} selected{{end}}>Abril</option>
+              <option value="05"{{if eq .DobMonth "05"}} selected{{end}}>Mayo</option>
+              <option value="06"{{if eq .DobMonth "06"}} selected{{end}}>Junio</option>
+              <option value="07"{{if eq .DobMonth "07"}} selected{{end}}>Julio</option>
+              <option value="08"{{if eq .DobMonth "08"}} selected{{end}}>Agosto</option>
+              <option value="09"{{if eq .DobMonth "09"}} selected{{end}}>Septiembre</option>
+              <option value="10"{{if eq .DobMonth "10"}} selected{{end}}>Octubre</option>
+              <option value="11"{{if eq .DobMonth "11"}} selected{{end}}>Noviembre</option>
+              <option value="12"{{if eq .DobMonth "12"}} selected{{end}}>Diciembre</option>
+            </select>
+          </div>
+          <div class="customer-date-part">
+            <label for="dob_year">Año</label>
+            <input id="dob_year" name="dob_year" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4"
+              autocomplete="bday-year" enterkeyhint="next" required value="{{.DobYear}}" data-dob-part
+              {{if index .FieldErrors "date_of_birth"}} aria-invalid="true"{{end}}>
+          </div>
+        </div>
+      </fieldset>
       <div class="customer-status" id="save-status-date_of_birth" role="status" aria-atomic="true">
         {{with index .FieldErrors "date_of_birth"}}<p role="alert" data-validation="invalid">{{.}}</p>{{end}}
       </div>

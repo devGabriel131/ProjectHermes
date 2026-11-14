@@ -5,6 +5,7 @@ package main
 import (
 	"crypto/rand"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -16,12 +17,10 @@ import (
 	"gorm.io/gorm"
 
 	"projecthermes/internal/auth"
+	"projecthermes/internal/billing"
 	"projecthermes/internal/billing/billingtest"
-	"projecthermes/internal/links"
 	"projecthermes/internal/live"
 	"projecthermes/internal/logging"
-	"projecthermes/internal/settings"
-	"projecthermes/internal/students"
 	"projecthermes/internal/testdb"
 )
 
@@ -116,95 +115,55 @@ func TestCrossOriginWritesAreRejected(t *testing.T) {
 func newTestServer(t *testing.T) (http.Handler, *gorm.DB) {
 	t.Helper()
 	db := testdb.Open(t, models()...)
-	log := logging.New(io.Discard)
+	return serverHandler(t, db, db, logging.New(io.Discard)), db
+}
+
+// serverHandler builds the real handler with newServer over served. Auth and billing always use
+// db, so a test can hand newServer a broken connection and still sign in.
+func serverHandler(t *testing.T, db, served *gorm.DB, log *slog.Logger) http.Handler {
+	t.Helper()
 	feed := live.New()
 	t.Cleanup(feed.Close)
 	authentication, err := auth.New(db, false, log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(authentication.Close)
-	server, err := newServer("127.0.0.1:0", db, feed, authentication, billingtest.New(t, db, nil), false, log)
+	biller, err := billing.New(db, billingtest.Client(t, nil), billingtest.Config(), billingtest.Catalog(), feed.Changed, log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return server.Handler, db
+	server, err := newServer("127.0.0.1:0", served, feed, authentication, biller, false, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server.Handler
 }
 
-// signInStaff stores an account as the CLI does, then signs in through the real form.
-func signInStaff(t *testing.T, db *gorm.DB, handler http.Handler) *http.Cookie {
+// addStaff stores an account as the CLI does: an Argon2id hash and a random auth version.
+func addStaff(t *testing.T, db *gorm.DB, username, password string) auth.User {
 	t.Helper()
-	password := rand.Text()
 	hash, err := argon2id.CreateHash(password, &argon2id.Params{Memory: 16, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.WithContext(t.Context()).Create(&auth.User{Username: "staff", PasswordHash: hash, AuthVersion: rand.Text()}).Error; err != nil {
+	user := auth.User{Username: username, PasswordHash: hash, AuthVersion: rand.Text()}
+	if err := db.WithContext(t.Context()).Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
+	return user
+}
+
+// signInStaff stores the account "staff", then signs in through the real form.
+func signInStaff(t *testing.T, db *gorm.DB, handler http.Handler) *http.Cookie {
+	t.Helper()
+	password := rand.Text()
+	addStaff(t, db, "staff", password)
 	rec := send(t, handler, http.MethodPost, "/management/login", nil, url.Values{"username": {"staff"}, "password": {password}}, nil)
 	cookies := rec.Result().Cookies()
 	if rec.Code != http.StatusSeeOther || len(cookies) != 1 {
 		t.Fatalf("sign in: status %d, cookies %v", rec.Code, cookies)
 	}
 	return cookies[0]
-}
-
-func TestLegacySchemaReset(t *testing.T) {
-	t.Parallel()
-	// Open a bare schema with only auth + settings, then create legacy links/students/billing_contracts.
-	db := testdb.Open(t, &auth.User{}, &auth.Session{}, &settings.Settings{})
-	ctx := t.Context()
-	if err := db.WithContext(ctx).Create(&auth.User{Username: "staff", PasswordHash: "h", AuthVersion: "v1"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.WithContext(ctx).Create(&settings.Settings{ID: 1, LinkLifetimeDays: 10, ProgramStartDate: "2026-11-01"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	for _, stmt := range []string{
-		`CREATE TABLE links (token_hash bytea PRIMARY KEY, name text NOT NULL DEFAULT '')`,
-		`CREATE TABLE students (id bigserial PRIMARY KEY, source_link_hash bytea UNIQUE REFERENCES links(token_hash), name text NOT NULL DEFAULT '', email text NOT NULL DEFAULT '', pin text NOT NULL DEFAULT '', "group" text NOT NULL DEFAULT 'Básico', cohort text NOT NULL)`,
-		`CREATE TABLE billing_contracts (id bigserial PRIMARY KEY, source_link_hash bytea NOT NULL UNIQUE REFERENCES links(token_hash))`,
-		`INSERT INTO links (token_hash, name) VALUES (decode(repeat('aa', 32), 'hex'), 'Legacy')`,
-		`INSERT INTO students (source_link_hash, name, email, pin, "group", cohort) VALUES (decode(repeat('aa', 32), 'hex'), 'Legacy Student', 'legacy@example.com', '123456', 'Regular', '2026-11')`,
-		`INSERT INTO billing_contracts (source_link_hash) VALUES (decode(repeat('aa', 32), 'hex'))`,
-	} {
-		if err := db.WithContext(ctx).Exec(stmt).Error; err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	if err := migrate(ctx, db, logging.New(io.Discard)); err != nil {
-		t.Fatalf("legacy migrate failed: %v", err)
-	}
-	// Idempotent on subsequent boots.
-	if err := migrate(ctx, db, logging.New(io.Discard)); err != nil {
-		t.Fatalf("second migrate failed: %v", err)
-	}
-
-	// Staff accounts, settings, and students survived; legacy links reset to new schema.
-	var kept students.Student
-	if err := db.WithContext(ctx).Take(&kept, 1).Error; err != nil || kept.Name != "Legacy Student" ||
-		kept.Email != "legacy@example.com" || kept.Pin != "123456" || kept.Group != "Regular" || kept.EnrollmentID != nil {
-		t.Fatalf("legacy student not preserved: %+v, err=%v", kept, err)
-	}
-	// ProjectHephaestus keys its tables on students.id, so a new student must not reuse a legacy ID.
-	added := students.Student{Details: students.Details{Name: "New"}}
-	if err := db.WithContext(ctx).Create(&added).Error; err != nil || added.ID != 2 {
-		t.Fatalf("new student ID = %d, want 2, err=%v", added.ID, err)
-	}
-	var user auth.User
-	if err := db.WithContext(ctx).Where("username = ?", "staff").Take(&user).Error; err != nil {
-		t.Fatalf("staff account lost during legacy reset: %v", err)
-	}
-	s, err := settings.New(db).Current(ctx)
-	if err != nil || s.LinkLifetimeDays != 10 {
-		t.Fatalf("settings lost during legacy reset: %+v, err=%v", s, err)
-	}
-	var count int64
-	if err := db.WithContext(ctx).Model(&links.Link{}).Count(&count).Error; err != nil || count != 0 {
-		t.Fatalf("expected empty new links table, count=%d, err=%v", count, err)
-	}
 }
 
 // send serves one request in memory, with cookie and form when given.

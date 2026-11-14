@@ -41,17 +41,19 @@
     <p><a href="{{.Path}}/payments">Verificar estado</a> o usa «Continuar al pago seguro» para reanudar.</p>
   </div>
   {{end}}
-  {{with .SelectedPlan}}
+  {{/* A processing checkout may still change the plan, so no plan is announced yet. */}}
+  {{with and .Billing (not .Processing) .Billing.PlanName}}
   {{if or $.Error (index $.FieldErrors "payment_plan")}}
   <p class="payment-saved" role="status">Plan elegido anteriormente: <strong>{{.}}</strong>. Tu intento de cambio no se aplicó. Todavía no hemos confirmado ningún pago.</p>
   {{else}}
   <p class="payment-saved" role="status">Plan elegido: <strong>{{.}}</strong>. Todavía no hemos confirmado ningún pago. Puedes continuar o cambiar tu elección antes de pagar.</p>
   {{end}}
   {{end}}
+  {{with and .Billing .Billing.Decline}}<p id="payment-declined" class="customer-callout" role="alert">{{template "icon-alert"}}<span><strong>Tu último intento de pago fue rechazado.</strong> {{template "decline-reason" .}} Puedes intentarlo de nuevo con otra tarjeta o elegir otro plan.</span></p>{{end}}
   {{with .Error}}<p id="payment-error" class="customer-callout" role="alert">{{template "icon-alert"}}<span>{{.}}</span></p>{{end}}
   {{if .Plans}}
   <form class="payment-plan-form" action="{{.Path}}/payments" method="post">
-    <fieldset aria-describedby="payment-schedule-note payment-choice-note payment-auto-note{{if .Error}} payment-error{{end}}{{if index .FieldErrors "payment_plan"}} payment-plan-error{{end}}"{{if index .FieldErrors "payment_plan"}} aria-invalid="true"{{end}}>
+    <fieldset aria-describedby="payment-schedule-note payment-choice-note payment-auto-note{{if and .Billing .Billing.Decline}} payment-declined{{end}}{{if .Error}} payment-error{{end}}{{if index .FieldErrors "payment_plan"}} payment-plan-error{{end}}"{{if index .FieldErrors "payment_plan"}} aria-invalid="true"{{end}}>
       <legend class="visually-hidden">Elige tu plan de pago</legend>
       {{with index .FieldErrors "payment_plan"}}<p id="payment-plan-error" class="customer-callout" role="alert">{{template "icon-alert"}}<span>{{.}}</span></p>{{end}}
       <div class="payment-options">

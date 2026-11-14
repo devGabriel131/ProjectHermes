@@ -13,7 +13,7 @@ Suspension changes one thing: `students.is_active`. The only readers of that fla
 | Attribution | `billing_obligations.deadline_episode_id`: the episode a missed installment was assigned to |
 | `started_at` | The missed deadline itself, not the moment of detection |
 | `close_reason` | `reinstated` or `corrected`; NULL while open |
-| Fee | The episode's single reinstatement obligation, `ReinstatementFeeCents` = 2500 ($25), created only by the staff request |
+| Fee | The episode's single reinstatement obligation, `reinstatementFeeCents` = 2500 ($25), created only by the staff request |
 
 ## The 14-day rule
 
@@ -56,7 +56,7 @@ stateDiagram-v2
 
 ## Detection and correction
 
-`evaluateDeadlines` makes one decision in one transaction under `leasedStudent`'s Link, Contract and Student locks, after the invoices were refreshed:
+`evaluateDeadlines` makes one decision in one transaction under `leasedStudent`'s Enrollment, Contract and Student locks, after the invoices were refreshed:
 
 1. Load tuition with a due date and every episode not yet corrected (including reinstated ones).
 2. **Correct** each episode whose triggering installment is authoritatively settled on time (`falseEpisode`: `first_settled_at` set and not missed). This is what happens when a payment made before the deadline was recorded late. `correctEpisode` closes it as `corrected`, releases its attributions and sets its fee's `collection_disposition` to `cancel`, all before any Stripe call.
@@ -126,9 +126,10 @@ Then, in one transaction: `closed_at = now`, `close_reason = reinstated`, `stude
 
 ## Source
 
-- `internal/billing/suspension.go`: `deadlineWindow`, `reinstatable`, `RequestReinstatement`, `requestFee`, `missedDeadline`, `hasReview`, `episodeFor`, `falseEpisode`, `correctEpisode`, `evaluateDeadlines`, `cancelFees`, `cancelFee`, `evaluateReactivation`
+- `internal/billing/suspension.go`: `deadlineWindow`, `reinstatable`, `RequestReinstatement`, `requestFee`, `missedDeadline`, `hasReview`, `episodeFor`, `falseEpisode`, `correctEpisode`, `evaluateDeadlines`, `evaluateReactivation`
+- `internal/billing/invoices.go`: `cancelFees`, `cancelFee`, `syncInvoice`
 - `internal/billing/models.go`: `Suspension`, `Obligation`
-- `internal/billing/stripe.go`: `ReinstatementFeeCents`
-- `internal/billing/billing.go`: `ErrNotSuspended`, `ErrNeedsReview`, `ErrPaymentPending`, `ErrUnavailable`, `providerBudget`, `withStaffContract`
-- `internal/billing/worker.go`: `reconcileContract`, `leasedStudent`, `syncInvoice`
+- `internal/billing/stripe.go`: `reinstatementFeeCents`
+- `internal/billing/billing.go`: `ErrNotSuspended`, `ErrNeedsReview`, `ErrPaymentPending`, `ErrUnavailable`, `errStaffRequired`, `providerBudget`, `withStaffContract`
+- `internal/billing/worker.go`: `reconcileContract`, `leasedStudent`
 - `internal/management/students.go`: `billingRefusals`

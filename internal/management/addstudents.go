@@ -1,7 +1,6 @@
 package management
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/csv"
 	"errors"
@@ -12,7 +11,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/xuri/excelize/v2"
 
@@ -32,6 +30,8 @@ const (
 
 // maxRosterRows bounds one upload so validation and insert finish well inside the server's 10 s WriteTimeout.
 const maxRosterRows = 1000
+
+var errUnreadableRoster = &students.ValidationError{Message: "Could not read this file. Upload an .xlsx or .csv roster."}
 
 type rosterRow struct {
 	Line  int      // spreadsheet row number, 1-based
@@ -81,17 +81,17 @@ func readRoster(filename string, file io.Reader) ([]string, []rosterRow, error) 
 	case ".xlsx":
 		f, err := excelize.OpenReader(file, excelize.Options{UnzipSizeLimit: 32 << 20, UnzipXMLSizeLimit: 32 << 20})
 		if err != nil {
-			return nil, nil, &students.ValidationError{Message: "Could not read this file. Upload an .xlsx or .csv roster."}
+			return nil, nil, errUnreadableRoster
 		}
 		defer f.Close()
 
 		sheets := f.GetSheetList()
 		if len(sheets) == 0 {
-			return nil, nil, &students.ValidationError{Message: "Could not read this file. Upload an .xlsx or .csv roster."}
+			return nil, nil, errUnreadableRoster
 		}
 		rows, err := f.GetRows(sheets[0])
 		if err != nil {
-			return nil, nil, &students.ValidationError{Message: "Could not read this file. Upload an .xlsx or .csv roster."}
+			return nil, nil, errUnreadableRoster
 		}
 		rawRows = rows
 	case ".csv":
@@ -99,7 +99,7 @@ func readRoster(filename string, file io.Reader) ([]string, []rosterRow, error) 
 		r.FieldsPerRecord = -1
 		rows, err := r.ReadAll()
 		if err != nil {
-			return nil, nil, &students.ValidationError{Message: "Could not read this file. Upload an .xlsx or .csv roster."}
+			return nil, nil, errUnreadableRoster
 		}
 		if len(rows) > 0 && len(rows[0]) > 0 {
 			rows[0][0] = strings.TrimPrefix(rows[0][0], "\ufeff")
@@ -184,158 +184,130 @@ func fixWorkbook(header []string, rows []rejectedRow) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func registerAddStudentRoutes(mux *http.ServeMux, roster *students.Store, staff func(context.Context) string, page *template.Template) {
-	mux.HandleFunc("GET /management/students/new", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
-
-		data := addStudentsData{Staff: staff(r.Context()), Groups: students.GroupOptions()}
-		if rawID := r.URL.Query().Get("added"); rawID != "" {
-			if id, err := strconv.ParseUint(rawID, 10, 64); err == nil {
-				data.Added, err = roster.Get(ctx, id)
-				if err != nil {
-					logging.RecordError(r, "load", err)
-					http.Error(w, "Could not load student. Please try again.", http.StatusInternalServerError)
-					return
-				}
-				if data.Added != nil {
-					data.AddGroup = data.Added.Group
-				}
-			}
-		}
-
-		render(w, r, page, http.StatusOK, "add-students.html", data)
-	})
-
-	mux.HandleFunc("POST /management/students", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
-
-		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
-		if err := r.ParseForm(); err != nil {
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
-				http.Error(w, "This value is too large.", http.StatusRequestEntityTooLarge)
-			} else {
-				http.Error(w, "Could not read this field. Please try again.", http.StatusBadRequest)
-			}
-			return
-		}
-
-		entry := students.NewStudent{Name: r.PostForm.Get("name"), Email: r.PostForm.Get("email"), Pin: r.PostForm.Get("pin")}
-		data := addStudentsData{Staff: staff(r.Context()), Groups: students.GroupOptions(), Entry: entry, AddGroup: r.PostForm.Get("group")}
-		group, err := students.ParseGroup(data.AddGroup, true)
-		if err != nil {
-			data.AddError = err.Error()
-			render(w, r, page, http.StatusUnprocessableEntity, "add-students.html", data)
-			return
-		}
-		added, rejected, err := roster.Add(ctx, group, []students.NewStudent{entry})
-
-		var valErr *students.ValidationError
-		switch {
-		case errors.As(err, &valErr):
-			data.AddError = valErr.Message
-			render(w, r, page, http.StatusConflict, "add-students.html", data)
-		case err != nil:
-			logging.RecordError(r, "save", err)
-			http.Error(w, "Could not add the student. Please try again.", http.StatusInternalServerError)
-		case len(rejected) > 0:
-			data.Errors = rejected[0]
-			render(w, r, page, http.StatusUnprocessableEntity, "add-students.html", data)
-		default:
-			http.Redirect(w, r, "/management/students/new?added="+strconv.FormatUint(added[0].ID, 10), http.StatusSeeOther)
-		}
-	})
-
-	mux.HandleFunc("POST /management/students/import", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
-
-		data := addStudentsData{Staff: staff(r.Context()), Groups: students.GroupOptions()}
-
-		r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
-		if err := r.ParseMultipartForm(2 << 20); err != nil {
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
-				data.ImportError = "The file is larger than 2 MB."
-				render(w, r, page, http.StatusRequestEntityTooLarge, "add-students.html", data)
-			} else {
-				data.ImportError = "Choose an .xlsx or .csv file to upload."
-				render(w, r, page, http.StatusUnprocessableEntity, "add-students.html", data)
-			}
-			return
-		}
-
-		data.ImportGroup = r.PostForm.Get("group")
-		group, err := students.ParseGroup(data.ImportGroup, true)
-		if err != nil {
-			data.ImportError = err.Error()
-			render(w, r, page, http.StatusUnprocessableEntity, "add-students.html", data)
-			return
-		}
-		data.ImportGroup = group
-
-		file, header, err := r.FormFile("roster")
-		if err != nil {
-			data.ImportError = "Choose an .xlsx or .csv file to upload."
-			render(w, r, page, http.StatusUnprocessableEntity, "add-students.html", data)
-			return
-		}
-		defer file.Close()
-
-		head, rows, err := readRoster(header.Filename, file)
-		if err != nil {
-			var valErr *students.ValidationError
-			if errors.As(err, &valErr) {
-				data.ImportError = valErr.Message
-				render(w, r, page, http.StatusUnprocessableEntity, "add-students.html", data)
-				return
-			}
-			logging.RecordError(r, "import", err)
-			http.Error(w, "Could not read this file. Please try again.", http.StatusInternalServerError)
-			return
-		}
-
-		entries := make([]students.NewStudent, len(rows))
-		for i := range rows {
-			entries[i] = rows[i].entry()
-		}
-
-		added, rejected, err := roster.Add(ctx, group, entries)
-		var valErr *students.ValidationError
-		switch {
-		case errors.As(err, &valErr):
-			data.ImportError = valErr.Message
-			render(w, r, page, http.StatusConflict, "add-students.html", data)
-			return
-		case err != nil:
-			logging.RecordError(r, "save", err)
-			http.Error(w, "Could not import students. Please try again.", http.StatusInternalServerError)
-			return
-		}
-
-		report := rosterReport{Added: len(added)}
-		for _, rj := range rejected {
-			report.Rejected = append(report.Rejected, rejectedRow{
-				Line:     rows[rj.Index].Line,
-				Name:     entries[rj.Index].Name,
-				Cells:    rows[rj.Index].Cells,
-				Problems: rj.Problems(),
-			})
-		}
-
-		if len(report.Rejected) > 0 {
-			fixBytes, err := fixWorkbook(head, report.Rejected)
+func (s *site) addStudentsPage(w http.ResponseWriter, r *http.Request) {
+	data := addStudentsData{Staff: s.staff(r.Context()), Groups: students.GroupOptions()}
+	if rawID := r.URL.Query().Get("added"); rawID != "" {
+		if id, err := strconv.ParseUint(rawID, 10, 63); err == nil {
+			data.Added, err = s.roster.Get(r.Context(), id)
 			if err != nil {
-				logging.RecordError(r, "export", err)
-				http.Error(w, "Could not build the rows-to-fix file. Please try again.", http.StatusInternalServerError)
+				logging.RecordError(r, "load", err)
+				http.Error(w, "Could not load student. Please try again.", http.StatusInternalServerError)
 				return
 			}
-			report.FixFile = template.URL("data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64," + base64.StdEncoding.EncodeToString(fixBytes))
+			if data.Added != nil {
+				data.AddGroup = data.Added.Group
+			}
 		}
+	}
+	s.render(w, r, http.StatusOK, "add-students.html", data)
+}
 
-		data.Imported = &report
-		render(w, r, page, http.StatusOK, "add-students.html", data)
-	})
+func (s *site) addStudent(w http.ResponseWriter, r *http.Request) {
+	if !readForm(w, r) {
+		return
+	}
+	entry := students.NewStudent{Name: r.PostForm.Get("name"), Email: r.PostForm.Get("email"), Pin: r.PostForm.Get("pin")}
+	data := addStudentsData{Staff: s.staff(r.Context()), Groups: students.GroupOptions(), Entry: entry, AddGroup: r.PostForm.Get("group")}
+	group, err := students.ParseGroup(data.AddGroup, true)
+	if err != nil {
+		data.AddError = err.Error()
+		s.render(w, r, http.StatusUnprocessableEntity, "add-students.html", data)
+		return
+	}
+	added, rejected, err := s.roster.Add(r.Context(), group, []students.NewStudent{entry})
+
+	var valErr *students.ValidationError
+	switch {
+	case errors.As(err, &valErr):
+		data.AddError = valErr.Message
+		s.render(w, r, http.StatusConflict, "add-students.html", data)
+	case err != nil:
+		logging.RecordError(r, "save", err)
+		http.Error(w, "Could not add the student. Please try again.", http.StatusInternalServerError)
+	case len(rejected) > 0:
+		data.Errors = rejected[0]
+		s.render(w, r, http.StatusUnprocessableEntity, "add-students.html", data)
+	default:
+		http.Redirect(w, r, "/management/students/new?added="+strconv.FormatUint(added[0].ID, 10), http.StatusSeeOther)
+	}
+}
+
+func (s *site) importStudents(w http.ResponseWriter, r *http.Request) {
+	data := addStudentsData{Staff: s.staff(r.Context()), Groups: students.GroupOptions()}
+	refuse := func(status int, message string) {
+		data.ImportError = message
+		s.render(w, r, status, "add-students.html", data)
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	if err := r.ParseMultipartForm(2 << 20); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			refuse(http.StatusRequestEntityTooLarge, "The file is larger than 2 MB.")
+		} else {
+			refuse(http.StatusUnprocessableEntity, "Choose an .xlsx or .csv file to upload.")
+		}
+		return
+	}
+
+	data.ImportGroup = r.PostForm.Get("group")
+	group, err := students.ParseGroup(data.ImportGroup, true)
+	if err != nil {
+		refuse(http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	data.ImportGroup = group
+
+	file, header, err := r.FormFile("roster")
+	if err != nil {
+		refuse(http.StatusUnprocessableEntity, "Choose an .xlsx or .csv file to upload.")
+		return
+	}
+	defer file.Close()
+
+	head, rows, err := readRoster(header.Filename, file)
+	if err != nil {
+		refuse(http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	entries := make([]students.NewStudent, len(rows))
+	for i := range rows {
+		entries[i] = rows[i].entry()
+	}
+
+	added, rejected, err := s.roster.Add(r.Context(), group, entries)
+	var valErr *students.ValidationError
+	switch {
+	case errors.As(err, &valErr):
+		refuse(http.StatusConflict, valErr.Message)
+		return
+	case err != nil:
+		logging.RecordError(r, "save", err)
+		http.Error(w, "Could not import students. Please try again.", http.StatusInternalServerError)
+		return
+	}
+
+	report := rosterReport{Added: len(added)}
+	for _, rj := range rejected {
+		report.Rejected = append(report.Rejected, rejectedRow{
+			Line:     rows[rj.Index].Line,
+			Name:     entries[rj.Index].Name,
+			Cells:    rows[rj.Index].Cells,
+			Problems: rj.Problems(),
+		})
+	}
+
+	if len(report.Rejected) > 0 {
+		fixBytes, err := fixWorkbook(head, report.Rejected)
+		if err != nil {
+			logging.RecordError(r, "export", err)
+			http.Error(w, "Could not build the rows-to-fix file. Please try again.", http.StatusInternalServerError)
+			return
+		}
+		report.FixFile = template.URL("data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64," + base64.StdEncoding.EncodeToString(fixBytes))
+	}
+
+	data.Imported = &report
+	s.render(w, r, http.StatusOK, "add-students.html", data)
 }

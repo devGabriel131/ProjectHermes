@@ -49,19 +49,62 @@
   }
 
   function isDraft(control) {
-    return control?.matches('input[hx-params], select[hx-params]');
+    return typeof control?.matches === 'function' && control.matches('input[hx-params], select[hx-params]');
   }
 
   function activeDraft(control) {
     return isDraft(control) && control.isConnected && control.form === currentForm();
   }
 
+  function draftTargets(control) {
+    if (control?.id === 'date_of_birth_draft') {
+      return Array.from(control.form?.querySelectorAll('[data-dob-part]') ?? []);
+    }
+    return control ? [control] : [];
+  }
+
+  function clearDraftInvalid(control) {
+    for (const target of draftTargets(control)) {
+      target.removeAttribute('aria-invalid');
+    }
+  }
+
+  function syncDateDraft(mode) {
+    const form = currentForm();
+    const draft = form?.querySelector('#date_of_birth_draft');
+    const dayEl = form?.querySelector('#dob_day');
+    const monthEl = form?.querySelector('#dob_month');
+    const yearEl = form?.querySelector('#dob_year');
+    if (!draft || !dayEl || !monthEl || !yearEl || !activeDraft(draft)) return;
+
+    const day = dayEl.value.trim();
+    const month = monthEl.value.trim();
+    const year = yearEl.value.trim();
+
+    let next = null;
+    if (day === '' && month === '' && year === '') {
+      if (mode !== 'input') next = '';
+    } else if (/^\d{1,2}$/.test(day) && Number(day) >= 1 && Number(day) <= 31 &&
+        /^(0[1-9]|1[0-2])$/.test(month) && /^\d{4}$/.test(year)) {
+      next = `${year}-${month}-${day.padStart(2, '0')}`;
+    } else if (mode === 'leave' || (mode === 'change' && day !== '' && month !== '' && year !== '')) {
+      next = 'invalid';
+    }
+
+    if (next === null || draft.value === next) return;
+    draft.value = next;
+    draft.dispatchEvent(new Event('change'));
+  }
+
   // Generic save errors replace validation feedback without marking the field invalid.
   function reconcileDraftValidity(control, status) {
-    if (status.querySelector('[data-validation="invalid"]')) {
-      control.setAttribute('aria-invalid', 'true');
-    } else {
-      control.removeAttribute('aria-invalid');
+    const invalid = Boolean(status.querySelector('[data-validation="invalid"]'));
+    for (const target of draftTargets(control)) {
+      if (invalid) {
+        target.setAttribute('aria-invalid', 'true');
+      } else {
+        target.removeAttribute('aria-invalid');
+      }
     }
   }
 
@@ -73,6 +116,24 @@
     const control = event.target;
     if ((control.id === 'email' || control.id === 'email_confirm') && control.form === currentForm()) {
       reconcileEmails(control);
+    }
+    if (control.matches?.('[data-dob-part]') && control.form === currentForm()) {
+      syncDateDraft('input');
+    }
+  });
+
+  document.addEventListener('change', (event) => {
+    const control = event.target;
+    if (control.matches?.('[data-dob-part]') && control.form === currentForm()) {
+      syncDateDraft('change');
+    }
+  });
+
+  document.addEventListener('focusout', (event) => {
+    const fieldset = event.target?.closest?.('#date_of_birth_group');
+    if (!fieldset || !currentForm()?.contains(fieldset)) return;
+    if (!fieldset.contains(event.relatedTarget)) {
+      syncDateDraft('leave');
     }
   });
 
@@ -115,7 +176,7 @@
     message.setAttribute('role', 'alert');
     message.textContent = 'No se guardó. Verifica tu conexión e intenta de nuevo.';
     target.replaceChildren(message);
-    if (draft) source.removeAttribute('aria-invalid');
+    if (draft) clearDraftInvalid(source);
   });
 
   reconcileEmails();

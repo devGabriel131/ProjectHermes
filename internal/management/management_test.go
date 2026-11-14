@@ -116,7 +116,6 @@ func newApp(t *testing.T) *app {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(manager.Close)
 	child := http.NewServeMux()
 	if err := RegisterRoutes(child, store, students.New(db, nil), settings.New(db), auth.Staff, newBiller(t, db)); err != nil {
 		t.Fatal(err)
@@ -216,7 +215,7 @@ func (a *app) requireRegistry(t *testing.T, want ...links.LinkGroup) {
 			out[i].Enrollments = make([]links.EnrollmentEntry, len(g.Enrollments))
 			for j, e := range g.Enrollments {
 				out[i].Enrollments[j] = links.EnrollmentEntry{
-					ID: e.ID, LinkID: e.LinkID, Name: e.Name, Phone: e.Phone,
+					ID: e.ID, Name: e.Name, Phone: e.Phone,
 					Status: e.Status, CanceledBy: e.CanceledBy,
 				}
 			}
@@ -374,7 +373,7 @@ func TestUnauthorizedRequestsCannotUseManagement(t *testing.T) {
 	existing := links.LinkGroup{
 		Link: existingLink,
 		Enrollments: []links.EnrollmentEntry{{
-			ID: e.ID, LinkID: existingLink.ID, Name: "Private student",
+			ID: e.ID, Name: "Private student",
 			Phone: contactDetails("").Phone, PaidAt: &now, Status: links.Finished,
 		}},
 	}
@@ -474,9 +473,9 @@ func TestRegistrySeparatesTrash(t *testing.T) {
 		return strings.ReplaceAll(fmt.Sprintf("%-43s", strings.ReplaceAll(tag, " ", "_")), " ", "0")[:43]
 	}
 
-	activeLink := links.Link{Name: "Active Reusable", Token: mkToken("active_link"), CreatedBy: "staff", ExpiresAt: later}
-	canceledLink := links.Link{Name: "Canceled Reusable", Token: mkToken("canceled_link"), CreatedBy: "staff", ExpiresAt: later, CanceledAt: &past, CanceledBy: "staff"}
-	expiredLink := links.Link{Name: "Expired Reusable", Token: mkToken("expired_link"), CreatedBy: "staff", ExpiresAt: past}
+	activeLink := links.Link{Name: "Active Reusable", Token: mkToken("active_link"), CreatedBy: "staff", ExpiresAt: later, EnrollmentCount: 3}
+	canceledLink := links.Link{Name: "Canceled Reusable", Token: mkToken("canceled_link"), CreatedBy: "staff", ExpiresAt: later, CanceledAt: &past, CanceledBy: "staff", EnrollmentCount: 1}
+	expiredLink := links.Link{Name: "Expired Reusable", Token: mkToken("expired_link"), CreatedBy: "staff", ExpiresAt: past, EnrollmentCount: 1}
 	for _, l := range []*links.Link{&activeLink, &canceledLink, &expiredLink} {
 		if err := a.db.WithContext(t.Context()).Create(l).Error; err != nil {
 			t.Fatal(err)
@@ -509,7 +508,7 @@ func TestRegistrySeparatesTrash(t *testing.T) {
 			}
 		}
 		entry := links.EnrollmentEntry{
-			ID: tc.row.ID, LinkID: tc.link.ID, Name: tc.row.Name, Phone: tc.row.Phone, Status: tc.status,
+			ID: tc.row.ID, Name: tc.row.Name, Phone: tc.row.Phone, Status: tc.status,
 			ExpiresAt: tc.row.ExpiresAt, SubmittedAt: tc.row.SubmittedAt, PaidAt: tc.row.PaidAt, CanceledBy: tc.row.CanceledBy,
 		}
 		switch {
@@ -803,11 +802,12 @@ func TestStaffShareLinkStatuses(t *testing.T) {
 	requireAcknowledged(t, res, body)
 	a.requireRegistry(t, groups...)
 
-	// Unknown/malformed/raw-token cancel IDs return 204 for HTMX and unchanged main page for ordinary.
+	// Unknown/malformed/raw-token/beyond-BIGINT cancel IDs return 204 for HTMX and unchanged main page for ordinary.
 	for _, tc := range []struct{ name, id string }{
 		{"unknown", unknownID},
 		{"malformed", "not-issued"},
 		{"raw customer token", groups[0].Link.Token},
+		{"beyond BIGINT", "9223372036854775808"},
 	} {
 		t.Run(tc.name+" cancel ID", func(t *testing.T) {
 			if res, body := cancelLink(t, admin, tc.id, htmxHeader); res.StatusCode != http.StatusNoContent || body != "" {
@@ -944,11 +944,10 @@ func TestProgramStartDateSavesWithoutChangingExistingEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pendingSess, err := a.store.LookupSession(t.Context(), pending.Token, pendingCookie)
-	if err != nil || pendingSess == nil || pendingSess.Enrollment == nil {
-		t.Fatalf("pending enrollment: %+v, err=%v", pendingSess, err)
+	pendingBefore, _, err := a.store.LookupSession(t.Context(), pending.Token, pendingCookie)
+	if err != nil || pendingBefore == nil {
+		t.Fatalf("pending enrollment: %+v, err=%v", pendingBefore, err)
 	}
-	pendingBefore := pendingSess.Enrollment
 	saveDate := func(date string) {
 		t.Helper()
 		res, body := a.send(t, admin, http.MethodPost, "/management/program-start-date", url.Values{"program_start_date": {date}}, nil)
@@ -992,9 +991,12 @@ func TestProgramStartDateSavesWithoutChangingExistingEnrollment(t *testing.T) {
 	if saved, err := a.store.Submit(t.Context(), enrolled.Token, enrolledCookie, contactDetails("Accepted student"), ""); err != nil || saved != links.Saved {
 		t.Fatalf("submit: saved=%v, err=%v", saved, err)
 	}
-	accepted, err := a.store.AcceptTerms(t.Context(), enrolled.Token, enrolledCookie, "2026-12-01")
+	if ok, err := a.store.AcceptTerms(t.Context(), enrolled.Token, enrolledCookie, "2026-12-01"); err != nil || !ok {
+		t.Fatalf("accept agreement: accepted=%v, err=%v", ok, err)
+	}
+	accepted, _, err := a.store.LookupSession(t.Context(), enrolled.Token, enrolledCookie)
 	if err != nil || accepted == nil || accepted.TermsAcceptedAt == nil {
-		t.Fatalf("accept agreement: %+v, err=%v", accepted, err)
+		t.Fatalf("accepted enrollment: %+v, err=%v", accepted, err)
 	}
 	res, body := a.send(t, admin, http.MethodPost, "/management/settings", url.Values{"lifetime": {"10"}}, nil)
 	if res.StatusCode != http.StatusSeeOther {
@@ -1010,20 +1012,18 @@ func TestProgramStartDateSavesWithoutChangingExistingEnrollment(t *testing.T) {
 	if err != nil || current.ProgramStartDate != "2027-01-15" || current.LinkLifetimeDays != 10 {
 		t.Fatalf("program date save changed lifetime: current=%+v, err=%v", current, err)
 	}
-	afterSess, err := a.store.LookupSession(t.Context(), enrolled.Token, enrolledCookie)
-	if err != nil || afterSess == nil || afterSess.Enrollment == nil {
-		t.Fatalf("lookup after: %+v, err=%v", afterSess, err)
+	after, _, err := a.store.LookupSession(t.Context(), enrolled.Token, enrolledCookie)
+	if err != nil || after == nil {
+		t.Fatalf("lookup after: %+v, err=%v", after, err)
 	}
-	after := afterSess.Enrollment
 	if after.ProgramStartDate != "2026-12-01" || after.TermsAcceptedAt == nil ||
 		!after.TermsAcceptedAt.Equal(*accepted.TermsAcceptedAt) || !after.ExpiresAt.Equal(accepted.ExpiresAt) || after.Details != accepted.Details {
 		t.Fatalf("settings changed accepted enrollment: %+v", after)
 	}
-	pendingAfterSess, err := a.store.LookupSession(t.Context(), pending.Token, pendingCookie)
-	if err != nil || pendingAfterSess == nil || pendingAfterSess.Enrollment == nil {
-		t.Fatalf("lookup pending after: %+v, err=%v", pendingAfterSess, err)
+	pendingAfter, _, err := a.store.LookupSession(t.Context(), pending.Token, pendingCookie)
+	if err != nil || pendingAfter == nil {
+		t.Fatalf("lookup pending after: %+v, err=%v", pendingAfter, err)
 	}
-	pendingAfter := pendingAfterSess.Enrollment
 	if !pendingAfter.ExpiresAt.Equal(pendingBefore.ExpiresAt) ||
 		pendingAfter.ProgramStartDate != "" || pendingAfter.TermsAcceptedAt != nil {
 		t.Fatalf("settings changed existing unfinished enrollment: %+v", pendingAfter)
@@ -1236,8 +1236,8 @@ func TestManagementBillingRoutes(t *testing.T) {
 	episode := billing.Suspension{ContractID: contractB.ID, TriggeringTuitionInstallmentNumber: 1,
 		StartedAt: now.AddDate(0, 0, -16)}
 	create(&episode)
-	fee := seedObligation(contractB, billing.Obligation{Kind: "reinstatement", AmountCents: billing.ReinstatementFeeCents,
-		AmountRemainingCents: billing.ReinstatementFeeCents, SuspensionID: &episode.ID, StripeInvoiceID: ptr("inv_fee"),
+	fee := seedObligation(contractB, billing.Obligation{Kind: "reinstatement", AmountCents: 2500,
+		AmountRemainingCents: 2500, SuspensionID: &episode.ID, StripeInvoiceID: ptr("inv_fee"),
 		StripeInvoiceItemID: ptr("ii_fee"), ScheduledFinalizationAt: &now, LatestStripeStatus: ptr("open")})
 
 	billingPath := func(student any, rest string) string {
@@ -1350,10 +1350,10 @@ func TestManagementBillingRoutes(t *testing.T) {
 		row, _, _ := strings.Cut(rest, "</tr>")
 		return row
 	}
-	requireText("active row", rowOf(active.ID), true, `<span class="status-badge status-active">Active</span>`)
-	requireText("active row", rowOf(active.ID), false, "status-suspended")
-	requireText("suspended row", rowOf(suspended.ID), true, `<span class="status-badge status-suspended">Suspended</span>`)
-	requireText("suspended row", rowOf(suspended.ID), false, "status-active")
+	requireText("active row", rowOf(active.ID), true, `<span class="status-badge" data-tone="ok">Active</span>`)
+	requireText("active row", rowOf(active.ID), false, `data-tone="danger"`)
+	requireText("suspended row", rowOf(suspended.ID), true, `<span class="status-badge" data-tone="danger">Suspended</span>`)
+	requireText("suspended row", rowOf(suspended.ID), false, `data-tone="ok"`)
 }
 
 func TestRenameLinkAndBillingSafeCancelEndpoints(t *testing.T) {
@@ -1364,7 +1364,7 @@ func TestRenameLinkAndBillingSafeCancelEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1. Inline rename: valid HTMX, invalid 422, malformed 400, unknown 204.
+	// 1. Inline rename: valid HTMX, invalid 422, malformed 400, unknown or beyond-BIGINT 204.
 	res, body := a.send(t, staff, http.MethodPost, fmt.Sprintf("/management/links/%d/rename", created.ID), url.Values{"name": {"  October Cohort  "}}, htmxHeader)
 	requireAcknowledged(t, res, body)
 	if groups := a.list(t); groups[0].Link.Name != "October Cohort" {
@@ -1383,8 +1383,10 @@ func TestRenameLinkAndBillingSafeCancelEndpoints(t *testing.T) {
 			t.Fatalf("rename %s: status=%d, want %d: %s", tc.name, res.StatusCode, tc.status, body)
 		}
 	}
-	if res, _ = a.send(t, staff, http.MethodPost, "/management/links/"+unknownID+"/rename", url.Values{"name": {"Missing"}}, htmxHeader); res.StatusCode != http.StatusNoContent {
-		t.Fatalf("unknown rename status=%d, want 204", res.StatusCode)
+	for _, id := range []string{unknownID, "9223372036854775808"} {
+		if res, _ = a.send(t, staff, http.MethodPost, "/management/links/"+id+"/rename", url.Values{"name": {"Missing"}}, htmxHeader); res.StatusCode != http.StatusNoContent {
+			t.Fatalf("rename %s status=%d, want 204", id, res.StatusCode)
+		}
 	}
 
 	// 2. Billing-safe enrollment cancel:

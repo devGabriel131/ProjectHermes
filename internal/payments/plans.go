@@ -2,9 +2,10 @@
 package payments
 
 import (
-	"errors"
 	"fmt"
 	"time"
+
+	"projecthermes/internal/puertorico"
 )
 
 // Plan describes an available payment option. Amounts is read-only.
@@ -18,16 +19,11 @@ type Installment struct {
 	AmountCents int64
 }
 
-var ErrUnknownPlan = errors.New("unknown payment plan")
-
 var plans = []Plan{
 	{ID: "full", Name: "Pago Único", Amounts: []int64{60000}},
 	{ID: "three", Name: "Plan de 3 Pagos Mensuales", Amounts: []int64{20834, 20833, 20833}},
 	{ID: "six", Name: "Plan de 6 Pagos Mensuales", Amounts: []int64{10835, 10833, 10833, 10833, 10833, 10833}},
 }
-
-// PuertoRico uses UTC-4 without modern daylight saving time.
-var PuertoRico = time.FixedZone("America/Puerto_Rico", -4*60*60)
 
 // Plans returns the ordered registry. Callers must not modify the slice or Amounts.
 func Plans() []Plan {
@@ -52,14 +48,23 @@ func (p Plan) TotalCents() int64 {
 	return total
 }
 
-// Schedule returns local midnight dates anchored to the original Puerto Rico day.
+// InstallmentSpacing, when positive, dates installment i at the anchor plus i spacings instead of on monthly
+// midnights, so later installments can be tested in minutes. main sets it from INSTALLMENT_SPACING and refuses a
+// live Stripe account; nothing else writes it. Zero is the real monthly schedule.
+var InstallmentSpacing time.Duration
+
+// Schedule returns local midnight dates anchored to the original Puerto Rico day, or InstallmentSpacing apart.
 func (p Plan) Schedule(now time.Time) []Installment {
-	year, month, day := now.In(PuertoRico).Date()
+	year, month, day := now.In(puertorico.Zone).Date()
 	schedule := make([]Installment, len(p.Amounts))
 	for i, amount := range p.Amounts {
+		if InstallmentSpacing > 0 {
+			schedule[i] = Installment{Date: now.Add(time.Duration(i) * InstallmentSpacing).In(puertorico.Zone), AmountCents: amount}
+			continue
+		}
 		targetMonth := month + time.Month(i)
-		lastDay := time.Date(year, targetMonth+1, 0, 0, 0, 0, 0, PuertoRico).Day()
-		date := time.Date(year, targetMonth, min(day, lastDay), 0, 0, 0, 0, PuertoRico)
+		lastDay := time.Date(year, targetMonth+1, 0, 0, 0, 0, 0, puertorico.Zone).Day()
+		date := time.Date(year, targetMonth, min(day, lastDay), 0, 0, 0, 0, puertorico.Zone)
 		schedule[i] = Installment{Date: date, AmountCents: amount}
 	}
 	return schedule
@@ -70,15 +75,4 @@ func Money(cents int64) string {
 		return fmt.Sprintf("-$%d.%02d", -(cents / 100), -(cents % 100))
 	}
 	return fmt.Sprintf("$%d.%02d", cents/100, cents%100)
-}
-
-var spanishMonths = [...]string{
-	"enero", "febrero", "marzo", "abril", "mayo", "junio",
-	"julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
-}
-
-// SpanishDate formats the calendar date in its existing location.
-func SpanishDate(date time.Time) string {
-	year, month, day := date.Date()
-	return fmt.Sprintf("%d de %s de %d", day, spanishMonths[month-1], year)
 }

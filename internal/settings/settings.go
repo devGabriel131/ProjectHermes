@@ -22,15 +22,12 @@ const (
 // ErrLinkLifetimeRange rejects lifetimes outside the settings slider's range.
 var ErrLinkLifetimeRange = fmt.Errorf("settings: link lifetime must be %d-%d days", MinLinkLifetimeDays, MaxLinkLifetimeDays)
 
-// ErrProgramStartDate rejects missing or invalid calendar dates.
-var ErrProgramStartDate = errors.New("settings: program start date must be a valid YYYY-MM-DD date")
-
-// ErrBootcampDate rejects missing or invalid calendar dates.
-var ErrBootcampDate = errors.New("settings: bootcamp date must be a valid YYYY-MM-DD date")
+// ErrDate rejects missing or invalid calendar dates.
+var ErrDate = errors.New("settings: date must be a valid YYYY-MM-DD date")
 
 var errNoStaff = errors.New("settings: staff username required")
 
-// Settings is the only row, ID 1. The single-row and lifetime-range checks repeat the constants, which struct tags can't reference, so neither can be violated even by bypassing the Store. ProgramStartDate and BootcampDate are validated only by their Parse functions.
+// Settings is the only row, ID 1. The single-row and lifetime-range checks repeat the constants, which struct tags can't reference, so neither can be violated even by bypassing the Store. ProgramStartDate and BootcampDate are validated only by ParseDate.
 type Settings struct {
 	ID               int    `gorm:"primaryKey;autoIncrement:false;check:settings_single_row,id = 1"`
 	LinkLifetimeDays int    `gorm:"not null;check:link_lifetime_days_range,link_lifetime_days BETWEEN 2 AND 14"`
@@ -48,19 +45,14 @@ func (s Settings) LinkLifetime() time.Duration {
 	return time.Duration(s.LinkLifetimeDays) * 24 * time.Hour
 }
 
-// ParseProgramStartDate validates a nonzero calendar year and returns YYYY-MM-DD.
-func ParseProgramStartDate(raw string) (string, error) { return parseDate(raw, ErrProgramStartDate) }
-
-// ParseBootcampDate validates a nonzero calendar year and returns YYYY-MM-DD.
-func ParseBootcampDate(raw string) (string, error) { return parseDate(raw, ErrBootcampDate) }
-
-func parseDate(raw string, invalid error) (string, error) {
+// ParseDate reads a trimmed, canonical YYYY-MM-DD date with a nonzero year; its DateOnly format is the stored value.
+func ParseDate(raw string) (time.Time, error) {
 	raw = strings.TrimSpace(raw)
 	date, err := time.Parse(time.DateOnly, raw)
 	if err != nil || date.Year() == 0 || date.Format(time.DateOnly) != raw {
-		return "", invalid
+		return time.Time{}, ErrDate
 	}
-	return raw, nil
+	return date, nil
 }
 
 type Store struct {
@@ -96,20 +88,20 @@ func (s *Store) SetLinkLifetimeDays(ctx context.Context, days int, staff string)
 
 // SetProgramStartDate saves the date shown in new agreements on behalf of staff.
 func (s *Store) SetProgramStartDate(ctx context.Context, raw, staff string) error {
-	date, err := ParseProgramStartDate(raw)
+	date, err := ParseDate(raw)
 	if err != nil {
 		return err
 	}
-	return s.save(ctx, Settings{ProgramStartDate: date, UpdatedBy: staff}, "program_start_date")
+	return s.save(ctx, Settings{ProgramStartDate: date.Format(time.DateOnly), UpdatedBy: staff}, "program_start_date")
 }
 
 // SetBootcampDate saves the next Bootcamp Militarizado's date on behalf of staff.
 func (s *Store) SetBootcampDate(ctx context.Context, raw, staff string) error {
-	date, err := ParseBootcampDate(raw)
+	date, err := ParseDate(raw)
 	if err != nil {
 		return err
 	}
-	return s.save(ctx, Settings{BootcampDate: date, UpdatedBy: staff}, "bootcamp_date")
+	return s.save(ctx, Settings{BootcampDate: date.Format(time.DateOnly), UpdatedBy: staff}, "bootcamp_date")
 }
 
 // save upserts row as the settings row, writing only column (plus the audit

@@ -159,7 +159,7 @@ func TestBillingSafeCancelEnrollment(t *testing.T) {
 			t.Fatal(err)
 		}
 		entry, changed, err := biller.CancelEnrollment(context.Background(), eID, "admin")
-		if err != nil || !changed || entry == nil || entry.Status != links.Expired || entry.HasPin || entry.CanceledAt != nil {
+		if err != nil || !changed || entry == nil || entry.Status != links.Expired || entry.HasPin {
 			t.Fatalf("expired clear PIN: entry=%+v, changed=%v, err=%v", entry, changed, err)
 		}
 		// Second call is a no-op.

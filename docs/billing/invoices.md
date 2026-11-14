@@ -126,7 +126,7 @@ stateDiagram-v2
     Paid --> PaidAfterCancel : episode corrected after payment
 ```
 
-1. `requestFee` inserts one row per episode: kind `reinstatement`, 2500 cents (`ReinstatementFeeCents`), the catalog Price `asvab_reinstatement_usd`, `suspension_id` = the open episode, `collect`, no `due_at`, remaining 2500. A repeated request finds it by `suspension_id`.
+1. `requestFee` inserts one row per episode: kind `reinstatement`, 2500 cents (`reinstatementFeeCents`), the catalog Price `asvab_reinstatement_usd`, `suspension_id` = the open episode, `collect`, no `due_at`, remaining 2500. A repeated request finds it by `suspension_id`.
 2. It runs the same `scheduleOne` stages with differences: `collection_method` `send_invoice` with `days_until_due` 1 (the student pays on Stripe's hosted page by the next day, never from a saved card), item description "Reinstalación", and the invoice total must equal 2500 exactly.
 3. `sendFee` finalizes with `auto_advance` (key `reinstatement:<ref>:finalize`), then calls `SendInvoice` (key `...:send`), and stores `scheduled_finalization_at = now` and status `open`. Past the keys' retention a retried send could email again; the fee is never duplicated.
 4. `invoice.paid` reaches `syncInvoice`; reactivation conditions are in [Suspension](suspension.md). Staff open the hosted page through `InvoiceURL`, fetched on demand and never stored (`ErrInvoiceNotReady` while there is none); the button needs `invoiceReady`.
@@ -159,10 +159,10 @@ Staff and customer views derive a per-installment status from the stored columns
 
 ## Source
 
-- `internal/billing/worker.go`: `scheduleInvoices`, `scheduleOne`, `createInvoice`, `createItem`, `invoicesOf`, `adopt`, `arm`, `sendFee`, `reviewObligation`, `ensureDefaultPaymentMethod`, `invoiceMatches`, `invoiceStateOf`, `reviewFor`, `syncInvoice`, `holdInvoice`, `store`, `fund`
-- `internal/billing/suspension.go`: `requestFee`, `correctEpisode`, `cancelFees`, `cancelFee`
+- `internal/billing/invoices.go`: `scheduleInvoices`, `scheduleOne`, `createInvoice`, `createItem`, `invoicesOf`, `adopt`, `arm`, `sendFee`, `reviewObligation`, `ensureDefaultPaymentMethod`, `invoiceMatches`, `invoiceStateOf`, `reviewFor`, `syncInvoice`, `holdInvoice`, `store`, `cancelFees`, `cancelFee`
+- `internal/billing/checkout.go`: `fund`, `createObligations`
+- `internal/billing/suspension.go`: `requestFee`, `correctEpisode`
 - `internal/billing/summary.go`: `summarize`, `invoiceReady`
 - `internal/billing/billing.go`: `InvoiceURL`, `ErrInvoiceNotReady`
-- `internal/billing/stripe.go`: `ReinstatementFeeCents`
+- `internal/billing/stripe.go`: `reinstatementFeeCents`
 - `internal/billing/models.go`: `Obligation`
-- `internal/billing/checkout.go`: `createObligations`

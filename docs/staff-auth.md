@@ -8,7 +8,7 @@ Staff accounts, sign-in, sessions and the `auth.Require` boundary in front of ev
 |---|---|
 | `auth.User` | Staff account row: username, Argon2id hash, `AuthVersion`. Managed only by the CLI. |
 | `auth.Session` | Row shape the scs PostgreSQL store expects (`sessions`). |
-| `auth.Manager` | Session configuration, `login`, `logout`, `Require`, expired-session cleanup ticker. |
+| `auth.Manager` | Session configuration, `login`, `logout`, `Require`, and `Run`, the expired-session cleanup ticker. |
 | `auth.RunCLI` | The `projecthermes user ...` commands. |
 | `auth.Staff` | Returns the username `Require` verified, or `""` outside `Require`. |
 
@@ -88,7 +88,7 @@ flowchart TD
 | Lifetime | Fixed 14 days from login. `IdleTimeout` is unset, so visits never extend or rewrite the session and reissue no cookie. |
 | Cookie | `management_session`, path `/management/`, `HttpOnly`, `SameSite=Lax`, persistent (`Expires` and `Max-Age`). `Secure` unless `SESSION_COOKIE_SECURE` parses as false. |
 | Contents | `username` and `auth_version` (gob in `sessions.data`). |
-| Cleanup | A 5-minute ticker in `Manager` runs `DELETE ... WHERE expiry < CURRENT_TIMESTAMP` through GORM with a 5 s timeout; failures log `session_cleanup_failed` ([Observability](operations/observability.md)). `Close` stops it without closing the pool. |
+| Cleanup | `Manager.Run`, which `main` starts beside the billing worker, ticks every 5 minutes and runs `DELETE ... WHERE expiry < CURRENT_TIMESTAMP` through GORM with a 5 s timeout; failures log `session_cleanup_failed` ([Observability](operations/observability.md)). It returns when its context ends and never closes the pool ([Startup and shutdown](operations/startup-shutdown.md)). |
 
 Session SQL goes through scs's store, which takes no context: it has no 5 s timeout and ignores request cancellation ([Go-live](go-live.md)).
 
@@ -225,7 +225,7 @@ Only this browser's session row is deleted; other devices stay signed in. A sign
 | Action | Recorded in | Source |
 |---|---|---|
 | Link created | `links.created_by` | `links.Store.CreateLink` |
-| Link or enrollment canceled | `links.canceled_by` or `enrollments.canceled_by`; the first cancellation's audit is kept | `Store.CancelLink`, `Store.CancelEnrollment` |
+| Link or enrollment canceled | `links.canceled_by` or `enrollments.canceled_by`; the first cancellation's audit is kept | `Store.CancelLink`, `CancelEnrollmentTx` |
 | Link lifetime, program start date or bootcamp date saved | `settings.updated_by` and `updated_at`, row-level: the last writer of any setting | `SetLinkLifetimeDays`, `SetProgramStartDate`, `SetBootcampDate` |
 | Reinstatement requested | `billing_suspensions.requested_by`; a repeated request keeps the first | `billing.Service.RequestReinstatement` |
 
@@ -233,7 +233,7 @@ Only this browser's session row is deleted; other devices stay signed in. A sign
 
 ## Deliberate choices
 
-- Session cleanup is the app's own ticker, not the store's: it logs structured `session_cleanup_failed` events with no private data, stays silent on shutdown and stops without closing the shared pool (`TestSessionCleanupDeletesOnlyExpired`).
+- Session cleanup is the app's own ticker, not the store's: it logs structured `session_cleanup_failed` events with no private data and stays silent once its context ends (`TestSessionCleanupDeletesOnlyExpired`).
 - `dummyHash` and the process-wide limiter look redundant but pair: equal cost for unknown users, and a hard cap on concurrent 64 MiB hashes.
 - `AuthVersion` is random rather than a counter so a re-created username cannot match old session data (`TestCredentialChangesEndSessions`).
 - The 401 plus `HX-Redirect` branch is also how the live-updates client recovers after sign-out.
@@ -242,14 +242,15 @@ Only this browser's session row is deleted; other devices stay signed in. A sign
 ## Source
 
 - `internal/auth/auth.go`: `User`, `Session`, `normalizeUsername`, `findUser`, `createUser`, `setPassword`, `revokeSessions`, `removeUser`, `existingUser`
-- `internal/auth/http.go`: `Manager`, `New`, `Close`, `deleteExpiredSessions`, `RegisterRoutes`, `Staff`, `Require`, `authenticated`, `logout`, `login`, `verify`, `render`, `cookieName`, `loginInterval`, `dummyHash`
+- `internal/auth/http.go`: `Manager`, `New`, `Run`, `deleteExpiredSessions`, `RegisterRoutes`, `Staff`, `Require`, `authenticated`, `logout`, `login`, `verify`, `render`, `cookieName`, `loginInterval`, `dummyHash`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`, `listUsers`, `readNewPassword`, `promptPassword`
 - `internal/auth/http_test.go`: `TestSignIn`, `TestCredentialChangesEndSessions`, `TestSignOutEndsOnlyThisBrowser`, `TestSessionCleanupDeletesOnlyExpired`
 - `main.go`: `main`, `run`, `newServer`, `SESSION_COOKIE_SECURE`
 - `main_wiring_integration_test.go`: `TestPublicCustomerIgnoresStaffSessions`, `TestCrossOriginWritesAreRejected`
-- `internal/links/links.go`: `Store.CreateLink`, `Store.CancelLink`, `Store.CancelEnrollment`, `errNoStaff`, `CreatedBy`, `CanceledBy`
+- `internal/links/links.go`: `Store.CreateLink`, `Store.CancelLink`, `CancelEnrollmentTx`, `errNoStaff`, `CreatedBy`, `CanceledBy`
 - `internal/settings/settings.go`: `SetLinkLifetimeDays`, `SetProgramStartDate`, `SetBootcampDate`, `UpdatedBy`
-- `internal/billing/suspension.go`: `RequestReinstatement`, `errStaffRequired`
+- `internal/billing/suspension.go`: `RequestReinstatement`
+- `internal/billing/billing.go`: `errStaffRequired`
 - `internal/billing/models.go`: `RequestedBy`
 - `internal/students/students.go`: `UpdateField`
 - `go.mod`: `github.com/alexedwards/scs/v2`, `github.com/alexedwards/scs/postgresstore`, `github.com/alexedwards/argon2id`, `golang.org/x/time`

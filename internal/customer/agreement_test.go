@@ -3,10 +3,8 @@
 package customer
 
 import (
-	"context"
 	"crypto/rand"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"regexp"
@@ -18,7 +16,6 @@ import (
 	"projecthermes/internal/links"
 	"projecthermes/internal/payments"
 	"projecthermes/internal/settings"
-	"projecthermes/internal/testdb"
 )
 
 const agreementDate = "2027-02-28"
@@ -72,47 +69,13 @@ func TestAgreementRequiresExplicitConsent(t *testing.T) {
 	}
 }
 
-func TestAgreementAcceptanceCancellationKeepsRetryForm(t *testing.T) {
+func TestAgreementAcceptanceFailureKeepsRetryForm(t *testing.T) {
 	fixture := newAgreementFixture(t)
 	before, studentsBefore := stored(t, fixture.db), studentRecords(t, fixture.db)
-	ctx, cancel := context.WithTimeout(t.Context(), httpTimeout)
-	defer cancel()
-	blocker := fixture.db.WithContext(ctx).Begin()
-	if blocker.Error != nil {
-		t.Fatal(blocker.Error)
+	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE enrollments ADD CONSTRAINT reject_acceptance CHECK (terms_accepted_at IS NULL)").Error; err != nil {
+		t.Fatal(err)
 	}
-	acceptCtx, cancelAccept := context.WithCancel(ctx)
-	var results chan *httptest.ResponseRecorder
-	defer func() {
-		blocker.Rollback()
-		cancelAccept()
-		if results != nil {
-			for range results {
-			}
-		}
-	}()
-	var settingsID int
-	if err := blocker.Raw("SELECT id FROM settings WHERE id = 1 FOR UPDATE").Scan(&settingsID).Error; err != nil || settingsID != 1 {
-		t.Fatalf("lock agreement settings: id=%d, err=%v", settingsID, err)
-	}
-	r := httptest.NewRequestWithContext(acceptCtx, http.MethodPost, fixture.path+"/agreement", strings.NewReader(agreementForm(agreementDate).Encode()))
-	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r.AddCookie(fixture.sessionCookie())
-	results = make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		defer close(results)
-		w := httptest.NewRecorder()
-		fixture.mux.ServeHTTP(w, r)
-		results <- w
-	}()
-	testdb.AwaitBlocked(t, ctx, fixture.db, blocker, results)
-	cancelAccept()
-	var w *httptest.ResponseRecorder
-	select {
-	case w = <-results:
-	case <-ctx.Done():
-		t.Fatalf("canceled acceptance did not finish: %v", ctx.Err())
-	}
+	w := customerRequest(t, fixture.mux, http.MethodPost, fixture.path+"/agreement", agreementForm(agreementDate).Encode(), false, fixture.sessionCookie())
 	body := w.Body.String()
 	requireHonestPageFailure(t, w.Code, w.Header().Get("Location"), body)
 	if w.Header().Get("HX-Redirect") != "" ||
@@ -135,12 +98,12 @@ func TestAgreementAcceptanceCancellationKeepsRetryForm(t *testing.T) {
 		t.Fatalf("failed acceptance disabled retry: %s", body)
 	}
 	if after := stored(t, fixture.db); !reflect.DeepEqual(after, before) {
-		t.Fatalf("canceled acceptance changed links: before %+v, after %+v", before, after)
+		t.Fatalf("failed acceptance changed links: before %+v, after %+v", before, after)
 	}
 	if after := studentRecords(t, fixture.db); !reflect.DeepEqual(after, studentsBefore) {
-		t.Fatal("canceled acceptance changed students")
+		t.Fatal("failed acceptance changed students")
 	}
-	if err := blocker.Rollback().Error; err != nil {
+	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE enrollments DROP CONSTRAINT reject_acceptance").Error; err != nil {
 		t.Fatal(err)
 	}
 	w = customerRequest(t, fixture.mux, http.MethodPost, fixture.path+"/agreement", agreementForm(date[1]).Encode(), false, fixture.sessionCookie())
@@ -228,19 +191,17 @@ func TestPaymentChoiceValidatesPersistsAndRemainsIsolated(t *testing.T) {
 	if result, err := fixture.store.Submit(t.Context(), other.Token, otherCookie, contactDetails("Other private student"), ""); err != nil || result != links.Saved {
 		t.Fatalf("submit other: %v, %v", result, err)
 	}
-	if accepted, err := fixture.store.AcceptTerms(t.Context(), other.Token, otherCookie, agreementDate); err != nil || accepted == nil {
+	if accepted, err := fixture.store.AcceptTerms(t.Context(), other.Token, otherCookie, agreementDate); err != nil || !accepted {
 		t.Fatalf("accept other: %v, %v", accepted, err)
 	}
-	otherSess, err := fixture.store.LookupSession(t.Context(), other.Token, otherCookie)
-	if err != nil || otherSess == nil || otherSess.Enrollment == nil {
+	otherBefore, _, err := fixture.store.LookupSession(t.Context(), other.Token, otherCookie)
+	if err != nil || otherBefore == nil {
 		t.Fatal(err)
 	}
-	otherBefore := otherSess.Enrollment
-	origSess, err := fixture.store.LookupSession(t.Context(), fixture.entry.Token, fixture.cookie)
-	if err != nil || origSess == nil || origSess.Enrollment == nil {
+	original, _, err := fixture.store.LookupSession(t.Context(), fixture.entry.Token, fixture.cookie)
+	if err != nil || original == nil {
 		t.Fatal(err)
 	}
-	original := origSess.Enrollment
 	before, studentsBefore := stored(t, fixture.db), studentRecords(t, fixture.db)
 	for _, tc := range []struct {
 		name, suffix, body string
@@ -270,11 +231,11 @@ func TestPaymentChoiceValidatesPersistsAndRemainsIsolated(t *testing.T) {
 		if w.Code != http.StatusSeeOther || !strings.HasPrefix(w.Header().Get("Location"), "https://checkout.stripe.com") {
 			t.Fatalf("expected redirect to Stripe Checkout, got code=%d, loc=%q, body=%s", w.Code, w.Header().Get("Location"), w.Body.String())
 		}
-		selectedSess, err := fixture.store.LookupSession(t.Context(), fixture.entry.Token, fixture.cookie)
-		if err != nil || selectedSess == nil || selectedSess.Enrollment == nil {
-			t.Fatalf("lookup after choice: %+v, %v", selectedSess, err)
+		selected, _, err := fixture.store.LookupSession(t.Context(), fixture.entry.Token, fixture.cookie)
+		if err != nil || selected == nil {
+			t.Fatalf("lookup after choice: %+v, %v", selected, err)
 		}
-		if !reflect.DeepEqual(selectedSess.Enrollment, original) {
+		if !reflect.DeepEqual(selected, original) {
 			t.Fatal("choice changed contact data or agreement snapshot")
 		}
 		w = customerRequest(t, fixture.mux, http.MethodGet, fixture.path+"/payments", "", false, fixture.sessionCookie())
@@ -303,7 +264,7 @@ func TestPaymentChoiceValidatesPersistsAndRemainsIsolated(t *testing.T) {
 		}
 		requireNoPrivate(t, body, privateFormValues(contactForm("Agreement private student"))...)
 	}
-	if otherAfter, err := fixture.store.LookupSession(t.Context(), other.Token, otherCookie); err != nil || otherAfter == nil || !reflect.DeepEqual(otherAfter.Enrollment, otherBefore) {
+	if otherAfter, _, err := fixture.store.LookupSession(t.Context(), other.Token, otherCookie); err != nil || !reflect.DeepEqual(otherAfter, otherBefore) {
 		t.Fatal("choice changed another token")
 	}
 	if after := studentRecords(t, fixture.db); !reflect.DeepEqual(after, studentsBefore) {
@@ -418,8 +379,8 @@ func TestAgreementPaymentStageAndUsabilityCannotBeBypassed(t *testing.T) {
 	if err := settings.New(db).SetProgramStartDate(t.Context(), agreementDate, "staff"); err != nil {
 		t.Fatal(err)
 	}
-	if accepted, err := store.AcceptTerms(t.Context(), entry.Token, fixture.cookie, agreementDate); err != nil || accepted == nil {
-		t.Fatalf("accept before expiry: %+v, %v", accepted, err)
+	if accepted, err := store.AcceptTerms(t.Context(), entry.Token, fixture.cookie, agreementDate); err != nil || !accepted {
+		t.Fatalf("accept before expiry: %v, %v", accepted, err)
 	}
 	if err := db.WithContext(t.Context()).Model(&links.Enrollment{}).Where("submitted_at IS NOT NULL").Update("expires_at", time.Now().Add(-time.Minute)).Error; err != nil {
 		t.Fatal(err)
@@ -463,24 +424,12 @@ func TestAgreementAndPaymentHeadRemainReadOnly(t *testing.T) {
 
 func TestAgreementAndPaymentFailuresNeverClaimSuccess(t *testing.T) {
 	fixture := newAgreementFixture(t)
-	before := stored(t, fixture.db)
-	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE enrollments ADD CONSTRAINT reject_acceptance CHECK (terms_accepted_at IS NULL)").Error; err != nil {
-		t.Fatal(err)
-	}
-	w := customerRequest(t, fixture.mux, http.MethodPost, fixture.path+"/agreement", agreementForm(agreementDate).Encode(), false, fixture.sessionCookie())
-	requireHonestPageFailure(t, w.Code, w.Header().Get("Location"), w.Body.String())
-	if after := stored(t, fixture.db); !reflect.DeepEqual(after, before) {
-		t.Fatal("failed acceptance changed link")
-	}
-	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE enrollments DROP CONSTRAINT reject_acceptance").Error; err != nil {
-		t.Fatal(err)
-	}
 	fixture.accept(t)
-	before = stored(t, fixture.db)
+	before := stored(t, fixture.db)
 	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE billing_checkout_attempts ADD CONSTRAINT reject_attempt CHECK (false)").Error; err != nil {
 		t.Fatal(err)
 	}
-	w = customerRequest(t, fixture.mux, http.MethodPost, fixture.path+"/payments", "payment_plan=full", false, fixture.sessionCookie())
+	w := customerRequest(t, fixture.mux, http.MethodPost, fixture.path+"/payments", "payment_plan=full", false, fixture.sessionCookie())
 	requireHonestPageFailure(t, w.Code, w.Header().Get("Location"), w.Body.String())
 	if strings.Contains(w.Body.String(), `class="payment-saved"`) {
 		t.Fatal("failed payment choice claimed saved state")

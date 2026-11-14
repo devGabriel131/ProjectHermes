@@ -104,11 +104,11 @@
       </details>
     </div>
     <div class="management-link-meta">
-      <span>Created <time datetime="{{.Link.CreatedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.Link.CreatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time>{{with .Link.CreatedBy}} by {{.}}{{end}}</span>
+      <span>Created {{template "time" .Link.CreatedAt}}{{with .Link.CreatedBy}} by {{.}}{{end}}</span>
       {{- if eq .Link.Status "Canceled"}}{{with .Link.CanceledBy}}<span>Link canceled by {{.}}</span>{{end}}
       {{- else}}
       <span>{{if eq .Link.Status "Expired"}}Expired{{else}}Expires{{end}}
-      <time datetime="{{.Link.ExpiresAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.Link.ExpiresAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></span>{{end}}
+      {{template "time" .Link.ExpiresAt}}</span>{{end}}
       <span>{{.Link.EnrollmentCount}} {{plural .Link.EnrollmentCount "enrollment" "enrollments"}}</span>
     </div>
     <a id="link-url-{{.Link.ID}}" class="management-link-url" href="/customer/{{.Link.Token}}" target="_blank" rel="noopener noreferrer">/customer/{{.Link.Token}}</a>
@@ -122,13 +122,14 @@
             <strong{{if not .Name}} class="management-link-unnamed"{{end}}>{{or .Name "No name yet"}}</strong>
             {{with .Phone}}<span class="management-link-phone">{{.}}</span>{{end}}
             <span class="management-link-status" data-status="{{.Status}}">{{.Status}}</span>
+            {{if and (eq .Status "Awaiting payment") (index $.Declined .ID)}}<span class="status-badge" data-tone="danger">Payment declined</span>{{end}}
           </div>
           <div class="management-link-meta">
-            <span>Started <time datetime="{{.CreatedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.CreatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></span>
-            {{- with .SubmittedAt}}<span>Submitted <time datetime="{{.UTC.Format "2006-01-02T15:04:05Z"}}">{{.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></span>{{end}}
-            {{- if .TermsAcceptedAt}}<span>Agreement accepted <time datetime="{{.TermsAcceptedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.TermsAcceptedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time>{{with .ProgramStartDate}} (start {{.}}){{end}}</span>{{end}}
-            {{- with .PaidAt}}<span>Paid <time datetime="{{.UTC.Format "2006-01-02T15:04:05Z"}}">{{.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></span>{{end}}
-            {{- if and .SubmittedAt (or (eq .Status "Awaiting payment") (eq .Status "Expired"))}}<span>{{if eq .Status "Expired"}}Expired{{else}}Expires{{end}} <time datetime="{{.ExpiresAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.ExpiresAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></span>{{end}}
+            <span>Started {{template "time" .CreatedAt}}</span>
+            {{- with .SubmittedAt}}<span>Submitted {{template "time" .}}</span>{{end}}
+            {{- if .TermsAcceptedAt}}<span>Agreement accepted {{template "time" .TermsAcceptedAt}}{{with .ProgramStartDate}} (start {{.}}){{end}}</span>{{end}}
+            {{- with .PaidAt}}<span>Paid {{template "time" .}}</span>{{end}}
+            {{- if and .SubmittedAt (or (eq .Status "Awaiting payment") (eq .Status "Expired"))}}<span>{{if eq .Status "Expired"}}Expired{{else}}Expires{{end}} {{template "time" .ExpiresAt}}</span>{{end}}
             {{- if eq .Status "Canceled"}}{{with .CanceledBy}}<span>Canceled by {{.}}</span>{{end}}{{end}}
           </div>
           {{- if .Cancelable}}
@@ -177,6 +178,8 @@
   </form>
 </div>
 {{end}}
+
+{{define "time"}}<time datetime="{{.UTC.Format "2006-01-02T15:04:05Z"}}">{{.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time>{{end}}
 
 {{define "navigation"}}
 <nav class="management-menu" aria-label="Management">

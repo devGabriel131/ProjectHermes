@@ -11,9 +11,9 @@ The link token in the path and the path-scoped `enrollment_session` cookie ident
 | Method | Path | Behavior |
 |---|---|---|
 | GET | `/customer/{token}` | Read-only welcome page (`welcome`). Creates no rows. Resumes `Awaiting payment` to `/agreement`, shows "Tu matrícula ya fue completada." (+ "Comenzar nueva matrícula" if the link is still usable) for `Finished`, "Continuar" to `/forms` for `In progress`, or "Comenzar" (`POST /start`) for new visitors. |
-| POST | `/customer/{token}/start` | Calls `StartEnrollment`, sets the `enrollment_session` cookie (`HttpOnly`, `SameSite=Lax`, `Path: "/customer/{token}"`) if a new enrollment started, and redirects 303 (or `HX-Redirect`) to `/forms` (or `/agreement` if already submitted). |
-| GET | `/customer/{token}/forms` | Resolves session (`resolveSession`). Missing/expired session on a still-usable link redirects 303 to `/customer/{token}`. Otherwise renders the contact form with drafts prefilled and autosave wired. |
-| POST | `/customer/{token}` | Final submit: six contact fields, `email_confirm` and PIN. Success: 303 to `/agreement`. |
+| POST | `/customer/{token}/start` | Calls `StartEnrollment` (one statement for a new enrollment), sets the `enrollment_session` cookie (`HttpOnly`, `SameSite=Lax`, `Path: "/customer/{token}"`) if a new enrollment started, and redirects 303 (or `HX-Redirect`) to `/forms` (or `/agreement` if already submitted). |
+| GET | `/customer/{token}/forms` | Resolves session (`resolveSession`, one `LookupSession` read). Without a usable session, GET and HEAD redirect 303 to `/customer/{token}` while the link takes new enrollments (usable and under the cap); otherwise 404. Renders the contact form with drafts prefilled and autosave wired. |
+| POST | `/customer/{token}` | Final submit: six contact fields, `email_confirm` and PIN. Success: 303 to `/agreement`. A spent PIN budget is 429. |
 | POST | `/customer/{token}/draft/{field}` | Autosave one registry field. Answers only a status fragment ("Guardado.") and never redraws the form. |
 | POST | `/customer/{token}/pin` | Advisory PIN check, saves nothing ("PIN disponible."). A POST keeps the PIN out of URLs and access logs. Each answer, and each valid final submit, spends one of `links.MaxPinChecks` (30) per enrollment; past that the answer is 429. |
 | GET, POST | `/customer/{token}/edit` | Reopens the contact form of a submitted enrollment before payment. |
@@ -45,14 +45,15 @@ sequenceDiagram
     H-->>Browser: welcome page (read-only)
     Browser->>H: POST /customer/{token}/start
     H->>L: StartEnrollment
-    L->>DB: insert enrollment under MaxLinkEnrollments
+    L->>DB: UPDATE links enrollment_count, INSERT enrollment (one statement)
     H-->>Browser: Set-Cookie enrollment_session + 303 to /forms
     Browser->>H: POST /customer/{token}/draft/{field} on change
     H->>L: SaveDraft
     L->>DB: guarded UPDATE of one column
     H-->>Browser: Guardado. or 422 or 409
     Browser->>H: POST /customer/{token}/pin
-    H->>DB: pinHeld on students and enrollments
+    H->>L: SpendPinCheck
+    H->>DB: PinTaken (heldPins on students and enrollments)
     Browser->>H: POST /customer/{token}
     H->>L: Submit
     L->>DB: guarded UPDATE enrollments
@@ -93,32 +94,33 @@ flowchart TD
     P -->|"yes"| W["write result"]
     W -->|"Saved"| OK["200, or 303 for submit"]
     W -->|"PinTaken"| E3["422 on pin"]
+    W -->|"PinLimited"| E4["429 on pin"]
     W -->|"error"| E5["500 with a retry message"]
 ```
 
 Implementation notes that keep this order observable:
 
 - An unknown `{field}` in `/draft/{field}` is refused with 404 before the body is read or the database is touched.
-- With valid input, `Submit` and `SaveDraft` run the guarded UPDATE first. On zero rows, `saveResult` re-reads the enrollment to separate unusable (404) from submitted (advance or 409). With rejected input, the handler looks the session up itself (`resolveSession`) and applies the same order.
-- `/pin` looks the session up first, then reads the body, then `ParsePin` (422), then `pinHeld` (422 "Este PIN ya está en uso. Elige otro.").
+- With valid input, `Submit` and `SaveDraft` run the guarded UPDATE first, so a successful write is one statement. On zero rows they re-read with one `formState` query to separate unusable (404) from submitted (advance or 409); Submit first spends its PIN check alone, which tells a held PIN (422) from a spent budget (429). A rejected draft asks `Store.FormState`, the same rule. A rejected submit looks the session up itself (`resolveSession`) and applies the same order.
+- `/pin` reads the body, then `ParsePin`. A valid PIN spends its check with no prior lookup (`SpendPinCheck`), then `PinTaken` answers (422 "Este PIN ya está en uso. Elige otro."). An unreadable body, an invalid PIN or a refused check asks `Store.FormState`, so 404 and 409 still precede 400, 413, 422 and 429.
 - A 422 on submit redraws the attempted values; any other rejection shows what is stored.
-- Draft outcomes: `Saved` 200; submitted 409; unusable 404. A submitted enrollment that gets a draft or PIN POST is a stale page, so HTMX reloads it.
+- A submitted enrollment that gets a draft or PIN POST is a stale page, so HTMX reloads it.
 
 ## Contact edit
 
-`/edit` rewrites the Link's contact columns through `billing.UpdateContact`, because no Student exists before payment ([Students](students.md)). After funding, edits are refused and the Student becomes canonical.
+`/edit` rewrites the Enrollment's contact columns through `billing.UpdateContact`, because no Student exists before payment ([Students](students.md)). After funding, edits are refused and the Student becomes canonical.
 
 | Step | Behavior |
 |---|---|
 | Link unusable | 404 |
 | Link not submitted | Redirect to `/forms` |
 | `ContactEditable` false | Redirect to `/payments`, for `GET` and `POST` |
-| GET | Form without autosave and without PIN |
+| GET | Form without autosave and without PIN; the page loads no htmx |
 | POST unreadable or invalid | 413, 400 or 422, the same parsers as submit |
 | POST unchanged | Redirect to `/agreement`; no write, no refresh, no provider sync |
 | POST changed | `UpdateContact`, then redirect to `/agreement`. Submission time, expiry and accepted terms never change. |
 
-`ContactEditable` is a lock-free pre-check, also used to show or hide "Editar información del estudiante" on the agreement. The authority is `UpdateContact`, which locks Link, then Contract, then the in-flight attempt, and returns `ErrContactLocked` (redirect to `/payments`) when the contract is funded or an attempt is `processing`, `uncertain` or `expiring`. Attempts in `creating` or `open` still allow edits. An unusable link returns `ErrUnavailable` (404). A change marks the contract due for sync, which has effect only once a Stripe customer exists, and publishes a live event.
+`ContactEditable` is a lock-free pre-check, also used to show or hide "Editar información del estudiante" on the agreement. Before the terms are accepted it answers editable without a query: checkout requires accepted terms, so no contract can exist yet. The authority is `UpdateContact`, one transaction: it locks the usable, submitted Enrollment row, runs the same contact-lock query, then marks the contract due and writes. It returns `ErrContactLocked` (redirect to `/payments`) when the contract is funded or an attempt is `processing`, `uncertain` or `expiring`. Attempts in `creating` or `open` still allow edits. An unusable enrollment returns `ErrUnavailable` (404). A change marks the contract due for sync, which has effect only once a Stripe customer exists, and publishes a live event.
 
 ## Payments page
 
@@ -140,18 +142,23 @@ Implementation notes that keep this order observable:
 
 Before funding the customer may switch plans; [Checkout](../billing/checkout.md) owns the rules.
 
+An unfunded contract whose newest attempt ended its latest try in a decline shows a "Tu último intento de pago fue rechazado" callout above the plans (`Summary.Decline`). Pressing the same plan again returns the stored open Session, where Checkout accepts another card; another plan expires it first ([Checkout](../billing/checkout.md)).
+
 ## Payment return
 
-`GET /payments/return` needs no token. It reads one persisted attempt through `ReturnStatus` and exposes only status and amount, never identity, contact or payment history. Visiting it never changes financial state.
+`GET /payments/return` needs no token. It reads one persisted attempt through `ReturnStatus` (Checkout's `success_url`) or `CancelStatus` (its back link) and exposes only status, amount and a decline reason group, never identity, contact or payment history. Visiting it never changes financial state.
 
 | Input | Result |
 |---|---|
-| `?session_id=` known | `paid`, `pending` or `not_completed` ([Checkout](../billing/checkout.md) maps attempt states) |
+| `?session_id=` known | `paid`, `pending`, `declined` or `not_completed` ([Checkout](../billing/checkout.md) maps attempt states) |
 | `?session_id=` unknown | 404; HTMX reloads the page |
-| `?cancelled=1` | `not_completed` without a lookup |
+| `?attempt=` known (the back link) | `paid`, `pending`, `declined` or `not_completed`; never polls |
+| `?attempt=` unknown | 404 |
 | neither | 404 |
 
-While `pending`, the status block polls itself with `hx-trigger="every 1.5s"`, carrying `polls`. The counter is clamped to 0 to 80 (`maxReturnPolls`), about two minutes; at 80 the block stops and asks the customer to refresh. A failed poll swaps in a retry block that keeps polling until the cap. Without JavaScript a `<noscript>` meta refresh reloads every 3 seconds with the same counter.
+`declined` renders "Pago rechazado" with a reason sentence per group (`decline-reason` template: funds, card details, authentication, generic), says nothing was charged and points the customer to reopen the enrollment link.
+
+While `pending`, the status block polls itself with `hx-trigger="every 1.5s"` at `ReturnPollURL`, which carries the next `polls` count (a negative or malformed count reads as 0). At 80 (`maxReturnPolls`), about two minutes, `ReturnPollURL` is empty: the block stops and asks the customer to refresh. A failed poll swaps in a retry block that keeps polling until the cap. Without JavaScript a `<noscript>` meta refresh reloads every 3 seconds with the same counter. The back link (`?attempt=`) never polls.
 
 ## Headers and CSP
 
@@ -178,18 +185,19 @@ Anyone holding a link can read the customer's submitted details, edit them while
 - `dbTimeout` and `providerBudget` stay separate: provider work must not be cut at 5 s, and DB work must not wait 8 s.
 - `LookupSession` versus `StartEnrollment`: `GET` and `HEAD` never create rows, so link previews cannot spend the 100-enrollment cap.
 - One enrollment per browser per link: the `enrollment_session` cookie is scoped to `/customer/{token}` and holds one session. While that enrollment is `In progress` or `Awaiting payment`, `POST /start` resumes it and the welcome page offers no second start. Other browsers on the same link start their own enrollments, up to `MaxLinkEnrollments`. Several enrollments in one browser would need one cookie per enrollment and a chooser on the welcome page.
-- The `ContactEditable` pre-check is lock-free for speed; `UpdateContact` rechecks under locks, so the pre-check can be stale without harm.
+- The `ContactEditable` pre-check is lock-free for speed; `UpdateContact` rechecks under the Enrollment row lock, so the pre-check can be stale without harm.
 - The PIN check is a POST so the PIN never reaches URLs or access logs.
 
 ## Source
 
-- `internal/customer/customer.go`: `RegisterRoutes`, `withHeaders`, `dbTimeout`, `site.render`, `site.resolveSession`, `redirectCustomer`, `site.welcome`, `site.start`, `site.forms`, `site.submit`, `site.draft`, `site.edit`, `parseCustomerForm`, `readSubmission`, `site.checkPin`, `pinTakenMessage`, `readSessionCookie`, `setSessionCookie`, `sessionCookieName`
+- `internal/customer/customer.go`: `RegisterRoutes`, `withHeaders`, `dbTimeout`, `pageData.fill`, `site.render`, `site.resolveSession`, `redirectCustomer`, `site.welcome`, `site.start`, `site.forms`, `site.submit`, `site.draft`, `site.edit`, `parseCustomerForm`, `readContact`, `readSubmission`, `readDateOfBirth`, `site.checkPin`, `fieldMessages`, `pinTakenMessage`, `pinLimitMessage`, `readSessionCookie`, `setSessionCookie`, `sessionCookieName`
 - `internal/customer/payments.go`: `site.payments`, `site.paymentReturn`, `maxReturnPolls`
 - `internal/customer/agreement.go`: `agreement`
 - `internal/customer/templates/index.html`: `htmx-config`, `includeIndicatorStyles`, `customer-content`
-- `internal/customer/templates/payment-return.html`: `payment-return-status`, `noscript`
-- `internal/links/links.go`: `Store.LookupSession`, `Store.StartEnrollment`, `Store.SaveDraft`, `Store.Submit`, `saveResult`
-- `internal/billing/contact.go`: `UpdateContact`, `ContactEditable`, `inFlightAttemptStates`, `ErrContactLocked`
+- `internal/customer/templates/payment-return.html`: `payment-return-status`, `decline-reason`, `noscript`
+- `internal/links/links.go`: `Store.LookupSession`, `Store.StartEnrollment`, `Store.SaveDraft`, `Store.Submit`, `Store.SpendPinCheck`, `Store.FormState`, `formState`
+- `internal/billing/contact.go`: `UpdateContact`, `ContactEditable`, `contactEditable`, `inFlightAttemptStates`, `ErrContactLocked`
+- `internal/students/students.go`: `Store.PinTaken`
 - `internal/billing/checkout.go`: `StartCheckout`
-- `internal/billing/summary.go`: `ForEnrollment`, `ReturnStatus`
+- `internal/billing/summary.go`: `ForEnrollment`, `ReturnStatus`, `CancelStatus`
 - `internal/billing/billing.go`: `providerBudget`, `ErrPlanLocked`, `ErrUnavailable`

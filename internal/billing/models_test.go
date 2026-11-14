@@ -28,17 +28,17 @@ func TestBillingModelsMigration(t *testing.T) {
 		Phone:        "+17875551234",
 		Municipality: "San Juan",
 	}
-	link := links.Enrollment{
+	enrollment := links.Enrollment{
 		LinkID:      seedLink(t, db),
 		SessionHash: hash,
 		Details:     details,
 		ExpiresAt:   time.Now().Add(7 * 24 * time.Hour),
 	}
-	if err := db.Create(&link).Error; err != nil {
-		t.Fatalf("create link: %v", err)
+	if err := db.Create(&enrollment).Error; err != nil {
+		t.Fatalf("create enrollment: %v", err)
 	}
 	student := students.Student{
-		EnrollmentID: &link.ID,
+		EnrollmentID: &enrollment.ID,
 		Details:      details,
 		IsActive:     true,
 		Cohort:       "2026-11",
@@ -49,7 +49,7 @@ func TestBillingModelsMigration(t *testing.T) {
 
 	contractRef := rand.Text()
 	contract := billing.Contract{
-		EnrollmentID:     link.ID,
+		EnrollmentID:     enrollment.ID,
 		Reference:        contractRef,
 		PlanID:           "three",
 		PlanName:         "Plan de 3 Pagos Mensuales",

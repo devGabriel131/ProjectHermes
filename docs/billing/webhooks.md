@@ -48,11 +48,12 @@ Event body, signature header and secret are never logged. The handler answers 20
 
 ## Allowlist
 
-`webhookEvents` holds exactly the 22 types the worker acts on. The filter is by type only: an allowlisted event about an object this app does not own is stored and later processed as a no-op.
+`webhookEvents` holds exactly the 23 types the worker acts on. The filter is by type only: an allowlisted event about an object this app does not own is stored and later processed as a no-op.
 
 | Group | Types | `resource_id` holds |
 |---|---|---|
 | Checkout Session (4) | `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired` | Session ID |
+| PaymentIntent (1) | `payment_intent.payment_failed` | PaymentIntent ID |
 | Invoice (10) | `invoice.created`, `invoice.finalized`, `invoice.finalization_failed`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `invoice.updated`, `invoice.voided`, `invoice.marked_uncollectible`, `invoice.deleted` | Invoice ID |
 | Charge and refund (3) | `charge.updated`, `charge.refunded`, `refund.updated` | Charge or refund ID |
 | Dispute (3) | `charge.dispute.created`, `charge.dispute.updated`, `charge.dispute.closed` | Dispute ID |
@@ -68,7 +69,7 @@ The handler writes three columns of `billing_webhook_events`; the rest belong to
 | Column | Written by | Meaning |
 |---|---|---|
 | `id` (primary key) | webhook | Stripe event ID, the deduplication key |
-| `event_type` | webhook | One of the 22 types |
+| `event_type` | webhook | One of the 23 types |
 | `resource_id` | webhook | `data.object.id` of the event's object |
 | `processed_at`, `retry_at`, `retry_count`, `lease_token`, `lease_expires_at` | worker | Claim, retry and completion state ([Worker](worker.md)) |
 | `created_at`, `updated_at` | database default | Row timestamps |
@@ -86,7 +87,7 @@ No payload is stored. The event is only a wake signal: `wakeWorker` makes a non-
 - `internal/billing/webhook.go`: `Webhook`, `webhookEvents`, `maxWebhookBody`
 - `internal/billing/billing.go`: `wakeWorker`, `Service`
 - `internal/billing/models.go`: `WebhookEvent`
-- `internal/billing/worker.go`: `handleEvent`, `paymentIntentOf`, `processEvent`
+- `internal/billing/worker.go`: `handleEvent`, `syncSession`, `paymentIntentOf`, `processEvent`
 - `internal/billing/webhook_test.go`: `TestWebhookAuthenticityAndReplay`
 - `main.go`: `newServer`, `Webhook`
 - `main_wiring_integration_test.go`: `/webhooks/stripe`

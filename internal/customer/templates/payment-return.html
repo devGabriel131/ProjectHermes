@@ -12,40 +12,45 @@
 {{/* The polled block: HTMX swaps it whole, and only the pending variant carries a trigger. */}}
 {{define "payment-return-status"}}
 {{if .Error}}
-{{if .ReturnStopPoll}}
-<div id="payment-return-status" class="payment-saved" data-status="pending" role="status">
+{{if not .ReturnPollURL}}
+<div id="payment-return-status" data-status="pending" role="status">
   <span class="payment-return-icon">{{template "icon-refresh"}}</span>
   <p><strong>No pudimos confirmar el estado de tu pago.</strong> Actualiza esta página en unos minutos.</p>
 </div>
 {{else}}
-<div id="payment-return-status" class="payment-saved" data-status="pending" role="status" hx-get="/payments/return?session_id={{urlquery .ReturnSessionID}}&amp;polls={{.ReturnPollsNext}}" hx-trigger="every 1.5s" hx-swap="outerHTML">
+<div id="payment-return-status" data-status="pending" role="status" hx-get="{{.ReturnPollURL}}" hx-trigger="every 1.5s" hx-swap="outerHTML">
   <div class="payment-spinner" aria-hidden="true"></div>
   <p><strong>En proceso.</strong> Todavía estamos confirmando tu pago.</p>
-  <noscript><meta http-equiv="refresh" content="3;url=/payments/return?session_id={{urlquery .ReturnSessionID}}&amp;polls={{.ReturnPollsNext}}"></noscript>
+  <noscript><meta http-equiv="refresh" content="3;url={{.ReturnPollURL}}"></noscript>
 </div>
 {{end}}
 {{else}}
 {{with .Return}}
 {{if eq .Status "paid"}}
-<div id="payment-return-status" class="payment-saved" data-status="paid" role="status">
+<div id="payment-return-status" data-status="paid" role="status">
   <span class="payment-return-icon">{{template "icon-check"}}</span>
   <p><strong>Pagado.</strong> Confirmamos tu pago inicial de <strong>{{money .AmountCents}}</strong>. Gracias.</p>
 </div>
 {{else if eq .Status "pending"}}
-{{if $.ReturnStopPoll}}
-<div id="payment-return-status" class="payment-saved" data-status="pending" role="status">
+{{if not $.ReturnPollURL}}
+<div id="payment-return-status" data-status="pending" role="status">
   <span class="payment-return-icon">{{template "icon-refresh"}}</span>
   <p><strong>En proceso.</strong> Todavía estamos confirmando tu pago{{if .AmountCents}} de <strong>{{money .AmountCents}}</strong>{{end}}. Aún no está registrado como pagado; actualiza esta página en unos minutos.</p>
 </div>
 {{else}}
-<div id="payment-return-status" class="payment-saved" data-status="pending" role="status" hx-get="/payments/return?session_id={{urlquery $.ReturnSessionID}}&amp;polls={{$.ReturnPollsNext}}" hx-trigger="every 1.5s" hx-swap="outerHTML">
+<div id="payment-return-status" data-status="pending" role="status" hx-get="{{$.ReturnPollURL}}" hx-trigger="every 1.5s" hx-swap="outerHTML">
   <div class="payment-spinner" aria-hidden="true"></div>
   <p><strong>En proceso.</strong> Todavía estamos confirmando tu pago{{if .AmountCents}} de <strong>{{money .AmountCents}}</strong>{{end}}.</p>
-  <noscript><meta http-equiv="refresh" content="3;url=/payments/return?session_id={{urlquery $.ReturnSessionID}}&amp;polls={{$.ReturnPollsNext}}"></noscript>
+  <noscript><meta http-equiv="refresh" content="3;url={{$.ReturnPollURL}}"></noscript>
 </div>
 {{end}}
+{{else if eq .Status "declined"}}
+<div id="payment-return-status" data-status="declined" role="status">
+  <span class="payment-return-icon">{{template "icon-alert"}}</span>
+  <p><strong>Pago rechazado.</strong> {{template "decline-reason" .Decline}} No se realizó ningún cobro. Para intentarlo con otra tarjeta, vuelve a abrir tu enlace de matrícula.</p>
+</div>
 {{else}}
-<div id="payment-return-status" class="payment-saved" data-status="canceled" role="status">
+<div id="payment-return-status" data-status="canceled" role="status">
   <span class="payment-return-icon">{{template "icon-alert"}}</span>
   <p><strong>No completado.</strong> Este intento de pago no se completó. Para intentarlo de nuevo, vuelve a abrir tu enlace de matrícula.</p>
 </div>
@@ -53,3 +58,5 @@
 {{end}}
 {{end}}
 {{end}}
+
+{{define "decline-reason"}}{{if eq . "funds"}}Tu banco indicó fondos o crédito insuficientes.{{else if eq . "card_details"}}Algún dato de la tarjeta no es correcto o la tarjeta está vencida.{{else if eq . "authentication"}}No se completó la verificación de tu banco.{{else}}Tu banco no aprobó el pago.{{end}}{{end}}

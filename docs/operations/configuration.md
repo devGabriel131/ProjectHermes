@@ -17,6 +17,7 @@ The application never loads a `.env` file itself; locally, Air injects `.env` (`
 | `STRIPE_WEBHOOK_SECRET` | server only | none; required | Not blank (whitespace-only fails) | `billing_configuration` |
 | `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID` | server only | none; required | Not blank | `billing_configuration` |
 | `STRIPE_PORTAL_CONFIGURATION_ID` | server only | none; required | Not blank | `billing_configuration` |
+| `INSTALLMENT_SPACING` | server only | unset: monthly due dates | Optional. A positive Go duration such as `15m`; refused when `STRIPE_MODE=live`. Sandbox testing only: installment *i* falls due `i × INSTALLMENT_SPACING` after funding instead of on monthly midnights ([Billing overview](../billing/overview.md#due-dates)) | `configuration` |
 | `TEST_DATABASE_URL` | integration tests only (`-tags=integration`) | none; the test fails | Must parse as a URL with a host and scheme `postgres` or `postgresql`; use a dedicated database | none (test failure) |
 | `RAILWAY_SERVICE_NAME` | server, `user` CLI (log field `service`) | `ProjectHermes` | None | never fails |
 | `RAILWAY_ENVIRONMENT_NAME` | server, `user` CLI (log field `environment`) | `local` | None | never fails |
@@ -49,7 +50,7 @@ A startup failure logs `startup_failed` with a `stage` field, then the process e
 
 | `stage` | Raised by | Typical cause |
 |---|---|---|
-| `configuration` | `run` | `DATABASE_URL` empty; `SESSION_COOKIE_SECURE` not a boolean |
+| `configuration` | `run` | `DATABASE_URL` empty; `SESSION_COOKIE_SECURE` not a boolean; `INSTALLMENT_SPACING` not a positive duration or set with `STRIPE_MODE=live` |
 | `database_open` | `gorm.Open` | DSN does not parse. No connection is attempted here: `DisableAutomaticPing` is set |
 | `database_pool` | `db.DB()` | GORM holds no `*sql.DB`; not reachable with the PostgreSQL driver in use [INFERENCE] |
 | `database_connect` | `PingContext` | Server unreachable, rejected credentials, the shared 10 s budget spent, or a signal during startup |
@@ -66,9 +67,9 @@ Failures after `listen` succeeds are `server_failed` or `shutdown_failed`, not s
 
 ## Source
 
-- `main.go`: `run`, `startupError`, `SESSION_COOKIE_SECURE`, `DATABASE_URL`, `PORT`, `RAILWAY_SERVICE_NAME`, `RAILWAY_ENVIRONMENT_NAME`, `RAILWAY_GIT_COMMIT_SHA`, `RAILWAY_DEPLOYMENT_ID`, `RAILWAY_REPLICA_ID`
+- `main.go`: `run`, `startupError`, `SESSION_COOKIE_SECURE`, `INSTALLMENT_SPACING`, `DATABASE_URL`, `PORT`, `RAILWAY_SERVICE_NAME`, `RAILWAY_ENVIRONMENT_NAME`, `RAILWAY_GIT_COMMIT_SHA`, `RAILWAY_DEPLOYMENT_ID`, `RAILWAY_REPLICA_ID`
 - `internal/billing/stripe.go`: `Config.Validate`, `LoadConfigFromEnv`, `LoadCatalog`, `STRIPE_API_KEY`, `STRIPE_MODE`, `PUBLIC_BASE_URL`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID`, `STRIPE_PORTAL_CONFIGURATION_ID`
 - `internal/billing/billing.go`: `New`
 - `internal/testdb/testdb.go`: `Open`, `TEST_DATABASE_URL`
 - `.air.toml`: `env_files`
-- `.env.example`: `STRIPE_MODE`, `PUBLIC_BASE_URL`
+- `.env.example`: `STRIPE_MODE`, `PUBLIC_BASE_URL`, `INSTALLMENT_SPACING`

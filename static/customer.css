@@ -506,8 +506,34 @@
   background-size: 1.25rem;
 }
 
-.customer input::-webkit-date-and-time-value {
-  text-align: left;
+.customer-date-parts {
+  display: grid;
+  grid-template-columns: 4.25rem minmax(0, 1fr) 5.25rem;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.customer-date-part {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.customer-date-part label {
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.customer-date-part select {
+  padding-inline: 0.75rem 2.25rem;
+  background-position: right 0.625rem center;
+}
+
+@media (max-width: 22.5rem) {
+  .customer-date-parts {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .customer input:focus-visible,
@@ -900,8 +926,7 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
-.payment-selection > .payment-saved,
-.payment-saved:not([data-status]) {
+.payment-saved {
   padding: 0.875rem 1rem;
   border-left: 4px solid var(--teal);
   border-radius: var(--radius-field);
@@ -1022,6 +1047,8 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   background: #ffffff;
+  font-size: 0.9375rem;
+  line-height: 1.45;
 }
 
 .payment-return-icon,
@@ -1051,6 +1078,11 @@
 .payment-return [data-status="canceled"] .payment-return-icon {
   background: var(--warn-tint);
   color: var(--warn);
+}
+
+.payment-return [data-status="declined"] .payment-return-icon {
+  background: var(--danger-tint);
+  color: var(--danger);
 }
 
 .payment-spinner {

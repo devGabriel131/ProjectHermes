@@ -13,6 +13,7 @@ Decisions the owner must make and gaps the code knowingly carries before the app
 | Money | Tax treatment and registrations (automatic tax stays off), Adaptive Pricing on the live account, and the actual Stripe fees. | [Stripe setup](operations/stripe-setup.md) |
 | Live Stripe account | The live catalog, a restricted key, the payment-method and portal configurations and the webhook endpoint; Apple Pay and Google Pay on a real device; live email delivery (sandbox suppresses automatic emails, so verify the dashboard toggles for successful-payment receipts, failed-payment alerts and 3D Secure links). | [Stripe setup](operations/stripe-setup.md), [Configuration](operations/configuration.md) |
 | Staff passwords | The 4-character minimum in `readNewPassword` is marked as a temporary development value; raise it before production. | [Staff auth](staff-auth.md) |
+| Installment spacing | Sandbox runs set `INSTALLMENT_SPACING=15m` so later installments fall due in minutes. Remove the variable from every environment before go-live; a live Stripe account refuses to start with it. | [Configuration](operations/configuration.md), [Billing overview](billing/overview.md#due-dates) |
 
 ## Known gaps
 
@@ -38,7 +39,8 @@ Decisions the owner must make and gaps the code knowingly carries before the app
 - `internal/links/links.go`: `Submit`, `Enroll`, `pinIndex`, `Store.ListGroups`, `CreatedBy`, `CanceledBy`, `MaxLinkEnrollments`
 - `internal/students/students.go`: `Student`, `Store.List`, `UpdateField`
 - `internal/settings/settings.go`: `UpdatedBy`
-- `internal/billing/worker.go`: `contractRetry`, `syncContract`, `logFailure`, `reviewFor`, `markContract`
+- `internal/billing/worker.go`: `contractRetry`, `syncContract`, `logFailure`, `markContract`
+- `internal/billing/invoices.go`: `reviewFor`
 - `internal/billing/suspension.go`: `hasReview`, `reinstatable`, `RequestReinstatement`
 - `internal/billing/billing.go`: `ErrNeedsReview`
 - `internal/billing/models.go`: `RequestedBy`

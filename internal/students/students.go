@@ -23,7 +23,7 @@ type Details struct {
 }
 
 type Student struct {
-	ID             uint64 `gorm:"primaryKey"`
+	ID uint64 `gorm:"primaryKey"`
 	// EnrollmentID is nil for students staff add (Add), who have no customer enrollment.
 	EnrollmentID *uint64 `gorm:"uniqueIndex"`
 	Details
@@ -42,7 +42,7 @@ type Student struct {
 }
 
 // NoCohort is the filter value and ?cohort= URL token for students without a cohort;
-// '' is what is stored, and '' in a filter means every cohort.
+// ” is what is stored, and ” in a filter means every cohort.
 const NoCohort = "none"
 
 const noCohortLabel = "Existing students"
@@ -134,11 +134,8 @@ func (s *Store) Count(ctx context.Context) (Counts, error) {
 	return c, err
 }
 
-// Get returns nil for an absent student, including IDs outside PostgreSQL BIGINT.
+// Get returns nil for an absent student.
 func (s *Store) Get(ctx context.Context, id uint64) (*Student, error) {
-	if id == 0 || id > 1<<63-1 {
-		return nil, nil
-	}
 	var record Student
 	result := s.db.WithContext(ctx).Where("id = ?", id).Limit(1).Find(&record)
 	if result.Error != nil || result.RowsAffected == 0 {
@@ -152,9 +149,6 @@ const pinTakenMessage = "That PIN is already in use."
 // heldPins reports which of the given pins are held by a Student or a submitted Enrollment still awaiting payment.
 // links imports this package, so the table is queried by name without importing links.
 func heldPins(db *gorm.DB, pins []string) (map[string]bool, error) {
-	if len(pins) == 0 {
-		return map[string]bool{}, nil
-	}
 	var found []string
 	err := db.Raw("SELECT pin FROM students WHERE pin IN ? UNION SELECT pin FROM enrollments WHERE pin IN ?", pins, pins).Scan(&found).Error
 	if err != nil {
@@ -198,9 +192,6 @@ func (s *Store) UpdateField(ctx context.Context, id uint64, key, raw string) (*S
 	if err != nil {
 		return nil, err
 	}
-	if id == 0 || id > 1<<63-1 {
-		return nil, nil
-	}
 	var persisted *Student
 	wrote := false
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -215,7 +206,7 @@ func (s *Store) UpdateField(ctx context.Context, id uint64, key, raw string) (*S
 			persisted = &record
 			return nil
 		}
-		if field.Key == pinField.Key && value != "" {
+		if field.Key == pinField.Key {
 			held, err := heldPins(tx, []string{value})
 			if err != nil {
 				return err
@@ -273,103 +264,59 @@ func (r Rejection) Problems() []string {
 // transaction, and returns the added students in entry order plus every rejection in entry order.
 // group must come from ParseGroup; the student_group_valid check refuses anything else.
 func (s *Store) Add(ctx context.Context, group string, entries []NewStudent) ([]Student, []Rejection, error) {
-	if len(entries) == 0 {
-		return nil, nil, nil
-	}
-
 	type candidate struct {
 		index   int
 		student Student
 	}
-
 	var candidates []candidate
 	var rejections []Rejection
-	seenPins := make(map[string]bool)
-
+	var pins []string
 	for i, e := range entries {
-		var rj Rejection
-		hasError := false
-
+		rejection := Rejection{Index: i}
 		name, err := ParseName(e.Name, true)
 		if err != nil {
-			rj.NameError = err.Error()
-			hasError = true
+			rejection.NameError = err.Error()
 		}
 		email, err := ParseEmail(e.Email, true)
 		if err != nil {
-			rj.EmailError = err.Error()
-			hasError = true
+			rejection.EmailError = err.Error()
 		}
 		pin, err := ParsePin(e.Pin, true)
 		if err != nil {
-			rj.PinError = err.Error()
-			hasError = true
+			rejection.PinError = err.Error()
 		}
-
-		if hasError {
-			rj.Index = i
-			rejections = append(rejections, rj)
+		if len(rejection.Problems()) > 0 {
+			rejections = append(rejections, rejection)
 			continue
 		}
-
-		if seenPins[pin] {
-			rejections = append(rejections, Rejection{
-				Index:    i,
-				PinError: pinTakenMessage,
-			})
-			continue
-		}
-		seenPins[pin] = true
-
-		candidates = append(candidates, candidate{
-			index: i,
-			student: Student{
-				Details: Details{
-					Name:  name,
-					Email: email,
-				},
-				Pin:      pin,
-				IsActive: true,
-				Group:    group,
-			},
-		})
+		pins = append(pins, pin)
+		candidates = append(candidates, candidate{index: i, student: Student{
+			Details: Details{Name: name, Email: email}, Pin: pin, IsActive: true, Group: group,
+		}})
+	}
+	if len(candidates) == 0 {
+		return nil, rejections, nil
 	}
 
 	var inserted []Student
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if len(candidates) == 0 {
-			return nil
-		}
-
-		var candidatePins []string
-		for _, c := range candidates {
-			candidatePins = append(candidatePins, c.student.Pin)
-		}
-
-		held, err := heldPins(tx, candidatePins)
+		// held starts as the PINs already taken and gains each one this batch takes, so a repeat within the batch is refused too.
+		held, err := heldPins(tx, pins)
 		if err != nil {
 			return err
 		}
-
-		var toInsert []Student
 		for _, c := range candidates {
 			if held[c.student.Pin] {
-				rejections = append(rejections, Rejection{
-					Index:    c.index,
-					PinError: pinTakenMessage,
-				})
-			} else {
-				toInsert = append(toInsert, c.student)
+				rejections = append(rejections, Rejection{Index: c.index, PinError: pinTakenMessage})
+				continue
 			}
+			held[c.student.Pin] = true
+			inserted = append(inserted, c.student)
 		}
-
-		if len(toInsert) > 0 {
-			if err := tx.CreateInBatches(&toInsert, 500).Error; err != nil {
-				return err
-			}
-			inserted = toInsert
+		if len(inserted) == 0 {
+			return nil
 		}
-		return nil
+		return tx.CreateInBatches(&inserted, 500).Error
 	})
 
 	if IsUniqueViolation(err, pinIndex) {

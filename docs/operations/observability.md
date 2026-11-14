@@ -70,7 +70,7 @@ flowchart TD
 
 A 4xx is logged only if a handler called `RecordError`. A render failure after the status was written logs with the original status (often 200).
 
-Current stage values come from the `RecordError` callers: `session`, `authenticate`, `login`, `logout`, `render`, `load`, `lookup`, `list`, `save`, `create`, `cancel`, `cancel_all`, `checkout`, `billing`, `stream`, and `response`.
+Current stage values come from the `RecordError` callers: `session`, `authenticate`, `login`, `logout`, `render`, `load`, `lookup`, `list`, `save`, `create`, `start`, `rename`, `cancel`, `accept`, `checkout`, `billing`, `export`, `stream`, and `response`.
 
 A handler panic is not a `request_failed`: `Requests` has no recover, so net/http recovers the panic and reports it through the server error log, which becomes `http_server_error` with `kind` `panic`.
 
@@ -107,7 +107,7 @@ Every event that reports an error builds it with `logging.ErrorAttrs`. It expose
 | `request_failed` | warn or error | see above | A request failed |
 | `database_slow_summary` | warn | `operation`, `count`, `worst_duration_ms`, `threshold_ms` | A flush found slow queries for a label |
 | `orm_warning` | warn | none | GORM called the logger's `Warn`; the message is discarded |
-| `session_cleanup_failed` | error | error attrs | The 5-minute expired-session delete failed (not logged once the auth manager is closing) |
+| `session_cleanup_failed` | error | error attrs | The 5-minute expired-session delete failed (not logged once shutdown has cancelled the cleanup) |
 | `stripe_webhook_rejected` | warn | error attrs | Signature or payload verification failed; answered 400. Logged at most once a minute so unsigned POSTs cannot flood the log |
 | `staff_login_failed` | warn | none | A sign-in with an unknown username or wrong password; the username is never logged |
 | `staff_login_throttled` | warn | none | The sign-in limiter refused an attempt; at most one line per minute |
@@ -122,7 +122,7 @@ Every event that reports an error builds it with `logging.ErrorAttrs`. It expose
 | `stage` | `ref` |
 |---|---|
 | `event_claim`, `contract_claim`, `lease_release` | empty |
-| `event_lease`, `event_finish` | Stripe event id |
+| `event_finish` | Stripe event id |
 | a Stripe event type (processing that event failed) | Stripe event id |
 | `contract_sync`, `contract_retry` | contract reference |
 
@@ -152,6 +152,7 @@ Flush points are three distinct moments: right after the startup migration, ever
 - `http_server_error` keeps only a fixed class; the standard library's diagnostic text, which can include remote addresses, is dropped.
 - Stripe webhook body, signature and secret are never logged, and the Stripe SDK's own logger is set to null.
 - Billing events carry only opaque references the app generated (`contract`, `obligation`, `attempt`) or Stripe event ids; no names, emails, phone numbers, PINs or tokens appear in any event above.
+- `main_logging_integration_test.go` drives real failures through `newServer` and fails if a query string, header, credential, cookie, token, contact value or SQL text reaches the event ([Testing](../testing.md)).
 
 ## Deliberate choices
 
@@ -168,5 +169,6 @@ Flush points are three distinct moments: right after the startup migration, ever
 - `internal/auth/http.go`: `session_cleanup_failed`, `deleteExpiredSessions`, `staff_login_failed`, `staff_login_throttled`
 - `internal/billing/webhook.go`: `stripe_webhook_rejected`, `stripe_webhook_store_failed`
 - `internal/billing/checkout.go`: `checkout_create_uncertain`, `checkout_expire_unresolved`
-- `internal/billing/worker.go`: `billing_reconcile_failed`, `billing_review_required`, `logFailure`
+- `internal/billing/worker.go`: `billing_reconcile_failed`, `billing_review_required` (contract), `logFailure`
+- `internal/billing/invoices.go`: `billing_review_required` (obligation)
 - `internal/billing/stripe.go`: `NewStripeClient`

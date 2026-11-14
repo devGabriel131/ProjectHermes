@@ -1,8 +1,8 @@
 # Management: students
 
-The staff roster of paid enrollments, the student dialog, per-field editing and the billing block with its staff actions. Route mapping and shared HTMX rules are in [Management overview](overview.md); field parsing and PIN rules are in [Students](../domain/students.md); what the billing figures mean is in [Billing overview](../billing/overview.md).
+The staff roster of paid enrollments and staff-added students, the student dialog, per-field editing and the billing block with its staff actions. Route mapping and shared HTMX rules are in [Management overview](overview.md); field parsing and PIN rules are in [Students](../domain/students.md); what the billing figures mean is in [Billing overview](../billing/overview.md).
 
-A Student row exists only after payment: `links.Enroll` creates it inside the funding transaction ([Lifecycle](../domain/lifecycle.md)). The roster therefore lists paid enrollments, and its "Enrolled" column is the payment time.
+An enrollment's Student row exists only after payment: `links.Enroll` creates it inside the funding transaction ([Lifecycle](../domain/lifecycle.md)). Staff can also add students on Add students (`students.Store.Add`, one at a time or by roster import); those have no enrollment, no contract and no cohort. The roster therefore lists paid enrollments and staff-added students, and its "Enrolled" column is the payment time, or the time staff added the student.
 
 ## Roster and filters
 
@@ -96,14 +96,14 @@ Staff edits are not locked by funding, a payment in flight or the contract lease
 
 | Row | Source in `billing.Summary` |
 |---|---|
-| Funding | `Funded`, `FundedAt`; a student exists only after funding, so this normally reads Funded |
+| Funding | `Funded`, `FundedAt`; an enrollment's student exists only after funding and a staff-added one has no contract, so this normally reads Funded |
 | Plan, Tuition total | `PlanName`, `TotalCents` |
 | Tuition paid | sum of tuition obligations' `AmountPaidCents` |
 | Stripe cash paid | sum over every payment of gross received minus gross refunded; includes reinstatement fee cash |
 | Other settlement | sum of obligations' `OtherSettlementCents` |
 | Remaining tuition, Overdue tuition | sum of tuition `AmountRemainingCents`; the overdue part has `DueAt` before now |
 | Reinstatement fee remaining | remaining on reinstatement obligations whose `CollectionDisposition` is `collect`; a corrected fee is no longer owed |
-| Status | "Billing-suspended" when an episode is open (`IsSuspended`), else "Active" when the student `is_active`, else "Suspended" |
+| Status | "Billing-suspended" when an episode is open (`IsSuspended`), else "Active" |
 | Last synced | `LastSyncedAt` or "Never" |
 | Needs review | `ReviewReasons`, each in `<code>`; meanings in [Reviews](../billing/reviews.md) |
 
@@ -131,7 +131,7 @@ flowchart TD
 | Customer Portal | `POST .../billing/portal` | Always | Creates a short-lived Stripe customer-portal link and shows it in `#student-billing-portal-{id}` (`role="status"`). It is a bearer credential: `no-store`, `no-referrer`, opened with `rel="noopener noreferrer"`. |
 | View invoice | `GET .../billing/invoices/{obligation}` | Per installment | 303 to Stripe, as above. |
 
-Students are looked up through their Student row, which exists only after funding, so these actions always act on a funded contract in production. Reconcile and Request Reinstatement share the contract lease with the worker; while the worker holds it they answer `ErrPaymentPending`. Each billing method bounds its provider work with `providerBudget`.
+Students are looked up through their Student row. An enrollment's row exists only after funding, and a staff-added student has no contract (`ErrUnavailable`), so these actions always act on a funded contract in production. Reconcile and Request Reinstatement share the contract lease with the worker; while the worker holds it they answer `ErrPaymentPending`. Each billing method bounds its provider work with `providerBudget`.
 
 The three POST buttons are `type="button"` with `hx-post` only: they need JavaScript, unlike the rest of the page. Refusals map to staff-readable text by `billingFailure`:
 
@@ -154,12 +154,12 @@ htmx does not swap 4xx or 5xx on staff pages, so `students.js` tracks every bill
 
 ## Source
 
-- `internal/management/students.go`: `registerStudentRoutes`, `studentDisplay`, `pathID`, `billingRefusals`, `billingFailure`, `TouchContract`, `HX-Replace-Url`, `act`
+- `internal/management/students.go`: `studentList`, `student`, `studentField`, `studentBilling`, `load`, `withBilling`, `studentDisplay`, `pathID`, `billingRefusals`, `billingFailure`, `TouchContract`, `HX-Replace-Url`, `act`
 - `internal/management/templates/students.html`: `student-filter`, `student-records`, `student-row`, `student-detail`, `student-field`, `student-save`, `student-billing`, `student-billing-portal`, `student-request-error`
 - `static/students.js`: `requestError`, `htmx:beforeSwap`, `htmx:afterRequest`, `showModal`
 - `internal/students/students.go`: `UpdateField`, `List`, `Cohorts`, `CohortLabel`, `Filter`
 - `internal/students/fields.go`: `StaffFields`, `FindStaffField`, `GroupOptions`
-- `internal/billing/billing.go`: `Summary`, `SummaryInstallment`, `ReconcileStudent`, `InvoiceURL`, `PortalURL`, `ErrPaymentPending`
-- `internal/billing/summary.go`: `ForStudent`, `summarize`, `invoiceReady`
+- `internal/billing/billing.go`: `ReconcileStudent`, `InvoiceURL`, `PortalURL`, `ErrPaymentPending`
+- `internal/billing/summary.go`: `Summary`, `SummaryInstallment`, `ForStudent`, `summarize`, `invoiceReady`
 - `internal/billing/suspension.go`: `RequestReinstatement`
 - `internal/billing/contact.go`: `TouchContract`

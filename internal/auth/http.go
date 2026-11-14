@@ -37,12 +37,10 @@ type loginPage struct {
 }
 
 type Manager struct {
-	db          *gorm.DB
-	sessions    *scs.SessionManager
-	stopCleanup context.CancelFunc
-	cleanupDone chan struct{}
-	page        *template.Template
-	dummyHash   string
+	db        *gorm.DB
+	sessions  *scs.SessionManager
+	page      *template.Template
+	dummyHash string
 	// ponytail: one limit shared by every client bounds guessing and Argon2's
 	// 64 MiB per check. Accepted risk: an outsider who keeps it spent blocks new
 	// staff sign-ins; key it per client IP if that ever happens.
@@ -52,7 +50,7 @@ type Manager struct {
 	throttled rate.Sometimes
 }
 
-// New owns staff-session configuration and expired-session cleanup, not the SQL pool.
+// New owns staff-session configuration, not the SQL pool; Run deletes expired sessions.
 func New(db *gorm.DB, secureCookies bool, log *slog.Logger) (*Manager, error) {
 	page, err := template.ParseFS(templates, "templates/login.html")
 	if err != nil {
@@ -81,47 +79,38 @@ func New(db *gorm.DB, secureCookies bool, log *slog.Logger) (*Manager, error) {
 		logging.RecordError(r, "session", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	}
-	ctx, stopCleanup := context.WithCancel(context.Background())
-	m := &Manager{
-		db:          db,
-		sessions:    sessions,
-		stopCleanup: stopCleanup,
-		cleanupDone: make(chan struct{}),
-		page:        page,
-		dummyHash:   dummyHash,
-		limiter:     rate.NewLimiter(rate.Every(loginInterval), 2),
-		log:         log,
-		throttled:   rate.Sometimes{Interval: time.Minute},
-	}
-	go func() {
-		defer close(m.cleanupDone)
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				m.deleteExpiredSessions(ctx, log)
-			}
+	return &Manager{
+		db:        db,
+		sessions:  sessions,
+		page:      page,
+		dummyHash: dummyHash,
+		limiter:   rate.NewLimiter(rate.Every(loginInterval), 2),
+		log:       log,
+		throttled: rate.Sometimes{Interval: time.Minute},
+	}, nil
+}
+
+// Run deletes expired sessions every 5 minutes until ctx ends.
+func (m *Manager) Run(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.deleteExpiredSessions(ctx)
 		}
-	}()
-	return m, nil
+	}
 }
 
-// Close stops expired-session cleanup, leaving the caller's SQL pool open.
-func (m *Manager) Close() {
-	m.stopCleanup()
-	<-m.cleanupDone
-}
-
-func (m *Manager) deleteExpiredSessions(ctx context.Context, log *slog.Logger) {
+func (m *Manager) deleteExpiredSessions(ctx context.Context) {
 	cleanupCtx, cancel := context.WithTimeout(ctx, dbTimeout)
 	defer cancel()
 	err := m.db.WithContext(logging.WithOperation(cleanupCtx, "session_cleanup")).
 		Where("expiry < CURRENT_TIMESTAMP").Delete(&Session{}).Error
 	if err != nil && ctx.Err() == nil {
-		log.LogAttrs(ctx, slog.LevelError, "session_cleanup_failed", logging.ErrorAttrs(err)...)
+		m.log.LogAttrs(ctx, slog.LevelError, "session_cleanup_failed", logging.ErrorAttrs(err)...)
 	}
 }
 

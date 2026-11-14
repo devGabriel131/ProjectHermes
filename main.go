@@ -2,6 +2,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"embed"
 	"errors"
@@ -26,6 +27,7 @@ import (
 	"projecthermes/internal/live"
 	"projecthermes/internal/logging"
 	"projecthermes/internal/management"
+	"projecthermes/internal/payments"
 	"projecthermes/internal/settings"
 	"projecthermes/internal/students"
 )
@@ -55,19 +57,11 @@ func main() {
 	if len(args) > 0 {
 		out = os.Stderr
 	}
-	service := os.Getenv("RAILWAY_SERVICE_NAME")
-	if service == "" {
-		service = "ProjectHermes"
-	}
-	environment := os.Getenv("RAILWAY_ENVIRONMENT_NAME")
-	if environment == "" {
-		environment = "local"
-	}
-	version := os.Getenv("RAILWAY_GIT_COMMIT_SHA")
-	if version == "" {
-		version = "unknown"
-	}
-	log := logging.New(out).With("service", service, "environment", environment, "version", version)
+	log := logging.New(out).With(
+		"service", cmp.Or(os.Getenv("RAILWAY_SERVICE_NAME"), "ProjectHermes"),
+		"environment", cmp.Or(os.Getenv("RAILWAY_ENVIRONMENT_NAME"), "local"),
+		"version", cmp.Or(os.Getenv("RAILWAY_GIT_COMMIT_SHA"), "unknown"),
+	)
 	if id := os.Getenv("RAILWAY_DEPLOYMENT_ID"); id != "" {
 		log = log.With("deployment_id", id)
 	}
@@ -102,46 +96,6 @@ func models() []any {
 		&links.Enrollment{},
 		&students.Student{},
 	}, billing.Models()...)
-}
-
-// migrate resets the pre-reusable-links schema (links keyed by token_hash, no enrollments
-// table) before AutoMigrate builds the new tables. Link and billing rows are dropped.
-// Students keep their rows and IDs, which ProjectHephaestus tables reference, and lose
-// only their link key. Remove once every environment has migrated.
-func migrate(ctx context.Context, db *gorm.DB, log *slog.Logger) error {
-	var legacy bool
-	err := db.WithContext(ctx).Raw(`
-		SELECT EXISTS (
-			SELECT 1 FROM information_schema.columns
-			WHERE table_schema = current_schema() AND table_name = 'links' AND column_name = 'token_hash'
-		) AND NOT EXISTS (
-			SELECT 1 FROM information_schema.tables
-			WHERE table_schema = current_schema() AND table_name = 'enrollments'
-		)`).Scan(&legacy).Error
-	if err != nil {
-		return err
-	}
-	if legacy {
-		log.Warn("legacy_schema_reset")
-		err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			if err := tx.Exec(`
-				DROP TABLE IF EXISTS
-					billing_suspensions,
-					billing_payments,
-					billing_checkout_attempts,
-					billing_obligations,
-					billing_contracts,
-					links
-				CASCADE`).Error; err != nil {
-				return err
-			}
-			return tx.Exec(`ALTER TABLE IF EXISTS students DROP COLUMN IF EXISTS source_link_hash`).Error
-		})
-		if err != nil {
-			return err
-		}
-	}
-	return db.WithContext(ctx).AutoMigrate(models()...)
 }
 
 func run(log *slog.Logger, args []string) error {
@@ -179,7 +133,7 @@ func run(log *slog.Logger, args []string) error {
 	if err := sqlDB.PingContext(ctx); err != nil {
 		return startupError{"database_connect", err}
 	}
-	err = migrate(logging.WithOperation(ctx, "startup_migrate"), db, log)
+	err = db.WithContext(logging.WithOperation(ctx, "startup_migrate")).AutoMigrate(models()...)
 	slow.Flush()
 	if err != nil {
 		return startupError{"database_migrate", err}
@@ -207,6 +161,17 @@ func run(log *slog.Logger, args []string) error {
 	if err != nil {
 		return startupError{"billing_configuration", err}
 	}
+	// Testing aid: installments due this far apart instead of monthly. Never on a live Stripe account.
+	if value, ok := os.LookupEnv("INSTALLMENT_SPACING"); ok {
+		spacing, err := time.ParseDuration(value)
+		switch {
+		case err != nil || spacing <= 0:
+			return startupError{"configuration", errors.New("INSTALLMENT_SPACING must be a positive duration such as 15m")}
+		case billingCfg.Live:
+			return startupError{"configuration", errors.New("INSTALLMENT_SPACING is for sandbox testing and is refused with STRIPE_MODE=live")}
+		}
+		payments.InstallmentSpacing = spacing
+	}
 	stripeClient := billing.NewStripeClient(stripeAPIKey)
 	catalogCtx, cancelCatalog := context.WithTimeout(signalContext, 15*time.Second)
 	defer cancelCatalog()
@@ -223,8 +188,8 @@ func run(log *slog.Logger, args []string) error {
 	if err != nil {
 		return startupError{"auth_initialize", err}
 	}
-	defer authentication.Close()
 
+	// Railway sets PORT and routes to every interface; without it the server stays on loopback.
 	addr := "127.0.0.1:3000"
 	if port := os.Getenv("PORT"); port != "" {
 		addr = ":" + port
@@ -237,6 +202,7 @@ func run(log *slog.Logger, args []string) error {
 	workerCtx, cancelWorker := context.WithCancel(signalContext)
 	var worker sync.WaitGroup
 	worker.Go(func() { biller.Run(workerCtx) })
+	worker.Go(func() { authentication.Run(workerCtx) })
 	defer func() {
 		cancelWorker()
 		worker.Wait()

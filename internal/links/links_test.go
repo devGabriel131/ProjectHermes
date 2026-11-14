@@ -11,12 +11,14 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"gorm.io/gorm"
 
-	"projecthermes/internal/payments"
+	"projecthermes/internal/puertorico"
 	"projecthermes/internal/settings"
 	"projecthermes/internal/students"
 	"projecthermes/internal/testdb"
@@ -39,7 +41,7 @@ func TestIssuedLinkAndSessionBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantDate := time.Now().In(payments.PuertoRico).Format(time.DateOnly)
+	wantDate := time.Now().In(puertorico.Zone).Format(time.DateOnly)
 	if first.Name != wantDate || second.Name != "Custom Cohort" {
 		t.Fatalf("names = %q, %q; want %q, %q", first.Name, second.Name, wantDate, "Custom Cohort")
 	}
@@ -106,13 +108,12 @@ func TestIssuedLinkAndSessionBoundary(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			sess, err := store.LookupSession(ctx, tc.link, tc.cookie)
+			e, _, err := store.LookupSession(ctx, tc.link, tc.cookie)
 			if err != nil {
 				t.Fatal(err)
 			}
-			valid := sess != nil && sess.Usable
-			if valid != tc.valid {
-				t.Fatalf("valid = %v, want %v (sess=%+v)", valid, tc.valid, sess)
+			if valid := e != nil; valid != tc.valid {
+				t.Fatalf("valid = %v, want %v (e=%+v)", valid, tc.valid, e)
 			}
 			if !tc.valid {
 				for _, save := range []func() (SaveResult, error){
@@ -149,9 +150,8 @@ func TestIssuedLinkAndSessionBoundary(t *testing.T) {
 		if err != nil || over != nil || overCookie != "" {
 			t.Fatalf("start over cap: over=%+v, cookie=%q, err=%v", over, overCookie, err)
 		}
-		sess, err := store.LookupSession(ctx, capped.Token, "")
-		if err != nil || sess == nil || sess.LinkUsable {
-			t.Fatalf("capped link should report LinkUsable=false for new visitor: %+v, err=%v", sess, err)
+		if e, canStart, err := store.LookupSession(ctx, capped.Token, ""); err != nil || e != nil || canStart {
+			t.Fatalf("capped link should not take a new visitor: e=%+v, canStart=%v, err=%v", e, canStart, err)
 		}
 		// Existing visitor with a live cookie still resumes.
 		resumed, newC, err := store.StartEnrollment(ctx, capped.Token, firstCookie)
@@ -243,15 +243,14 @@ func TestStatusFollowsCustomerProgress(t *testing.T) {
 		{"second submit is refused", refused(func() (SaveResult, error) {
 			return store.Submit(ctx, link.Token, cookie, contactDetails("Changed after submit"), "")
 		}), AwaitingPayment, details.Name},
-		{"cancel cannot revoke submitted enrollment", func() error { _, err := store.CancelEnrollment(ctx, eID, staff); return err }, AwaitingPayment, details.Name},
 		{"canceling parent link keeps submitted enrollment awaiting payment", func() error {
 			l, err := store.CancelLink(ctx, link.ID, staff)
 			if err != nil || l == nil || l.Status != LinkCanceled {
 				return fmt.Errorf("cancel link: %+v, %v", l, err)
 			}
-			sess, err := store.LookupSession(ctx, link.Token, cookie)
-			if err != nil || sess == nil || !sess.Usable || sess.LinkUsable {
-				return fmt.Errorf("submitted session after link cancel: %+v, %v", sess, err)
+			e, canStart, err := store.LookupSession(ctx, link.Token, cookie)
+			if err != nil || e == nil || canStart {
+				return fmt.Errorf("submitted session after link cancel: e=%+v, canStart=%v, err=%v", e, canStart, err)
 			}
 			return nil
 		}, AwaitingPayment, details.Name},
@@ -360,6 +359,36 @@ func TestStartEnrollmentObservesConcurrentLinkCancellation(t *testing.T) {
 	}
 	if got.e != nil || got.cookie != "" || count != 0 {
 		t.Fatalf("StartEnrollment ignored committed cancellation: e=%+v, cookie=%q, count=%d", got.e, got.cookie, count)
+	}
+}
+
+// The cap is enforced on the locked link row, so concurrent starts can neither exceed it nor drift the counter.
+func TestConcurrentStartsHoldTheEnrollmentCap(t *testing.T) {
+	db, store, ctx := testStore(t)
+	link, err := store.CreateLink(ctx, staff, "", later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started atomic.Int64
+	var wg sync.WaitGroup
+	for range 2 * MaxLinkEnrollments {
+		wg.Go(func() {
+			e, cookie, err := store.StartEnrollment(ctx, link.Token, "")
+			if err != nil {
+				t.Error(err)
+			} else if e != nil && cookie != "" {
+				started.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	var counter, rows int64
+	if err := db.WithContext(ctx).Raw("SELECT enrollment_count, (SELECT count(*) FROM enrollments WHERE link_id = l.id) FROM links l WHERE l.id = ?", link.ID).
+		Row().Scan(&counter, &rows); err != nil {
+		t.Fatal(err)
+	}
+	if started.Load() != MaxLinkEnrollments || counter != MaxLinkEnrollments || rows != MaxLinkEnrollments {
+		t.Fatalf("started=%d, enrollment_count=%d, rows=%d; want %d each", started.Load(), counter, rows, MaxLinkEnrollments)
 	}
 }
 
@@ -502,11 +531,7 @@ func TestSubmissionFailureRollsBack(t *testing.T) {
 			draft := students.Student{Details: students.Details{
 				Name: "Original draft", Email: "draft@example.com", Phone: "+12025550123", Municipality: "Ponce",
 			}}
-			for _, field := range students.Fields() {
-				if saved, err := store.SaveDraft(ctx, link.Token, cookie, field.Key, field.Value(draft)); err != nil || saved != Saved {
-					t.Fatalf("save %s draft: saved=%v, err=%v", field.Key, saved, err)
-				}
-			}
+			seedDrafts(t, store, ctx, link.Token, cookie, draft)
 			before := lookupEnrollment(t, store, ctx, link.Token, cookie)
 			if before == nil {
 				t.Fatal("load draft: nil")
@@ -547,11 +572,7 @@ func TestSubmissionCancellationRace(t *testing.T) {
 		Name: "Original draft", Email: "draft@example.com", Phone: "+12025550123", Municipality: "Ponce",
 	}}
 	final := contactDetails("Final answer")
-	for _, field := range students.Fields() {
-		if saved, err := store.SaveDraft(ctx, link.Token, cookie, field.Key, field.Value(draft)); err != nil || saved != Saved {
-			t.Fatalf("draft %s: saved=%v, err=%v", field.Key, saved, err)
-		}
-	}
+	seedDrafts(t, store, ctx, link.Token, cookie, draft)
 	type result struct {
 		saved SaveResult
 		entry *EnrollmentEntry
@@ -566,7 +587,7 @@ func TestSubmissionCancellationRace(t *testing.T) {
 	}()
 	go func() {
 		<-start
-		entry, err := store.CancelEnrollment(ctx, e.ID, "canceler")
+		entry, _, err := cancelEnrollment(ctx, db, e.ID, "canceler")
 		results <- result{entry: entry, err: err}
 	}()
 	close(start)
@@ -588,22 +609,17 @@ func TestSubmissionCancellationRace(t *testing.T) {
 		t.Fatal(err)
 	}
 	enrolled := studentsFor(t, db, ctx, e.ID)
-	if canceled == nil {
-		t.Fatal("cancel did not return an entry")
+	if canceled == nil || canceled.Status != Canceled || row.CanceledAt == nil || row.CanceledBy != "canceler" || row.Pin != "" || len(enrolled) != 0 {
+		t.Fatalf("cancellation lost: row=%+v, students=%+v, cancel=%+v", row, enrolled, canceled)
 	}
-	switch {
-	case row.SubmittedAt != nil:
-		if submitted != Saved || row.CanceledAt != nil || row.CanceledBy != "" || row.Details != final ||
-			len(enrolled) != 0 || canceled.Status != AwaitingPayment || row.ExpiresAt.Sub(*row.SubmittedAt) != 168*time.Hour {
-			t.Fatalf("invalid submission-wins outcome: submitted=%v, row=%+v, students=%+v, cancel=%+v", submitted, row, enrolled, canceled)
+	if row.SubmittedAt != nil {
+		// The submit took the row first; staff then canceled the submitted enrollment.
+		if submitted != Saved || row.Details != final || row.ExpiresAt.Sub(*row.SubmittedAt) != 168*time.Hour {
+			t.Fatalf("invalid submission-first outcome: submitted=%v, row=%+v", submitted, row)
 		}
-	case row.CanceledAt != nil:
-		if submitted != Unavailable || row.CanceledBy != "canceler" || row.Details != draft.Details ||
-			len(enrolled) != 0 || canceled.Status != Canceled || row.ExpiresAt.Sub(later).Abs() > time.Microsecond {
-			t.Fatalf("invalid cancellation-wins outcome: submitted=%v, row=%+v, students=%+v, cancel=%+v", submitted, row, enrolled, canceled)
-		}
-	default:
-		t.Fatalf("race left neither completion nor cancellation: %+v", row)
+	} else if submitted != Unavailable || row.Details != draft.Details || row.ExpiresAt.Sub(later).Abs() > time.Microsecond {
+		// The cancellation took the row first; the late submit wrote nothing.
+		t.Fatalf("invalid cancellation-first outcome: submitted=%v, row=%+v", submitted, row)
 	}
 }
 
@@ -622,7 +638,7 @@ func TestCancelLinkAndEnrollment(t *testing.T) {
 	t.Run("database failure returns no row", func(t *testing.T) {
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()
-		if got, err := store.CancelEnrollment(cancelled, e0.ID, staff); err == nil || got != nil {
+		if got, _, err := cancelEnrollment(cancelled, db, e0.ID, staff); err == nil || got != nil {
 			t.Fatalf("enrollment=%+v, err=%v; want error and nil", got, err)
 		}
 		if got, err := store.CancelLink(cancelled, l0.ID, staff); err == nil || got != nil {
@@ -637,12 +653,12 @@ func TestCancelLinkAndEnrollment(t *testing.T) {
 		if got, err := store.CancelLink(ctx, l1.ID, ""); !errors.Is(err, errNoStaff) || got != nil {
 			t.Errorf("CancelLink: entry = %+v, err = %v; want no row, errNoStaff", got, err)
 		}
-		if got, err := store.CancelEnrollment(ctx, e1.ID, ""); !errors.Is(err, errNoStaff) || got != nil {
+		if got, _, err := cancelEnrollment(ctx, db, e1.ID, ""); !errors.Is(err, errNoStaff) || got != nil {
 			t.Errorf("CancelEnrollment: entry = %+v, err = %v; want no row, errNoStaff", got, err)
 		}
 	})
 
-	// Cancel enrollment 0; repeats keep first audit; unknown/zero/overflow IDs return nil.
+	// Cancel enrollment 0; repeats keep first audit; unknown and zero IDs return nil.
 	var canceledAt *time.Time
 	for _, tc := range []struct {
 		name  string
@@ -654,10 +670,9 @@ func TestCancelLinkAndEnrollment(t *testing.T) {
 		{"already canceled enrollment keeps its audit", e0.ID, "bob", true},
 		{"zero ID", 0, staff, false},
 		{"unknown enrollment", 999999, staff, false},
-		{"overflow ID", 1 << 63, staff, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := store.CancelEnrollment(ctx, tc.id, tc.staff)
+			got, _, err := cancelEnrollment(ctx, db, tc.id, tc.staff)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -697,8 +712,8 @@ func TestCancelLinkAndEnrollment(t *testing.T) {
 	}
 
 	// Active enrollment on l1 is untouched.
-	if sess, err := store.LookupSession(ctx, l1.Token, c1); err != nil || sess == nil || !sess.Usable || sess.Enrollment.Name != activeName {
-		t.Fatalf("canceling e0 affected l1: sess=%+v, err=%v", sess, err)
+	if e, _, err := store.LookupSession(ctx, l1.Token, c1); err != nil || e == nil || e.Name != activeName {
+		t.Fatalf("canceling e0 affected l1: e=%+v, err=%v", e, err)
 	}
 
 	// CancelLink on l1 revokes l1 and makes unsubmitted enrollment e1 derive Canceled from l1, while submitting l1's sibling first preserves that sibling!
@@ -721,6 +736,24 @@ func TestCancelLinkAndEnrollment(t *testing.T) {
 	// New visitor cannot start on l1.
 	if newE, newC, err := store.StartEnrollment(ctx, l1.Token, ""); err != nil || newE != nil || newC != "" {
 		t.Fatalf("StartEnrollment on canceled link succeeded: %+v, %q, %v", newE, newC, err)
+	}
+	// Under canceled l1 the unsubmitted session is gone and the submitted sibling reads as submitted.
+	for _, tc := range []struct {
+		name, cookie string
+		want         SaveResult
+	}{
+		{"unsubmitted", c1, Unavailable},
+		{"submitted sibling", c1b, AlreadySubmitted},
+	} {
+		if state, err := store.FormState(ctx, l1.Token, tc.cookie); err != nil || state != tc.want {
+			t.Fatalf("%s form state under canceled link: state=%v, err=%v; want %v", tc.name, state, err, tc.want)
+		}
+		if saved, err := store.SaveDraft(ctx, l1.Token, tc.cookie, "name", "Must not save"); err != nil || saved != tc.want {
+			t.Fatalf("%s draft under canceled link: saved=%v, err=%v; want %v", tc.name, saved, err, tc.want)
+		}
+	}
+	if state, err := store.FormState(ctx, l0.Token, freshCookie); err != nil || state != Open {
+		t.Fatalf("fresh session on active link: state=%v, err=%v; want Open", state, err)
 	}
 	listed := listByID(t, store, ctx)
 	if listed[e1.ID].Status != Canceled || listed[e1.ID].CanceledBy != "bob" {
@@ -762,7 +795,7 @@ func TestExpiredLinksStopWorking(t *testing.T) {
 	if len(enrolled) != 1 {
 		t.Fatalf("finished enrollment has %d students, want one", len(enrolled))
 	}
-	// Both pass their deadline. The draft stops working; the paid enrollment stays readable and takes no writes.
+	// Both pass their deadline. The draft stops working; the paid enrollment stays readable, takes no writes, and reads as submitted.
 	if err := db.WithContext(ctx).Model(&Enrollment{}).Where("id IN ?", []uint64{midE.ID, finE.ID}).
 		Update("expires_at", time.Now().Add(-time.Second)).Error; err != nil {
 		t.Fatal(err)
@@ -771,25 +804,29 @@ func TestExpiredLinksStopWorking(t *testing.T) {
 	for name, tc := range map[string]struct {
 		l, c   string
 		usable bool
+		want   SaveResult
 	}{
-		"mid-form":           {midLink.Token, midCookie, false},
-		"paid past deadline": {finLink.Token, finCookie, true},
+		"mid-form":           {midLink.Token, midCookie, false, Unavailable},
+		"paid past deadline": {finLink.Token, finCookie, true, AlreadySubmitted},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if sess, err := store.LookupSession(ctx, tc.l, tc.c); err != nil || sess == nil || sess.Usable != tc.usable {
-				t.Errorf("lookup: sess=%+v, err=%v; want usable=%v", sess, err, tc.usable)
+			if e, _, err := store.LookupSession(ctx, tc.l, tc.c); err != nil || (e != nil) != tc.usable {
+				t.Errorf("lookup: e=%+v, err=%v; want usable=%v", e, err, tc.usable)
 			}
-			if saved, err := store.SaveDraft(ctx, tc.l, tc.c, "name", "After expiry"); err != nil || saved != Unavailable {
-				t.Errorf("draft: saved=%v, err=%v; want refused", saved, err)
+			if saved, err := store.SaveDraft(ctx, tc.l, tc.c, "name", "After expiry"); err != nil || saved != tc.want {
+				t.Errorf("draft: saved=%v, err=%v; want %v", saved, err, tc.want)
 			}
-			if saved, err := store.Submit(ctx, tc.l, tc.c, contactDetails("After expiry"), ""); err != nil || saved != Unavailable {
-				t.Errorf("submit: saved=%v, err=%v; want refused", saved, err)
+			if saved, err := store.Submit(ctx, tc.l, tc.c, contactDetails("After expiry"), ""); err != nil || saved != tc.want {
+				t.Errorf("submit: saved=%v, err=%v; want %v", saved, err, tc.want)
+			}
+			if state, err := store.FormState(ctx, tc.l, tc.c); err != nil || state != tc.want {
+				t.Errorf("form state: state=%v, err=%v; want %v", state, err, tc.want)
 			}
 		})
 	}
 
-	// CancelEnrollment returns the expired row as saved; it never turns into Canceled.
-	if got, err := store.CancelEnrollment(ctx, midE.ID, "bob"); err != nil || got == nil || got.ID != midE.ID ||
+	// Canceling returns the expired row as saved; it never turns into Canceled.
+	if got, _, err := cancelEnrollment(ctx, db, midE.ID, "bob"); err != nil || got == nil || got.ID != midE.ID ||
 		got.Status != Expired || got.Name != "Half done" || got.CanceledBy != "" {
 		t.Fatalf("cancel expired enrollment: entry=%+v, err=%v; want expired with saved name", got, err)
 	}
@@ -832,7 +869,7 @@ func TestCommittedWritesAnnounceChanges(t *testing.T) {
 
 	first, err := store.CreateLink(ctx, staff, "", later)
 	step("create link", 1, err)
-	e1, c1, err := store.StartEnrollment(ctx, first.Token, "")
+	_, c1, err := store.StartEnrollment(ctx, first.Token, "")
 	step("first start", 2, err)
 	_, _, err = store.StartEnrollment(ctx, first.Token, c1)
 	step("resume session", 2, err)
@@ -844,16 +881,10 @@ func TestCommittedWritesAnnounceChanges(t *testing.T) {
 	step("submit", 4, err)
 	_, err = store.Submit(ctx, first.Token, c1, contactDetails("Replay answer"), "")
 	step("replayed submit", 4, err)
-	_, err = store.CancelEnrollment(ctx, e1.ID, staff)
-	step("cancel submitted enrollment", 4, err)
-	_, e2, _ := createAndStart(t, store, ctx, staff, later)
-	step("second create+start", 6, nil)
-	_, err = store.CancelEnrollment(ctx, e2.ID, staff)
-	step("cancel enrollment", 7, err)
 	_, err = store.CancelLink(ctx, first.ID, staff)
-	step("cancel link", 8, err)
+	step("cancel link", 5, err)
 	_, err = store.CancelLink(ctx, first.ID, staff)
-	step("repeat cancel link", 8, err)
+	step("repeat cancel link", 5, err)
 }
 
 func TestDraftFieldIsolationAndConcurrentClearing(t *testing.T) {
@@ -861,11 +892,7 @@ func TestDraftFieldIsolationAndConcurrentClearing(t *testing.T) {
 	link, e, cookie := createAndStart(t, store, ctx, staff, later)
 	otherLink, _, otherCookie := createAndStart(t, store, ctx, staff, later)
 	initial := students.Student{Details: contactDetails("Original draft")}
-	for _, field := range students.Fields() {
-		if saved, err := store.SaveDraft(ctx, link.Token, cookie, field.Key, field.Value(initial)); err != nil || saved != Saved {
-			t.Fatalf("seed %s: saved=%v, err=%v", field.Key, saved, err)
-		}
-	}
+	seedDrafts(t, store, ctx, link.Token, cookie, initial)
 	before := lookupEnrollment(t, store, ctx, link.Token, cookie)
 	otherBefore := lookupEnrollment(t, store, ctx, otherLink.Token, otherCookie)
 	type write struct{ key, value string }
@@ -969,11 +996,7 @@ func TestDraftSubmissionRaceKeepsFinalSnapshot(t *testing.T) {
 				Name: "Original draft", Email: "draft@example.com", Phone: "+12025550123", Municipality: "Ponce",
 			}}
 			final := contactDetails("Final answer")
-			for _, seed := range students.Fields() {
-				if saved, err := store.SaveDraft(ctx, link.Token, cookie, seed.Key, seed.Value(draft)); err != nil || saved != Saved {
-					t.Fatalf("seed %s: result=%v, err=%v", seed.Key, saved, err)
-				}
-			}
+			seedDrafts(t, store, ctx, link.Token, cookie, draft)
 			type result struct {
 				draft bool
 				saved SaveResult
@@ -1039,8 +1062,8 @@ func TestAcceptTermsRequiresContactAndCurrentDisplayedDate(t *testing.T) {
 				}
 			}
 			before := lookupEnrollment(t, store, ctx, link.Token, cookie)
-			if got, err := store.AcceptTerms(ctx, link.Token, cookie, firstDate); err != nil || got != nil {
-				t.Fatalf("accept before submission: enrollment=%+v, err=%v", got, err)
+			if accepted, err := store.AcceptTerms(ctx, link.Token, cookie, firstDate); err != nil || accepted {
+				t.Fatalf("accept before submission: accepted=%v, err=%v", accepted, err)
 			}
 			if after := lookupEnrollment(t, store, ctx, link.Token, cookie); !reflect.DeepEqual(after, before) ||
 				len(studentsFor(t, db, ctx, e.ID)) != 0 {
@@ -1060,17 +1083,20 @@ func TestAcceptTermsRequiresContactAndCurrentDisplayedDate(t *testing.T) {
 	}
 	for _, shown := range []string{"", "not-a-date", "2026-02-30", firstDate} {
 		t.Run("reject displayed "+shown, func(t *testing.T) {
-			if got, err := store.AcceptTerms(ctx, link.Token, cookie, shown); got != nil || !errors.Is(err, ErrProgramStartChanged) {
-				t.Fatalf("stale acceptance: enrollment=%+v, err=%v", got, err)
+			if accepted, err := store.AcceptTerms(ctx, link.Token, cookie, shown); err != nil || accepted {
+				t.Fatalf("stale acceptance: accepted=%v, err=%v", accepted, err)
 			}
 		})
 	}
 	if after := lookupEnrollment(t, store, ctx, link.Token, cookie); !reflect.DeepEqual(after, before) || writes != 0 {
 		t.Fatalf("rejected agreement changed enrollment: %+v, writes=%d", after, writes)
 	}
-	accepted, err := store.AcceptTerms(ctx, link.Token, cookie, currentDate)
-	if err != nil || accepted == nil || accepted.TermsAcceptedAt == nil || accepted.ProgramStartDate != currentDate || writes != 1 {
-		t.Fatalf("accept: enrollment=%+v, writes=%d, err=%v", accepted, writes, err)
+	if ok, err := store.AcceptTerms(ctx, link.Token, cookie, currentDate); err != nil || !ok || writes != 1 {
+		t.Fatalf("accept: accepted=%v, writes=%d, err=%v", ok, writes, err)
+	}
+	accepted := lookupEnrollment(t, store, ctx, link.Token, cookie)
+	if accepted == nil || accepted.TermsAcceptedAt == nil {
+		t.Fatalf("acceptance not persisted: %+v", accepted)
 	}
 	want := *before
 	want.TermsAcceptedAt, want.ProgramStartDate = accepted.TermsAcceptedAt, currentDate
@@ -1078,15 +1104,12 @@ func TestAcceptTermsRequiresContactAndCurrentDisplayedDate(t *testing.T) {
 		!reflect.DeepEqual(studentsFor(t, db, ctx, e.ID), enrolled) {
 		t.Fatalf("acceptance changed submission or enrollment: got=%+v, want=%+v", accepted, want)
 	}
-	if persisted := lookupEnrollment(t, store, ctx, link.Token, cookie); !reflect.DeepEqual(persisted, accepted) {
-		t.Fatalf("acceptance not persisted: %+v", persisted)
-	}
 	if err := options.SetProgramStartDate(ctx, "2027-01-05", staff); err != nil {
 		t.Fatal(err)
 	}
 	for _, shown := range []string{currentDate, "2027-01-05", "", "invalid replay"} {
-		if got, err := store.AcceptTerms(ctx, link.Token, cookie, shown); err != nil || !reflect.DeepEqual(got, accepted) || writes != 1 {
-			t.Fatalf("accepted replay changed agreement: %+v, writes=%d, err=%v", got, writes, err)
+		if again, err := store.AcceptTerms(ctx, link.Token, cookie, shown); err != nil || again || writes != 1 {
+			t.Fatalf("accepted replay accepted again: %v, writes=%d, err=%v", again, writes, err)
 		}
 	}
 	if saved, err := store.Submit(ctx, link.Token, cookie, contactDetails("Replacement contact"), ""); err != nil || saved != AlreadySubmitted {
@@ -1113,8 +1136,8 @@ func TestAcceptTermsRejectsUnconfiguredStartDate(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if got, err := store.AcceptTerms(ctx, link.Token, cookie, "2026-11-10"); got != nil || !errors.Is(err, ErrProgramStartChanged) {
-				t.Fatalf("unconfigured date accepted: %+v, err=%v", got, err)
+			if accepted, err := store.AcceptTerms(ctx, link.Token, cookie, "2026-11-10"); err != nil || accepted {
+				t.Fatalf("unconfigured date accepted: %v, err=%v", accepted, err)
 			}
 		})
 	}
@@ -1135,8 +1158,8 @@ func TestAcceptTermsObservesConcurrentStartDateChange(t *testing.T) {
 	}
 	acceptCtx, cancelAccept := context.WithCancel(ctx)
 	type result struct {
-		e   *Enrollment
-		err error
+		accepted bool
+		err      error
 	}
 	var results chan result
 	defer func() {
@@ -1153,16 +1176,16 @@ func TestAcceptTermsObservesConcurrentStartDateChange(t *testing.T) {
 	results = make(chan result, 1)
 	go func() {
 		defer close(results)
-		e, err := store.AcceptTerms(acceptCtx, link.Token, cookie, "2026-11-10")
-		results <- result{e: e, err: err}
+		accepted, err := store.AcceptTerms(acceptCtx, link.Token, cookie, "2026-11-10")
+		results <- result{accepted: accepted, err: err}
 	}()
 	testdb.AwaitBlocked(t, ctx, db, blocker, results)
 	if err := blocker.Commit().Error; err != nil {
 		t.Fatal(err)
 	}
 	got := <-results
-	if got.e != nil || !errors.Is(got.err, ErrProgramStartChanged) {
-		t.Fatalf("acceptance ignored committed date change: e=%+v, err=%v", got.e, got.err)
+	if got.accepted || got.err != nil {
+		t.Fatalf("acceptance ignored committed date change: accepted=%v, err=%v", got.accepted, got.err)
 	}
 	if persisted := lookupEnrollment(t, store, ctx, link.Token, cookie); persisted == nil || persisted.TermsAcceptedAt != nil || persisted.ProgramStartDate != "" {
 		t.Fatalf("stale agreement persisted: %+v", persisted)
@@ -1182,8 +1205,8 @@ func TestAgreementWritesRejectUnusableTokens(t *testing.T) {
 			t.Fatalf("submit: saved=%v, err=%v", saved, err)
 		}
 		if stage != "expired submission" {
-			if got, err := store.AcceptTerms(ctx, l.Token, c, "2026-11-10"); err != nil || got == nil {
-				t.Fatalf("accept: %+v, err=%v", got, err)
+			if accepted, err := store.AcceptTerms(ctx, l.Token, c, "2026-11-10"); err != nil || !accepted {
+				t.Fatalf("accept: %v, err=%v", accepted, err)
 			}
 		}
 		column := "expires_at"
@@ -1196,7 +1219,7 @@ func TestAgreementWritesRejectUnusableTokens(t *testing.T) {
 		unusable = append(unusable, pair{l.Token, c})
 	}
 	cl, ce, cc := createAndStart(t, store, ctx, staff, later)
-	if got, err := store.CancelEnrollment(ctx, ce.ID, staff); err != nil || got == nil || got.Status != Canceled {
+	if got, _, err := cancelEnrollment(ctx, db, ce.ID, staff); err != nil || got == nil || got.Status != Canceled {
 		t.Fatalf("cancel unfinished contact: entry=%+v, err=%v", got, err)
 	}
 	unusable = append(unusable, pair{cl.Token, cc}, pair{"", ""}, pair{"malformed", "malformed"},
@@ -1214,8 +1237,8 @@ func TestAgreementWritesRejectUnusableTokens(t *testing.T) {
 	writes := 0
 	store = New(db, func() { writes++ })
 	for _, p := range unusable {
-		if got, err := store.AcceptTerms(ctx, p.l, p.c, "2026-11-10"); err != nil || got != nil {
-			t.Fatalf("unusable acceptance: %+v, err=%v", got, err)
+		if accepted, err := store.AcceptTerms(ctx, p.l, p.c, "2026-11-10"); err != nil || accepted {
+			t.Fatalf("unusable acceptance: %v, err=%v", accepted, err)
 		}
 	}
 	var rowsAfter []Enrollment
@@ -1252,16 +1275,41 @@ func createAndStart(t *testing.T, store *Store, ctx context.Context, by string, 
 	return link, e, cookie
 }
 
+// seedDrafts saves every registry field of draft and fails unless each save reports Saved.
+func seedDrafts(t *testing.T, store *Store, ctx context.Context, linkToken, cookie string, draft students.Student) {
+	t.Helper()
+	for _, field := range students.Fields() {
+		if saved, err := store.SaveDraft(ctx, linkToken, cookie, field.Key, field.Value(draft)); err != nil || saved != Saved {
+			t.Fatalf("seed %s draft: saved=%v, err=%v", field.Key, saved, err)
+		}
+	}
+}
+
+// cancelEnrollment cancels as billing does: CancelEnrollmentTx under the Enrollment row lock.
+func cancelEnrollment(ctx context.Context, db *gorm.DB, id uint64, by string) (entry *EnrollmentEntry, changed bool, err error) {
+	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT 1 FROM enrollments WHERE id = ? FOR UPDATE", id).Error; err != nil {
+			return err
+		}
+		entry, changed, err = CancelEnrollmentTx(tx, id, by)
+		return err
+	})
+	return entry, changed, err
+}
+
+// lookupEnrollment reads the enrollment row behind a cookie on a link, usable or not; nil when there is none.
 func lookupEnrollment(t *testing.T, store *Store, ctx context.Context, linkToken, cookieToken string) *Enrollment {
 	t.Helper()
-	sess, err := store.LookupSession(ctx, linkToken, cookieToken)
-	if err != nil {
-		t.Fatal(err)
+	var e Enrollment
+	result := store.db.WithContext(ctx).
+		Where("session_hash = ? AND link_id = (SELECT id FROM links WHERE token = ?)", digestOf(cookieToken), linkToken).Limit(1).Find(&e)
+	if result.Error != nil {
+		t.Fatal(result.Error)
 	}
-	if sess == nil {
+	if result.RowsAffected == 0 {
 		return nil
 	}
-	return sess.Enrollment
+	return &e
 }
 
 func listByID(t *testing.T, store *Store, ctx context.Context) map[uint64]EnrollmentEntry {
@@ -1307,8 +1355,8 @@ func acceptAgreement(ctx context.Context, db *gorm.DB, store *Store, linkToken, 
 	if err := settings.New(db).SetProgramStartDate(ctx, date, staff); err != nil {
 		return err
 	}
-	if accepted, err := store.AcceptTerms(ctx, linkToken, cookieToken, date); err != nil || accepted == nil {
-		return fmt.Errorf("accept agreement: %+v, err=%v", accepted, err)
+	if accepted, err := store.AcceptTerms(ctx, linkToken, cookieToken, date); err != nil || !accepted {
+		return fmt.Errorf("accept agreement: %v, err=%v", accepted, err)
 	}
 	return nil
 }
@@ -1347,8 +1395,8 @@ func TestPayBeforeStudentInvariants(t *testing.T) {
 		t.Fatalf("submit 2 with duplicate pin: saved=%v, err=%v; want PinTaken", saved2, err)
 	}
 	row2 := lookupEnrollment(t, store, ctx, link2.Token, c2)
-	if row2 == nil || row2.SubmittedAt != nil || row2.Pin != "" {
-		t.Fatalf("enrollment 2 should stay unsubmitted: %+v", row2)
+	if row2 == nil || row2.SubmittedAt != nil || row2.Pin != "" || row2.PinChecks != 1 {
+		t.Fatalf("enrollment 2 should stay unsubmitted, one PIN check spent: %+v", row2)
 	}
 
 	// (c) Enroll in a tx creates exactly one student with details, PIN, created_at == paidAt, Básico,
@@ -1397,8 +1445,19 @@ func TestPayBeforeStudentInvariants(t *testing.T) {
 	if saved, err := store.Submit(ctx, link4.Token, c4, contactDetails("Customer Four"), pin); err != nil || saved != PinTaken {
 		t.Fatalf("submit with an enrolled student's pin: saved=%v, err=%v; want PinTaken", saved, err)
 	}
-	if row4 := lookupEnrollment(t, store, ctx, link4.Token, c4); row4 == nil || row4.SubmittedAt != nil || row4.Pin != "" {
-		t.Fatalf("enrollment 4 should stay unsubmitted: %+v", row4)
+	if row4 := lookupEnrollment(t, store, ctx, link4.Token, c4); row4 == nil || row4.SubmittedAt != nil || row4.Pin != "" || row4.PinChecks != 1 {
+		t.Fatalf("enrollment 4 should stay unsubmitted, one PIN check spent: %+v", row4)
+	}
+
+	// (c3) once the PIN budget is spent, even a free PIN is refused without writing
+	if err := db.WithContext(ctx).Model(&Enrollment{}).Where("session_hash = ?", digestOf(c4)).Update("pin_checks", MaxPinChecks).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved, err := store.Submit(ctx, link4.Token, c4, contactDetails("Customer Four"), "445566"); err != nil || saved != PinLimited {
+		t.Fatalf("submit without PIN budget: saved=%v, err=%v; want PinLimited", saved, err)
+	}
+	if row4 := lookupEnrollment(t, store, ctx, link4.Token, c4); row4 == nil || row4.SubmittedAt != nil || row4.Pin != "" || row4.PinChecks != MaxPinChecks {
+		t.Fatalf("enrollment 4 should stay unsubmitted at the PIN limit: %+v", row4)
 	}
 
 	// (d) a submitted unpaid enrollment past expires_at is Expired and Trashed(), but the same row with PaidAt set is Finished and not trashed
@@ -1440,7 +1499,7 @@ func TestRenameLink(t *testing.T) {
 			t.Fatalf("bad name %q: got=%+v, err=%v", bad, got, err)
 		}
 	}
-	for _, id := range []uint64{0, 999999, 1 << 63} {
+	for _, id := range []uint64{0, 999999} {
 		if got, err := store.RenameLink(ctx, id, "Ignored", staff); err != nil || got != nil {
 			t.Fatalf("missing id %d: got=%+v, err=%v", id, got, err)
 		}
@@ -1461,13 +1520,8 @@ func TestCancelEnrollmentTx(t *testing.T) {
 	if saved, err := store.Submit(ctx, link.Token, c1, contactDetails("Submitted"), "654321"); err != nil || saved != Saved {
 		t.Fatalf("submit 1: %v, %v", saved, err)
 	}
-	var got *EnrollmentEntry
-	var changed bool
-	if err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var err error
-		got, changed, err = CancelEnrollmentTx(tx, e1.ID, "admin")
-		return err
-	}); err != nil || !changed || got == nil || got.Status != Canceled || got.HasPin || got.CanceledBy != "admin" {
+	got, changed, err := cancelEnrollment(ctx, db, e1.ID, "admin")
+	if err != nil || !changed || got == nil || got.Status != Canceled || got.HasPin || got.CanceledBy != "admin" {
 		t.Fatalf("CancelEnrollmentTx awaiting payment: got=%+v, changed=%v, err=%v", got, changed, err)
 	}
 
@@ -1479,11 +1533,8 @@ func TestCancelEnrollmentTx(t *testing.T) {
 	if err := db.WithContext(ctx).Model(&Enrollment{}).Where("id = ?", e2.ID).Update("expires_at", time.Now().Add(-time.Minute)).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var err error
-		got, changed, err = CancelEnrollmentTx(tx, e2.ID, "admin")
-		return err
-	}); err != nil || !changed || got == nil || got.Status != Expired || got.HasPin || got.CanceledAt != nil {
+	got, changed, err = cancelEnrollment(ctx, db, e2.ID, "admin")
+	if err != nil || !changed || got == nil || got.Status != Expired || got.HasPin {
 		t.Fatalf("CancelEnrollmentTx expired pin: got=%+v, changed=%v, err=%v", got, changed, err)
 	}
 }

@@ -19,9 +19,13 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// providerBudget bounds one call's synchronous provider work and stays under the server's
-// 10 s write timeout; slower outcomes are recorded and resumed rather than holding the browser.
-const providerBudget = 8 * time.Second
+const (
+	// providerBudget bounds one call's synchronous provider work and stays under the server's
+	// 10 s write timeout; slower outcomes are recorded and resumed rather than holding the browser.
+	providerBudget = 8 * time.Second
+	// persistBudget bounds the detached write that records a provider outcome (persistCtx).
+	persistBudget = 5 * time.Second
+)
 
 // Bounded review reasons.
 const (
@@ -33,34 +37,32 @@ const (
 	reviewConfigurationMismatch    = "configuration_mismatch"
 )
 
-// Exported error values.
+// Error values.
 var (
-	ErrUnavailable     = errors.New("resource unavailable")
-	ErrPlanLocked      = errors.New("plan is locked")
-	ErrPaymentPending  = errors.New("payment is pending")
-	ErrNotSuspended    = errors.New("student is not suspended")
-	ErrNeedsReview     = errors.New("financial state needs review")
-	ErrInvoiceNotReady = errors.New("invoice is not ready")
+	ErrUnavailable     = errors.New("billing: resource unavailable")
+	ErrPlanLocked      = errors.New("billing: plan is locked")
+	ErrPaymentPending  = errors.New("billing: payment is pending")
+	ErrNotSuspended    = errors.New("billing: student is not suspended")
+	ErrNeedsReview     = errors.New("billing: financial state needs review")
+	ErrInvoiceNotReady = errors.New("billing: invoice is not ready")
 	ErrContactLocked   = errors.New("billing: contact is locked")
 	ErrCancelBlocked   = errors.New("billing: payment in progress")
+	ErrUnknownPlan     = errors.New("billing: unknown payment plan")
+
+	errStaffRequired = errors.New("billing: staff identity is required")
 )
 
 var forUpdate = clause.Locking{Strength: clause.LockingStrengthUpdate}
 
 // persistCtx outlives the request so work that follows a committed outcome (recording a provider result, syncing a provider update) still runs.
 func persistCtx(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	return context.WithTimeout(context.WithoutCancel(ctx), persistBudget)
 }
 
 // firstRow loads the first row matching query; found is false when none match.
 func firstRow(db *gorm.DB, dest any, query string, args ...any) (found bool, err error) {
 	result := db.Where(query, args...).Limit(1).Find(dest)
 	return result.RowsAffected > 0, result.Error
-}
-
-// validID reports whether id fits a positive PostgreSQL BIGINT primary key.
-func validID(id uint64) bool {
-	return id > 0 && id <= 1<<63-1
 }
 
 // require turns a missing row into ErrUnavailable.
@@ -71,51 +73,11 @@ func require(found bool, err error) error {
 	return err
 }
 
-// CheckoutResult returns the outcome of initiating or resuming a checkout attempt.
-type CheckoutResult struct {
-	URL     string
-	Pending bool
-	Funded  bool
-}
-
-// SummaryInstallment represents the status of one tuition installment in Summary.
-type SummaryInstallment struct {
-	ID           uint64
-	Number       int
-	AmountCents  int64
-	DueAt        *time.Time
-	Status       string
-	PaidAt       *time.Time
-	InvoiceReady bool
-}
-
-// Summary exposes financial standing, active/suspended status, and review reasons.
-type Summary struct {
-	PlanID                         string
-	PlanName                       string
-	TotalCents                     int64
-	Funded                         bool
-	FundedAt                       *time.Time
-	CashPaidCents                  int64
-	TuitionPaidCents               int64
-	OtherSettlementCents           int64
-	RemainingTuitionCents          int64
-	OverdueTuitionCents            int64
-	ReinstatementFeeRemainingCents int64
-	ReinstatementFeeID             uint64
-	ReinstatementInvoiceReady      bool
-	Installments                   []SummaryInstallment
-	IsActive                       bool
-	IsSuspended                    bool
-	LastSyncedAt                   *time.Time
-	ReviewReasons                  []string
-}
-
-// ReturnStatus holds customer-facing status returned from Stripe-hosted checkout.
-// Contains only payment status and amount; never leaks student identity, contact, or history.
-type ReturnStatus struct {
-	Status      string
-	AmountCents int64
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // Service manages tuition billing, Stripe operations, webhooks, and background worker reconciliation.
@@ -162,12 +124,9 @@ func (s *Service) wakeWorker() {
 	}
 }
 
-// contractFor finds the contract behind a student; unknown or out-of-range IDs are unavailable.
+// contractFor finds the contract behind a student; an unknown student is unavailable.
 func (s *Service) contractFor(ctx context.Context, studentID uint64) (Contract, error) {
 	var c Contract
-	if !validID(studentID) {
-		return c, ErrUnavailable
-	}
 	err := require(firstRow(s.db.WithContext(ctx), &c, "enrollment_id = (SELECT enrollment_id FROM students WHERE id = ?)", studentID))
 	return c, err
 }
@@ -190,9 +149,6 @@ func (s *Service) InvoiceURL(ctx context.Context, studentID, obligationID uint64
 	c, err := s.contractFor(ctx, studentID)
 	if err != nil {
 		return "", err
-	}
-	if !validID(obligationID) {
-		return "", ErrUnavailable
 	}
 	var o Obligation
 	if err := require(firstRow(s.db.WithContext(ctx), &o, "id = ? AND contract_id = ?", obligationID, c.ID)); err != nil {

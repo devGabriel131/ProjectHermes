@@ -21,6 +21,7 @@ var webhookEvents = map[string]struct{}{
 	"checkout.session.async_payment_succeeded": {},
 	"checkout.session.async_payment_failed":    {},
 	"checkout.session.expired":                 {},
+	"payment_intent.payment_failed":            {},
 	"invoice.created":                          {},
 	"invoice.finalized":                        {},
 	"invoice.finalization_failed":              {},

@@ -5,7 +5,7 @@ How tuition money is modeled and moved: one hosted Checkout for the first paymen
 ## Funding model
 
 - **No Stripe subscription.** The first installment is paid through a hosted Checkout Session in `payment` mode ([Checkout](checkout.md)). Each later installment is a one-off Stripe invoice created as a draft right after funding, then armed with `auto_advance` and `automatically_finalizes_at` set to the installment's stored due date, which is Puerto Rico midnight ([Invoices](invoices.md)). Stripe promises no exact second for finalization. A due date already in the past is finalized immediately.
-- **Funding is the moment a student exists.** `Service.fund` runs one transaction that sets `billing_contracts.funded_at` (anchored to the Stripe invoice's `paid_at`, never a local clock), sets the due dates, records the first `billing_payments` row, moves the attempt to `paid`, and calls `links.Enroll`, which creates the Student, sets `enrollments.paid_at` and moves the PIN. See [Lifecycle](../domain/lifecycle.md) for the vocabulary.
+- **Funding is the moment an enrollment's student exists.** `Service.fund` runs one transaction that sets `billing_contracts.funded_at` (anchored to the Stripe invoice's `paid_at`, never a local clock), sets the due dates, records the first `billing_payments` row, moves the attempt to `paid`, and calls `links.Enroll`, which creates the Student, sets `enrollments.paid_at` and moves the PIN. Staff can also add students directly (`students.Store.Add`); those have no enrollment and no contract. See [Lifecycle](../domain/lifecycle.md) for the vocabulary.
 - **Funding comes only from verified Stripe state.** `fund` works from objects just retrieved from Stripe: the Session with its PaymentIntent, its generated invoice and that invoice's payments. It does not fund unless the invoice is `paid` with a paid-at time, the amount paid equals the attempt's first amount, the invoice matches the quoted one-line USD invoice, and a paid invoice payment belongs to the Session's PaymentIntent. Until then the sync fails retryably (the attempt moves to `processing` where Stripe's data lags) and a mismatch also sets a review ([Reviews](reviews.md)). Webhook bodies are never applied ([Webhooks](webhooks.md)); the return page only reads the stored attempt and never funds.
 - **The app never charges a card.** Stripe collects each armed invoice from the card saved at the first payment. The reinstatement fee is the exception in kind: a `send_invoice` invoice the payer settles on Stripe's hosted page ([Suspension](suspension.md)).
 
@@ -18,7 +18,7 @@ How tuition money is modeled and moved: one hosted Checkout for the first paymen
 | Staff Reconcile | `ReconcileStudent` -> `reconcileContract` | Same sync pass, under the staff lease |
 | Staff Reinstatement | `RequestReinstatement` -> `reconcileContract` -> `requestFee` | Same sync pass first, then the fee |
 
-The two staff paths run the full contract sync, so they can create or arm invoices (a past-due one is finalized at once, so Stripe then collects), replay a Checkout create, and evaluate deadlines and reactivation. In production they locate the contract through the `students` row (`contractFor`), and a Student exists only after `fund` committed. They therefore only ever re-sync an already funded contract, for example to finish invoice scheduling after a crash. Tests seed a Student before funding to reach those entry points (`setupTestEnvironment`).
+The two staff paths run the full contract sync, so they can create or arm invoices (a past-due one is finalized at once, so Stripe then collects), replay a Checkout create, and evaluate deadlines and reactivation. In production they locate the contract through the `students` row (`contractFor`), and an enrollment's Student exists only after `fund` committed. They therefore only ever re-sync an already funded contract, for example to finish invoice scheduling after a crash. Tests seed a Student before funding to reach those entry points (`setupTestEnvironment`).
 
 ## Components
 
@@ -65,7 +65,7 @@ Amounts are integer cents; the Stripe price behind each amount is in [Stripe set
 
 ### Due dates
 
-`Plan.Schedule(anchor)` returns one local-midnight date per installment in `payments.PuertoRico` (UTC-4, no daylight saving):
+`Plan.Schedule(anchor)` returns one local-midnight date per installment in `puertorico.Zone` (UTC-4, no daylight saving):
 
 1. The anchor day is the Puerto Rico calendar day of the anchor instant, so `2026-10-01T03:59:59Z` is September 30 and `2026-10-01T04:00:00Z` is October 1.
 2. Installment *i* (from 0) falls in the anchor's month plus *i*, on the anchor's day, clamped to that month's last day.
@@ -80,21 +80,25 @@ Amounts are integer cents; the Stripe price behind each amount is in [Stripe set
 
 The customer's payments page previews `Plan.Schedule` anchored to today ([Customer flow](../domain/customer-flow.md)). The real dates are computed once inside the funding transaction, anchored to `fundedAt`, from the contract's persisted amounts. Installment 1 is dated the funding day and is already settled by that payment.
 
+With `INSTALLMENT_SPACING` set (sandbox testing only, [Configuration](../operations/configuration.md)), `Schedule` skips the monthly rules: installment *i* is the anchor plus *i* × the spacing, an exact instant in `puertorico.Zone` rather than a midnight. Installment 1 is still the funding instant.
+
 ## File map
 
 Everything lives in `internal/billing` unless stated.
 
 | File | Owns |
 |---|---|
-| `billing.go` | Package comment, `Service` and `New`, `providerBudget`, review-reason constants, the exported error block, shared helpers (`forUpdate`, `persistCtx`, `outcomeUnknown`, `firstRow`, `require`), result and summary types, staff actions `InvoiceURL`, `PortalURL`, `ReconcileStudent` |
-| `checkout.go` | `StartCheckout`, the locked decision transaction, Session creation and expiry, attempt state writes ([Checkout](checkout.md)) |
-| `contact.go` | `TouchContract`, `UpdateContact`, `ContactEditable` and the in-flight attempt states that lock contact edits |
-| `suspension.go` | 14-day deadline evaluation, episodes, correction, fee cancellation, reactivation, `RequestReinstatement` ([Suspension](suspension.md)) |
-| `summary.go` | Read models: `ForEnrollment`, `ForStudent`, and `ReturnStatus` for the token-free return page |
+| `billing.go` | Package comment, `Service` and `New`, `providerBudget` and `persistBudget`, review-reason constants, the error block, shared helpers (`forUpdate`, `persistCtx`, `firstRow`, `require`, `deref`), staff actions `InvoiceURL`, `PortalURL`, `ReconcileStudent` |
+| `checkout.go` | `StartCheckout` and `CheckoutResult`, the locked decision transaction, Session creation and expiry, attempt state writes, `outcomeUnknown` ([Checkout](checkout.md)); the worker's attempt sync, funding and payment mirroring ([Worker](worker.md)) |
+| `cancel.go` | `CancelEnrollment`, the billing-safe staff cancellation of an enrollment |
+| `contact.go` | `TouchContract`, `UpdateContact`, `ContactEditable`, the `contactEditable` predicate and the in-flight attempt states that lock contact edits |
+| `invoices.go` | Invoice mirroring, later-invoice and fee creation, fee cancellation ([Invoices](invoices.md)) |
+| `suspension.go` | 14-day deadline evaluation, episodes, correction, reactivation, `RequestReinstatement` ([Suspension](suspension.md)) |
+| `summary.go` | Read models and their types: `Summary` with `ForEnrollment` and `ForStudent`, and `ReturnStatus` with `ReturnStatus` and `CancelStatus` for the token-free return page |
 | `overview.go` | Dashboard figures ([Dashboard](../management/dashboard.md)) |
 | `webhook.go` | Webhook HTTP intake and the event allowlist ([Webhooks](webhooks.md)) |
-| `worker.go` | Worker loop and queues, event routing, leases, attempts and funding, payments, invoice sync, invoice creation, contract reconciliation, `markSynced`, `nextSyncAt` ([Worker](worker.md)) |
-| `stripe.go` | `Config` and its validation, `LoadConfigFromEnv`, price `Catalog` and `LoadCatalog`, `NewStripeClient`, `stripeLocale`, `ReinstatementFeeCents` |
+| `worker.go` | Worker loop and queues, event routing, leases, contract reconciliation, `markSynced`, `nextSyncAt` ([Worker](worker.md)) |
+| `stripe.go` | `Config` and its validation, `LoadConfigFromEnv`, price `Catalog` and `LoadCatalog`, `NewStripeClient`, `stripeLocale`, `reinstatementFeeCents` |
 | `models.go` | The six tables `billing_contracts`, `billing_obligations`, `billing_checkout_attempts`, `billing_payments`, `billing_suspensions`, `billing_webhook_events`; constraints are tabulated in [Data model](../data-model.md) |
 | `export_test.go` | `DrainForTest`, one deterministic worker pass for integration tests |
 | `billingtest/billingtest.go` | `billingtest.New`: a service over a fake Stripe HTTP handler, a valid sandbox `Config` and a full `Catalog`, used by billing, customer, management and main wiring integration tests (logging tests use its `Config`, `Catalog` and `Client` components) |
@@ -103,7 +107,7 @@ Everything lives in `internal/billing` unless stated.
 
 | Term | Meaning |
 |---|---|
-| Contract | `billing_contracts` row, one per Enrollment (`enrollment_id` is unique). Exists from the first Checkout start; the Student exists only once it is funded |
+| Contract | `billing_contracts` row, one per Enrollment (`enrollment_id` is unique). Exists from the first Checkout start; the enrollment's Student exists only once the contract is funded |
 | Obligation | `billing_obligations` row: a numbered `tuition` installment or a `reinstatement` fee |
 | Attempt | `billing_checkout_attempts` row: one hosted Checkout creation and payment ([Checkout](checkout.md)) |
 | Review reason | `Contract.ReviewReason` and `Obligation.ReviewReason` draw from one set of reasons (the `review*` constants in `billing.go`). `Summary.ReviewReasons` merges both without duplicates. Which workflow sets and clears each reason is in [Reviews](reviews.md) |
@@ -115,7 +119,7 @@ Everything lives in `internal/billing` unless stated.
 | Name | Where | Meaning |
 |---|---|---|
 | `Plan.Schedule` | `internal/payments/plans.go` | Installment due dates for a plan |
-| `scheduleInvoices` | `worker.go` | Creates and arms the later invoices ([Invoices](invoices.md)) |
+| `scheduleInvoices` | `invoices.go` | Creates and arms the later invoices ([Invoices](invoices.md)) |
 | `nextSyncAt` and `next_sync_at` | `worker.go`, `billing_contracts` | When the contract is next re-synced |
 | `scheduled_finalization_at` | `billing_obligations` | The due date an invoice was armed with (or `time.Now()` for the reinstatement fee); its presence marks arming as done |
 
@@ -124,26 +128,29 @@ Everything lives in `internal/billing` unless stated.
 - **`billing.New` validates `Config` again** although `LoadConfigFromEnv` already did. `New` is the public constructor that tests call directly (`billingtest.New`), so validation belongs at that boundary.
 - **Stored webhook events carry no payload.** The worker always re-reads the current Stripe object, so storing bodies would add personal data and staleness for no benefit ([Webhooks](webhooks.md)).
 - **Staff actions share the worker's contract lease** through `withStaffContract`. A contract a worker holds is mid-provider-work, so staff get `ErrPaymentPending` and retry instead of racing it.
-- **`ContactEditable` and `UpdateContact` share one predicate.** `ContactEditable` is a lock-free pre-check that only shows or hides the edit link; `UpdateContact` is the authoritative locked check ([Checkout](checkout.md) lists the locking states).
+- **`ContactEditable` and `UpdateContact` share one predicate, `contactEditable`** (contract funded, or an attempt in flight; [Checkout](checkout.md) lists the locking states). `ContactEditable` takes the Enrollment and answers `true` without a query until its terms are accepted: checkout requires them, so no contract can exist yet. After that it runs the predicate as a lock-free pre-check that only shows or hides the edit link. `UpdateContact` is the authoritative check, in one transaction: lock the usable, submitted Enrollment `FOR UPDATE` (the lock checkout and funding take first), run the predicate (`ErrContactLocked` when locked), `touch` the contract so the worker syncs the Stripe Customer, then write the contact.
 - **`ReturnStatus` is keyed only by `session_id`.** It is token-free by design and exposes only a status and the first amount.
-- **Billing-safe cancellation delegates to `billing.Service.CancelEnrollment`.** Staff cancellation of enrollments locks the contract and active checkout attempts, expires any open Stripe Checkout session (never canceling an in-flight `processing`/`creating`/`uncertain`/`expiring` attempt, returning `ErrCancelBlocked`), and calls `links.CancelEnrollmentTx` to cancel `InProgress`/`AwaitingPayment` enrollments or clear an `Expired` submission's PIN.
+- **Billing-safe cancellation delegates to `billing.Service.CancelEnrollment`.** It requires a staff identity, then in one transaction locks the Enrollment, its Contract and, for an unfunded contract, the active Checkout attempt. An `open` attempt with a Session is claimed `expiring`; after commit Stripe expires it and the loop starts over (an unresolved or paid Session answers `ErrCancelBlocked`). Any other active attempt answers `ErrCancelBlocked`, so no paid enrollment or held PIN is lost. With no active attempt it calls `links.CancelEnrollmentTx`, which decides from the enrollment's status: `InProgress` and `AwaitingPayment` are canceled, an `Expired` submission only loses its PIN, and any other enrollment is returned unchanged. `CancelEnrollment` itself never checks the enrollment's status.
 
 ## Source
 
-- `internal/billing/billing.go`: `Service`, `New`, `providerBudget`, `ErrPaymentPending`, `ErrContactLocked`, `ErrCancelBlocked`, `forUpdate`, `persistCtx`, `outcomeUnknown`, `firstRow`, `require`, `Summary`, `contractFor`, `withStaffContract`, `InvoiceURL`, `PortalURL`, `ReconcileStudent`
+- `internal/billing/billing.go`: `Service`, `New`, `providerBudget`, `persistBudget`, `ErrPaymentPending`, `ErrContactLocked`, `ErrCancelBlocked`, `ErrUnknownPlan`, `errStaffRequired`, `forUpdate`, `persistCtx`, `firstRow`, `require`, `deref`, `contractFor`, `withStaffContract`, `InvoiceURL`, `PortalURL`, `ReconcileStudent`
 - `internal/billing/cancel.go`: `CancelEnrollment`
-- `internal/billing/checkout.go`: `StartCheckout`
-- `internal/billing/contact.go`: `TouchContract`, `UpdateContact`, `ContactEditable`, `inFlightAttemptStates`
-- `internal/billing/summary.go`: `ForEnrollment`, `ForStudent`, `ReturnStatus`, `addReason`
+- `internal/billing/checkout.go`: `StartCheckout`, `CheckoutResult`, `outcomeUnknown`, `syncAttempt`, `fund`
+- `internal/billing/contact.go`: `TouchContract`, `UpdateContact`, `ContactEditable`, `contactEditable`, `touch`, `inFlightAttemptStates`
+- `internal/billing/summary.go`: `Summary`, `ForEnrollment`, `ForStudent`, `ReturnStatus`, `addReason`
 - `internal/billing/overview.go`: `Overview`
 - `internal/billing/webhook.go`: `Webhook`, `webhookEvents`
-- `internal/billing/worker.go`: `fund`, `syncAttempt`, `syncContract`, `reconcileContract`, `handleEvent`, `scheduleInvoices`, `arm`, `markSynced`, `nextSyncAt`, `leased`
-- `internal/billing/stripe.go`: `Config`, `LoadConfigFromEnv`, `Catalog`, `LoadCatalog`, `NewStripeClient`, `stripeLocale`, `ReinstatementFeeCents`
+- `internal/billing/invoices.go`: `scheduleInvoices`, `arm`
+- `internal/billing/worker.go`: `syncContract`, `reconcileContract`, `handleEvent`, `markSynced`, `nextSyncAt`, `leased`
+- `internal/billing/stripe.go`: `Config`, `LoadConfigFromEnv`, `Catalog`, `LoadCatalog`, `NewStripeClient`, `stripeLocale`, `reinstatementFeeCents`
 - `internal/billing/models.go`: `Contract`, `Obligation`, `CheckoutAttempt`, `Payment`, `Suspension`, `WebhookEvent`, `ScheduledFinalizationAt`, `DeadlineEpisodeID`, `SuspensionID`, `ReviewReason`
 - `internal/billing/export_test.go`: `DrainForTest`
 - `internal/billing/checkout_test.go`: `setupTestEnvironment`
 - `internal/billing/billingtest/billingtest.go`: `New`, `Config`, `Catalog`
-- `internal/payments/plans.go`: `Plans`, `Schedule`, `PuertoRico`, `TotalCents`
+- `internal/payments/plans.go`: `Plans`, `Schedule`, `InstallmentSpacing`, `TotalCents`
+- `internal/puertorico/puertorico.go`: `Zone`
+- `internal/students/students.go`: `Add`
 - `internal/payments/plans_test.go`: `TestPlanSchedule`
 - `internal/links/links.go`: `Enroll`
 - `main.go`: `newServer`, `LoadConfigFromEnv`

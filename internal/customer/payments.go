@@ -24,15 +24,15 @@ type planView struct {
 func (s *site) payments(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "payments", FieldErrors: make(map[string]string)}
-	link, ok := s.resolveSession(w, r, "index.html", &data, token)
+	enrollment, ok := s.resolveSession(w, r, "index.html", &data, token)
 	if !ok {
 		return
 	}
-	if link.SubmittedAt == nil {
+	if enrollment.SubmittedAt == nil {
 		redirectCustomer(w, r, data.Path+"/forms")
 		return
 	}
-	if link.TermsAcceptedAt == nil {
+	if enrollment.TermsAcceptedAt == nil {
 		redirectCustomer(w, r, data.Path+"/agreement")
 		return
 	}
@@ -42,7 +42,7 @@ func (s *site) payments(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		status = parseCustomerForm(w, r)
 		if status != http.StatusOK {
-			data.Error = "No pudimos leer tu selección. Intenta de nuevo."
+			data.Error = selectionFailedMessage
 		} else {
 			data.PaymentPlan, posted = r.PostForm.Get("payment_plan"), true
 			_, allowed := payments.Find(data.PaymentPlan)
@@ -55,7 +55,7 @@ func (s *site) payments(w http.ResponseWriter, r *http.Request) {
 				data.FieldErrors["payment_plan"] = "Selecciona una de las tres opciones de pago."
 			default:
 				// StartCheckout bounds its own provider work; the request context only carries disconnects.
-				result, err := s.billing.StartCheckout(r.Context(), link.ID, data.PaymentPlan)
+				result, err := s.billing.StartCheckout(r.Context(), enrollment.ID, data.PaymentPlan)
 				switch {
 				case errors.Is(err, billing.ErrUnavailable):
 					s.render(w, r, "index.html", data, http.StatusNotFound)
@@ -83,16 +83,12 @@ func (s *site) payments(w http.ResponseWriter, r *http.Request) {
 
 	summaryCtx, cancelSummary := context.WithTimeout(r.Context(), dbTimeout)
 	defer cancelSummary()
-	summary, err := s.billing.ForEnrollment(summaryCtx, link.ID)
-	switch {
-	case errors.Is(err, billing.ErrUnavailable):
-		s.render(w, r, "index.html", data, http.StatusNotFound)
-		return
-	case err != nil:
+	summary, err := s.billing.ForEnrollment(summaryCtx, enrollment.ID)
+	if err != nil {
 		logging.RecordError(r, "load", err)
 		status = http.StatusInternalServerError
 		data.Error = "No pudimos cargar tu información de pago. Intenta de nuevo."
-	default:
+	} else {
 		data.Billing = summary
 		if !posted && summary != nil {
 			data.PaymentPlan = summary.PlanID
@@ -100,10 +96,6 @@ func (s *site) payments(w http.ResponseWriter, r *http.Request) {
 	}
 	// A funded contract shows its persisted plan instead of a way to pay again.
 	if data.Billing == nil || !data.Billing.Funded {
-		// A processing checkout may still change the plan, so no plan is announced yet.
-		if !data.Processing && summary != nil && summary.PlanName != "" {
-			data.SelectedPlan = summary.PlanName
-		}
 		now := time.Now()
 		for _, plan := range payments.Plans() {
 			data.Plans = append(data.Plans, planView{Plan: plan, Schedule: plan.Schedule(now)})
@@ -117,7 +109,7 @@ const maxReturnPolls = 80
 
 // paymentReturn shows the outcome of a hosted Checkout redirect. It is token-free: it reads one
 // persisted attempt and never exposes student identity, contact, or payment history. Visiting it
-// (or a cancelled return) never changes financial state. While the payment is pending, HTMX polls
+// (or Checkout's back link, by attempt reference) never changes financial state. While the payment is pending, HTMX polls
 // this route and swaps in only the status block; a failed poll swaps in a retry block that keeps
 // polling until maxReturnPolls, and an unknown session reloads the page.
 func (s *site) paymentReturn(w http.ResponseWriter, r *http.Request) {
@@ -127,29 +119,27 @@ func (s *site) paymentReturn(w http.ResponseWriter, r *http.Request) {
 		name = "payment-return-status"
 	}
 	query := r.URL.Query()
+	lookup, ref := s.billing.ReturnStatus, query.Get("session_id")
 	polls, _ := strconv.Atoi(query.Get("polls")) // malformed input reads as 0
-	polls = min(max(polls, 0), maxReturnPolls)
-	data.ReturnSessionID, data.ReturnPollsNext, data.ReturnStopPoll = query.Get("session_id"), polls+1, polls >= maxReturnPolls
+	if ref == "" {
+		// Checkout's back link names the attempt; nothing completed there, so nothing is polled.
+		lookup, ref = s.billing.CancelStatus, query.Get("attempt")
+	} else if polls < maxReturnPolls {
+		data.ReturnPollURL = "/payments/return?session_id=" + url.QueryEscape(ref) + "&polls=" + strconv.Itoa(max(polls, 0)+1)
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
+	defer cancel()
 	status := http.StatusOK
+	result, err := lookup(ctx, ref)
 	switch {
-	case data.ReturnSessionID != "":
-		ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
-		defer cancel()
-		result, err := s.billing.ReturnStatus(ctx, data.ReturnSessionID)
-		switch {
-		case errors.Is(err, billing.ErrUnavailable):
-			status = http.StatusNotFound
-		case err != nil:
-			logging.RecordError(r, "load", err)
-			data.Error = "No pudimos confirmar el estado de tu pago. Intenta de nuevo."
-			status = http.StatusInternalServerError
-		default:
-			data.Return = &result
-		}
-	case query.Get("cancelled") == "1":
-		data.Return = &billing.ReturnStatus{Status: "not_completed"}
-	default:
+	case errors.Is(err, billing.ErrUnavailable):
 		status = http.StatusNotFound
+	case err != nil:
+		logging.RecordError(r, "load", err)
+		data.Error = "No pudimos confirmar el estado de tu pago. Intenta de nuevo."
+		status = http.StatusInternalServerError
+	default:
+		data.Return = &result
 	}
 	s.render(w, r, name, data, status)
 }

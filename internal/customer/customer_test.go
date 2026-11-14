@@ -195,13 +195,6 @@ func TestAutosaveKeepsDraftWithoutFinishing(t *testing.T) {
 	if after := stored(t, f.db); !reflect.DeepEqual(after, before) {
 		t.Fatalf("late drafts changed completed details: before %+v, after %+v", before, after)
 	}
-	if _, err := f.store.CancelEnrollment(t.Context(), f.eID, "staff"); err != nil {
-		t.Fatal(err)
-	}
-	w = customerRequest(t, f.mux, http.MethodPost, f.path+"/draft/name", "name=After+attempted+cancel", true, f.sessionCookie())
-	if w.Code != http.StatusConflict || w.Header().Get("HX-Refresh") != "true" {
-		t.Fatalf("finished draft after cancel: status = %d, HX-Refresh = %q", w.Code, w.Header().Get("HX-Refresh"))
-	}
 }
 
 func TestUnusableLinksTakePrecedence(t *testing.T) {
@@ -517,7 +510,7 @@ func TestReusableLinkWelcomeStartAndMultiCustomerIsolation(t *testing.T) {
 	if err := settings.New(db).SetProgramStartDate(t.Context(), "2026-11-10", "staff"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AcceptTerms(t.Context(), entry.Token, c1.Value, "2026-11-10"); err != nil {
+	if accepted, err := store.AcceptTerms(t.Context(), entry.Token, c1.Value, "2026-11-10"); err != nil || !accepted {
 		t.Fatal(err)
 	}
 	if err := db.Transaction(func(tx *gorm.DB) error {
@@ -604,9 +597,6 @@ func TestDraftCardinalityAllowlistAndFailures(t *testing.T) {
 			t.Fatalf("unknown key %q: status %d, body %s", key, w.Code, w.Body.String())
 		}
 	}
-	if w := customerRequest(t, f.mux, http.MethodPost, f.path+"/draft", "name=Ignored", false, f.sessionCookie()); w.Code != http.StatusNotFound {
-		t.Fatalf("obsolete draft endpoint still accepted: %d", w.Code)
-	}
 	for _, tc := range []struct {
 		name, body string
 		failing    bool
@@ -655,6 +645,8 @@ func TestFinalValidationAndEmailConfirmation(t *testing.T) {
 		{"NUL name", url.Values{"name": {"A\x00"}}, []string{"name"}, false},
 		{"invalid UTF-8 name", url.Values{"name": {"\xff"}}, []string{"name"}, false},
 		{"future date of birth", url.Values{"date_of_birth": {"2099-01-01"}}, []string{"date_of_birth"}, false},
+		{"split date of birth impossible day", url.Values{"date_of_birth": {""}, "dob_day": {"31"}, "dob_month": {"02"}, "dob_year": {"1995"}}, []string{"date_of_birth"}, false},
+		{"split date of birth missing year", url.Values{"date_of_birth": {""}, "dob_day": {"20"}, "dob_month": {"01"}, "dob_year": {""}}, []string{"date_of_birth"}, false},
 	}
 	for _, tc := range cases {
 		for _, htmx := range []bool{false, true} {
@@ -675,9 +667,15 @@ func TestFinalValidationAndEmailConfirmation(t *testing.T) {
 				requireFormError(t, body, f.path, !htmx)
 				requireAttempted(t, body, form)
 				for _, key := range tc.errors {
-					control := regexp.MustCompile(`<(?:input|select)\b[^>]*\bid="` + key + `"[^>]*>`).FindString(body)
-					if !strings.Contains(control, `aria-invalid="true"`) {
-						t.Errorf("missing invalid control %q: %s", key, body)
+					ids := []string{key}
+					if key == "date_of_birth" {
+						ids = []string{"dob_day", "dob_month", "dob_year"}
+					}
+					for _, id := range ids {
+						control := regexp.MustCompile(`<(?:input|select)\b[^>]*\bid="` + id + `"[^>]*>`).FindString(body)
+						if !strings.Contains(control, `aria-invalid="true"`) {
+							t.Errorf("missing invalid control %q (%s): %s", id, key, body)
+						}
 					}
 					target := regexp.MustCompile(`(?s)<[^>]*\bid="save-status-` + key + `"[^>]*>(.*?)</(?:p|div)>`).FindString(body)
 					if !strings.Contains(target, `role="alert"`) {
@@ -710,6 +708,22 @@ func TestFinalValidationAndEmailConfirmation(t *testing.T) {
 	link, enrolled := stored(t, f.db)[0], studentRecords(t, f.db)
 	if link.Details != want || len(enrolled) != 0 {
 		t.Fatalf("completion did not copy all normalized fields: link %+v, students %+v", link, enrolled)
+	}
+	// Split day/month/year controls work for birth years before 2001 (with no JS dependency).
+	fPre2001 := newFixture(t)
+	pre2001 := contactForm("Carlos Rivera")
+	pre2001.Del("date_of_birth")
+	pre2001.Set("dob_day", "20")
+	pre2001.Set("dob_month", "01")
+	pre2001.Set("dob_year", "1985")
+	w = customerRequest(t, fPre2001.mux, http.MethodPost, fPre2001.path, pre2001.Encode(), false, fPre2001.sessionCookie())
+	requireAdvance(t, w, fPre2001.path+"/agreement", false, privateFormValues(pre2001)...)
+	if got := stored(t, fPre2001.db)[0].DateOfBirth; got != "1985-01-20" {
+		t.Fatalf("split DOB before 2001 = %q, want 1985-01-20", got)
+	}
+	// Single-digit day is zero-padded when assembled.
+	if raw, _, _, _ := readDateOfBirth(url.Values{"dob_day": {"5"}, "dob_month": {"6"}, "dob_year": {"1992"}}); raw != "1992-06-05" {
+		t.Fatalf("readDateOfBirth single-digit = %q, want 1992-06-05", raw)
 	}
 }
 
@@ -796,13 +810,10 @@ func customerRequest(t *testing.T, handler http.Handler, method, path, body stri
 	}
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, r)
-	// Unregistered obsolete routes use ServeMux's own 404 response.
-	if !strings.HasSuffix(path, "/draft") {
-		for name, want := range map[string]string{"Cache-Control": "no-store",
-			"Referrer-Policy": "no-referrer", "Vary": "HX-Request", "Content-Type": "text/html; charset=utf-8"} {
-			if got := w.Header().Get(name); got != want {
-				t.Errorf("%s = %q, want %q", name, got, want)
-			}
+	for name, want := range map[string]string{"Cache-Control": "no-store",
+		"Referrer-Policy": "no-referrer", "Vary": "HX-Request", "Content-Type": "text/html; charset=utf-8"} {
+		if got := w.Header().Get(name); got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
 	return w
@@ -835,6 +846,25 @@ func requireAttempted(t *testing.T, body string, form url.Values) {
 				t.Errorf("forged municipality became an option: %s", selectHTML)
 			}
 		}
+	}
+	dobDay, dobMonth, dobYear := form.Get("dob_day"), form.Get("dob_month"), form.Get("dob_year")
+	if !form.Has("dob_day") && !form.Has("dob_month") && !form.Has("dob_year") {
+		if parts := strings.Split(strings.TrimSpace(form.Get("date_of_birth")), "-"); len(parts) == 3 {
+			dobYear, dobMonth, dobDay = parts[0], parts[1], parts[2]
+		}
+	}
+	for _, part := range []struct{ id, want string }{{"dob_day", dobDay}, {"dob_year", dobYear}} {
+		control := regexp.MustCompile(`<input\b[^>]*\bid="` + part.id + `"[^>]*>`).FindString(body)
+		value := regexp.MustCompile(`\bvalue="([^"]*)"`).FindStringSubmatch(control)
+		wantPart := html.UnescapeString(template.HTMLEscapeString(part.want))
+		if len(value) == 0 || html.UnescapeString(value[1]) != wantPart {
+			t.Errorf("%s lost attempted value %q: %s", part.id, part.want, control)
+		}
+	}
+	monthSelect := regexp.MustCompile(`(?s)<select\b[^>]*\bid="dob_month"[^>]*>.*?</select>`).FindString(body)
+	monthSelected := regexp.MustCompile(`<option\b[^>]*\bvalue="([^"]*)"[^>]*\bselected\b[^>]*>`).FindStringSubmatch(monthSelect)
+	if len(monthSelected) == 0 || monthSelected[1] != dobMonth {
+		t.Errorf("dob_month selection = %v, want %q: %s", monthSelected, dobMonth, monthSelect)
 	}
 }
 
@@ -1094,7 +1124,9 @@ func TestContactEditFlowAndBackNavigation(t *testing.T) {
 	}
 	body := w.Body.String()
 	if !strings.Contains(body, `value="Original Student"`) || !strings.Contains(body, `value="original@example.com"`) ||
-		!strings.Contains(body, "17875551111") || !strings.Contains(body, `value="Ponce" selected`) || !strings.Contains(body, `value="2005-06-15"`) {
+		!strings.Contains(body, "17875551111") || !strings.Contains(body, `value="Ponce" selected`) ||
+		!strings.Contains(body, `id="dob_day"`) || !strings.Contains(body, `value="15"`) ||
+		!strings.Contains(body, `value="06" selected`) || !strings.Contains(body, `value="2005"`) {
 		t.Fatalf("GET /edit missing prefilled values: %s", body)
 	}
 	if !strings.Contains(body, `id="email_confirm"`) || !strings.Contains(body, `name="email_confirm"`) || !strings.Contains(body, `value=""`) {
@@ -1151,11 +1183,10 @@ func TestContactEditFlowAndBackNavigation(t *testing.T) {
 	}
 
 	// Check DB: enrollment row is updated with new contact details; no students row exists
-	sess, err := f.store.LookupSession(t.Context(), f.entry.Token, f.cookie)
-	if err != nil || sess == nil || sess.Enrollment == nil {
-		t.Fatalf("lookup session: %v, %v", sess, err)
+	link, _, err := f.store.LookupSession(t.Context(), f.entry.Token, f.cookie)
+	if err != nil || link == nil {
+		t.Fatalf("lookup session: %v, %v", link, err)
 	}
-	link := sess.Enrollment
 	if link.Name != "Updated Student" || link.Email != "updated@example.com" || link.Phone != "+17875552222" || link.Municipality != "San Juan" {
 		t.Fatalf("link snapshot should be updated, got: %+v", link)
 	}
@@ -1167,8 +1198,12 @@ func TestContactEditFlowAndBackNavigation(t *testing.T) {
 		t.Fatalf("expected 0 students, got %d", studentCount)
 	}
 
-	// 3. Funded link:
-	// Create funded contract
+	// 3. Funded link. A contract exists only after the terms are accepted, which also keeps /payments from redirecting to /agreement.
+	if err := f.db.WithContext(t.Context()).Model(&links.Enrollment{}).
+		Where("id = ?", link.ID).
+		Updates(map[string]any{"terms_accepted_at": time.Now().UTC(), "program_start_date": "2026-11-01"}).Error; err != nil {
+		t.Fatal(err)
+	}
 	fundedAt := time.Now().UTC()
 	contract := billing.Contract{
 		EnrollmentID:     link.ID,
@@ -1199,13 +1234,6 @@ func TestContactEditFlowAndBackNavigation(t *testing.T) {
 	w = customerRequest(t, f.mux, http.MethodGet, f.path+"/agreement", "", false, f.sessionCookie())
 	if strings.Contains(w.Body.String(), "Editar información del estudiante") {
 		t.Fatalf("funded agreement page should not show edit link: %s", w.Body.String())
-	}
-
-	// Accept terms so /payments does not redirect to /agreement
-	if err := f.db.WithContext(t.Context()).Model(&links.Enrollment{}).
-		Where("id = ?", link.ID).
-		Updates(map[string]any{"terms_accepted_at": time.Now().UTC(), "program_start_date": "2026-11-01"}).Error; err != nil {
-		t.Fatal(err)
 	}
 
 	// Payments page has top back link to agreement and no duplicate bottom link
@@ -1239,7 +1267,9 @@ func TestContactEditGuard(t *testing.T) {
 		"email_confirm": {"staffixed@example.com"},
 		"phone":         {"+17875551111"},
 		"municipality":  {"San Juan"},
-		"date_of_birth": {"2004-01-01"},
+		"dob_day":       {"1"},
+		"dob_month":     {"01"},
+		"dob_year":      {"1998"},
 		"gender":        {"Female"},
 	}
 	w := customerRequest(t, f.mux, http.MethodPost, f.path+"/edit", editForm.Encode(), false, f.sessionCookie())
@@ -1247,16 +1277,20 @@ func TestContactEditGuard(t *testing.T) {
 		t.Fatalf("POST /edit: %d, loc %s", w.Code, w.Header().Get("Location"))
 	}
 
-	sess, err := f.store.LookupSession(t.Context(), f.entry.Token, f.cookie)
-	if err != nil || sess == nil || sess.Enrollment == nil {
+	link, _, err := f.store.LookupSession(t.Context(), f.entry.Token, f.cookie)
+	if err != nil || link == nil {
 		t.Fatal(err)
 	}
-	link := sess.Enrollment
-	if link.DateOfBirth != "2004-01-01" {
-		t.Fatalf("link dob not updated: %s, want 2004-01-01", link.DateOfBirth)
+	if link.DateOfBirth != "1998-01-01" {
+		t.Fatalf("link dob not updated: %s, want 1998-01-01", link.DateOfBirth)
 	}
 
-	// 2. In-flight and active attempt gate checks
+	// 2. In-flight and active attempt gate checks. A contract exists only after the terms are accepted.
+	if err := f.db.WithContext(t.Context()).Model(&links.Enrollment{}).
+		Where("id = ?", link.ID).
+		Updates(map[string]any{"terms_accepted_at": time.Now().UTC(), "program_start_date": "2026-11-01"}).Error; err != nil {
+		t.Fatal(err)
+	}
 	contract := billing.Contract{
 		EnrollmentID:     link.ID,
 		Reference:        rand.Text(),
@@ -1316,7 +1350,7 @@ func TestContactEditGuard(t *testing.T) {
 		}
 		var checkLink links.Enrollment
 		f.db.Where("id = ?", link.ID).Take(&checkLink)
-		if checkLink.Name != "Staff Fixed" || checkLink.DateOfBirth != "2004-01-01" {
+		if checkLink.Name != "Staff Fixed" || checkLink.DateOfBirth != "1998-01-01" {
 			t.Fatalf("POST /edit during %s mutated link: %+v", blockedState, checkLink)
 		}
 	}

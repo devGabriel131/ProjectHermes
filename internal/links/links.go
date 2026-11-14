@@ -7,15 +7,17 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"strings"
 	"time"
 	"unicode/utf8"
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"projecthermes/internal/payments"
+	"projecthermes/internal/puertorico"
 	"projecthermes/internal/settings"
 	"projecthermes/internal/students"
 )
@@ -34,28 +36,29 @@ const MaxPinChecks = 30
 // Link is a reusable, named customer URL (/customer/{token}) that staff share with customers.
 // The token opens only the welcome gate and never exposes customer PII, so storing it allows copying anytime.
 type Link struct {
-	ID          uint64       `gorm:"primaryKey"`
-	Name        string       `gorm:"not null;default:''"`
-	Token       string       `gorm:"not null;uniqueIndex;check:link_token_length,char_length(token) = 43"`
-	CreatedAt   time.Time    `gorm:"not null;default:CURRENT_TIMESTAMP"`
-	ExpiresAt   time.Time    `gorm:"not null;default:CURRENT_TIMESTAMP"`
-	CanceledAt  *time.Time
-	CreatedBy   string       `gorm:"not null;default:''"`
-	CanceledBy  string       `gorm:"not null;default:''"`
-	Enrollments []Enrollment `gorm:"foreignKey:LinkID;references:ID;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
+	ID         uint64    `gorm:"primaryKey"`
+	Name       string    `gorm:"not null;default:''"`
+	Token      string    `gorm:"not null;uniqueIndex;check:link_token_length,char_length(token) = 43"`
+	CreatedAt  time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
+	ExpiresAt  time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
+	CanceledAt *time.Time
+	CreatedBy  string `gorm:"not null;default:''"`
+	CanceledBy string `gorm:"not null;default:''"`
+	// EnrollmentCount is the enrollments ever started; enrollments are never deleted, and the only INSERT is StartEnrollment's.
+	EnrollmentCount int          `gorm:"not null;default:0"`
+	Enrollments     []Enrollment `gorm:"foreignKey:LinkID;references:ID;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 }
 
 // Enrollment stores one customer's enrollment session by SHA-256 hash of its cookie token.
 type Enrollment struct {
 	ID          uint64 `gorm:"primaryKey"`
 	LinkID      uint64 `gorm:"not null;index"`
-	Link        *Link  `gorm:"foreignKey:LinkID;references:ID;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
 	SessionHash []byte `gorm:"not null;uniqueIndex;check:session_hash_size,octet_length(session_hash) = 32"`
 	students.Details
 	// Pin is the PIN chosen at submit. It reserves the PIN until payment moves it to the Student; "" before submit and after payment.
 	// The index name must equal pinIndex.
-	Pin       string `gorm:"not null;default:'';uniqueIndex:idx_enrollment_pin,where:pin <> ''"`
-	PinChecks int    `gorm:"not null;default:0"`
+	Pin       string    `gorm:"not null;default:'';uniqueIndex:idx_enrollment_pin,where:pin <> ''"`
+	PinChecks int       `gorm:"not null;default:0"`
 	CreatedAt time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 	// SubmittedAt is the customer's final submit; autosave never sets it.
 	SubmittedAt *time.Time
@@ -95,7 +98,7 @@ const (
 	Canceled Status = "Canceled"
 )
 
-// SaveResult reports the authoritative outcome of a customer write.
+// SaveResult reports the authoritative state of a customer's form after a write or a FormState probe.
 type SaveResult uint8
 
 const (
@@ -104,6 +107,10 @@ const (
 	AlreadySubmitted
 	// PinTaken means another submitted enrollment or enrolled student holds the PIN; the form stays open.
 	PinTaken
+	// PinLimited means the open form has no PIN checks left, so Submit wrote nothing.
+	PinLimited
+	// Open means the form is usable and unsubmitted and nothing was written; only FormState returns it.
+	Open
 )
 
 // LinkEntry is a reusable link as shown to staff.
@@ -132,7 +139,6 @@ func (e LinkEntry) Trashed() bool {
 // EnrollmentEntry is a customer enrollment as shown to staff under its parent link.
 type EnrollmentEntry struct {
 	ID               uint64
-	LinkID           uint64
 	Name             string
 	Phone            string
 	CreatedAt        time.Time
@@ -141,7 +147,6 @@ type EnrollmentEntry struct {
 	TermsAcceptedAt  *time.Time
 	ProgramStartDate string
 	PaidAt           *time.Time
-	CanceledAt       *time.Time
 	CanceledBy       string
 	Status           Status
 	HasPin           bool
@@ -168,15 +173,6 @@ type LinkGroup struct {
 	Enrollments []EnrollmentEntry
 }
 
-// Session is the resolved state of a customer's request against a reusable link and optional cookie.
-type Session struct {
-	Link             Link
-	LinkUsable       bool
-	Enrollment       *Enrollment
-	EnrollmentStatus Status
-	Usable           bool
-}
-
 func (l Link) status(now time.Time) LinkStatus {
 	switch {
 	case l.CanceledAt != nil:
@@ -188,12 +184,12 @@ func (l Link) status(now time.Time) LinkStatus {
 	}
 }
 
-func (l Link) entry(now time.Time, count int) LinkEntry {
+func (l Link) entry(now time.Time) LinkEntry {
 	return LinkEntry{
 		ID: l.ID, Name: l.Name, Token: l.Token,
 		CreatedAt: l.CreatedAt, ExpiresAt: l.ExpiresAt,
 		CreatedBy: l.CreatedBy, CanceledBy: l.CanceledBy,
-		Status: l.status(now), EnrollmentCount: count,
+		Status: l.status(now), EnrollmentCount: l.EnrollmentCount,
 	}
 }
 
@@ -220,11 +216,11 @@ func (e Enrollment) status(link Link, now time.Time) (Status, string) {
 func (e Enrollment) entry(link Link, now time.Time) EnrollmentEntry {
 	status, canceledBy := e.status(link, now)
 	return EnrollmentEntry{
-		ID: e.ID, LinkID: e.LinkID,
+		ID:   e.ID,
 		Name: e.Name, Phone: e.Phone,
 		CreatedAt: e.CreatedAt, ExpiresAt: e.ExpiresAt,
 		SubmittedAt: e.SubmittedAt, TermsAcceptedAt: e.TermsAcceptedAt, ProgramStartDate: e.ProgramStartDate,
-		PaidAt: e.PaidAt, CanceledAt: e.CanceledAt, CanceledBy: canceledBy,
+		PaidAt: e.PaidAt, CanceledBy: canceledBy,
 		Status: status, HasPin: e.Pin != "",
 	}
 }
@@ -232,11 +228,9 @@ func (e Enrollment) entry(link Link, now time.Time) EnrollmentEntry {
 // errNoStaff rejects staff actions that would leave an anonymous audit entry.
 var errNoStaff = errors.New("links: staff username required")
 
-// ErrProgramStartChanged requires the customer to review the current start date.
-var ErrProgramStartChanged = errors.New("links: program start date changed or unavailable")
-
 // ErrInvalidLinkName rejects empty, overlong, or control-character link names.
 var ErrInvalidLinkName = errors.New("links: invalid link name")
+
 type Store struct {
 	db *gorm.DB
 	// changed runs after every committed write, so open management pages refresh.
@@ -259,7 +253,7 @@ func (s *Store) CreateLink(ctx context.Context, staff, name string, expiresAt ti
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
-		name = time.Now().In(payments.PuertoRico).Format(time.DateOnly)
+		name = time.Now().In(puertorico.Zone).Format(time.DateOnly)
 	}
 	token := randomToken()
 	link := Link{Name: name, Token: token, CreatedBy: staff, ExpiresAt: expiresAt}
@@ -267,7 +261,7 @@ func (s *Store) CreateLink(ctx context.Context, staff, name string, expiresAt ti
 		return LinkEntry{}, err
 	}
 	s.changed()
-	return link.entry(time.Now(), 0), nil
+	return link.entry(time.Now()), nil
 }
 
 // ListGroups returns every reusable link with its child enrollments, oldest first.
@@ -295,61 +289,37 @@ func (s *Store) ListGroups(ctx context.Context) ([]LinkGroup, error) {
 			entries[j] = child.entry(link, now)
 		}
 		groups[i] = LinkGroup{
-			Link:        link.entry(now, len(children)),
+			Link:        link.entry(now),
 			Enrollments: entries,
 		}
 	}
 	return groups, nil
 }
 
-// LookupLink returns the Link row matching token (regardless of expiry/cancellation), or nil if unknown or malformed.
-func (s *Store) LookupLink(ctx context.Context, token string) (*Link, error) {
-	if !validToken(token) {
-		return nil, nil
-	}
-	var link Link
-	result := s.db.WithContext(ctx).Where("token = ?", token).Limit(1).Find(&link)
-	if result.Error != nil || result.RowsAffected == 0 {
-		return nil, result.Error
-	}
-	return &link, nil
+// sessionRow is LookupSession's result: whether the link takes new enrollments, and the cookie's usable
+// enrollment, whose columns are all NULL (ID 0) when there is none.
+type sessionRow struct {
+	Enrollment
+	CanStart bool
 }
 
-// LookupSession resolves a customer's reusable link and optional cookie session without writing to the database.
-// Unknown or malformed link tokens return nil.
-func (s *Store) LookupSession(ctx context.Context, linkToken, cookieToken string) (*Session, error) {
-	link, err := s.LookupLink(ctx, linkToken)
-	if err != nil || link == nil {
-		return nil, err
+// LookupSession resolves, in one read, the usable enrollment behind a customer's session cookie on a reusable link
+// (nil when there is none) and whether the link takes new enrollments now. Unknown or malformed link tokens
+// return (nil, false, nil); a malformed cookie's nil digest matches no enrollment.
+func (s *Store) LookupSession(ctx context.Context, linkToken, cookieToken string) (e *Enrollment, canStart bool, err error) {
+	if !validToken(linkToken) {
+		return nil, false, nil
 	}
-	var count int64
-	if err := s.db.WithContext(ctx).Model(&Enrollment{}).Where("link_id = ?", link.ID).Count(&count).Error; err != nil {
-		return nil, err
+	digest, _ := tokenDigest(cookieToken)
+	var row sessionRow
+	err = s.db.WithContext(ctx).Raw(`
+SELECT l.canceled_at IS NULL AND l.expires_at > now() AND l.enrollment_count < ? AS can_start, e.*
+  FROM links l LEFT JOIN enrollments e ON `+usableSession+`
+ WHERE l.token = ?`, MaxLinkEnrollments, linkToken, digest, linkToken).Scan(&row).Error
+	if err != nil || row.ID == 0 {
+		return nil, row.CanStart, err
 	}
-	now := time.Now()
-	sess := &Session{
-		Link:       *link,
-		LinkUsable: link.CanceledAt == nil && now.Before(link.ExpiresAt) && count < MaxLinkEnrollments,
-	}
-	if digest, ok := tokenDigest(cookieToken); ok {
-		var e Enrollment
-		result := s.db.WithContext(ctx).Where("link_id = ? AND session_hash = ?", link.ID, digest).Limit(1).Find(&e)
-		if result.Error != nil {
-			return nil, result.Error
-		}
-		if result.RowsAffected == 1 {
-			status, _ := e.status(*link, now)
-			sess.Enrollment = &e
-			sess.EnrollmentStatus = status
-			if e.SubmittedAt == nil {
-				sess.Usable = e.CanceledAt == nil && now.Before(e.ExpiresAt) && link.CanceledAt == nil && now.Before(link.ExpiresAt)
-			} else {
-				// expires_at is the deadline to pay; once paid it no longer limits reading.
-				sess.Usable = e.CanceledAt == nil && (e.PaidAt != nil || now.Before(e.ExpiresAt))
-			}
-		}
-	}
-	return sess, nil
+	return &row.Enrollment, row.CanStart, nil
 }
 
 // StartEnrollment returns the browser's live unpaid enrollment on linkToken if one exists,
@@ -359,128 +329,122 @@ func (s *Store) StartEnrollment(ctx context.Context, linkToken, existingCookieTo
 	if !validToken(linkToken) {
 		return nil, "", nil
 	}
-	var result *Enrollment
-	var newCookie string
-	var createdNew bool
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var link Link
-		res := tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
-			Where("token = ?", linkToken).Limit(1).Find(&link)
-		if res.Error != nil || res.RowsAffected == 0 {
-			return res.Error
+	if _, ok := tokenDigest(existingCookieToken); ok {
+		e, _, err := s.LookupSession(ctx, linkToken, existingCookieToken)
+		if err != nil || (e != nil && e.PaidAt == nil) {
+			return e, "", err
 		}
-		now := time.Now()
-		if digest, ok := tokenDigest(existingCookieToken); ok {
-			var existing Enrollment
-			res := tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
-				Where("link_id = ? AND session_hash = ?", link.ID, digest).Limit(1).Find(&existing)
-			if res.Error != nil {
-				return res.Error
-			}
-			if res.RowsAffected == 1 {
-				status, _ := existing.status(link, now)
-				if status == InProgress || status == AwaitingPayment {
-					result = &existing
-					return nil
-				}
-			}
-		}
-		if link.CanceledAt != nil || !now.Before(link.ExpiresAt) {
-			return nil
-		}
-		var count int64
-		if err := tx.Model(&Enrollment{}).Where("link_id = ?", link.ID).Count(&count).Error; err != nil {
-			return err
-		}
-		if count >= MaxLinkEnrollments {
-			return nil
-		}
-		newCookie = randomToken()
-		digest, _ := tokenDigest(newCookie)
-		created := Enrollment{
-			LinkID:      link.ID,
-			SessionHash: digest,
-			ExpiresAt:   link.ExpiresAt,
-		}
-		if err := tx.Create(&created).Error; err != nil {
-			return err
-		}
-		result = &created
-		createdNew = true
-		return nil
-	})
-	if err != nil {
-		return nil, "", err
 	}
-	if createdNew {
-		s.changed()
+	cookie := randomToken()
+	digest, _ := tokenDigest(cookie)
+	var created Enrollment
+	// ponytail: the cap holds because concurrent starts serialize on the link row and READ COMMITTED rechecks
+	// enrollment_count < ? on its newest version; a count(*) in the same statement would read a stale snapshot.
+	// The statement commits with synchronous_commit off, so a PostgreSQL crash can lose enrollments started in
+	// roughly the last 600 ms and the customer starts again. Drop the async CTE to make starts durable.
+	result := s.db.WithContext(ctx).Raw(`
+WITH async AS (SELECT set_config('synchronous_commit', 'off', true)),
+slot AS (UPDATE links l SET enrollment_count = l.enrollment_count + 1
+           FROM async
+          WHERE l.token = ? AND l.canceled_at IS NULL AND l.expires_at > now() AND l.enrollment_count < ?
+         RETURNING l.id, l.expires_at)
+INSERT INTO enrollments (link_id, session_hash, expires_at)
+SELECT id, ?, expires_at FROM slot
+RETURNING *`, linkToken, MaxLinkEnrollments, digest).Scan(&created)
+	if result.Error != nil || result.RowsAffected == 0 {
+		return nil, "", result.Error
 	}
-	return result, newCookie, nil
+	s.changed()
+	return &created, cookie, nil
 }
 
-// SaveDraft stores one validated field without finishing the form.
-// Submitted forms never change: the customer's final answers are locked.
+// SaveDraft stores one validated registry field on an open form. Submitted forms never change.
+// ponytail: the UPDATE commits with synchronous_commit off for its own transaction, so "Guardado." never waits
+// for the WAL flush. A PostgreSQL crash can drop autosaves acknowledged in roughly the last 600 ms; nothing is
+// corrupted or reordered, and Submit rewrites every contact column durably. Drop the async CTE to make drafts durable.
 func (s *Store) SaveDraft(ctx context.Context, linkToken, cookieToken, key, value string) (SaveResult, error) {
 	field, ok := students.FindField(key)
 	if !ok {
 		return Unavailable, students.ErrUnknownField
 	}
-	if !validToken(linkToken) {
-		return Unavailable, nil
-	}
-	digest, ok := tokenDigest(cookieToken)
+	digest, ok := sessionDigest(linkToken, cookieToken)
 	if !ok {
 		return Unavailable, nil
 	}
-	result := s.activeUnsubmitted(ctx, linkToken, digest).Where("submitted_at IS NULL").
-		Where(clause.Neq{Column: clause.Column{Name: field.Key}, Value: value}).Update(field.Key, value)
-	return s.saveResult(ctx, linkToken, digest, result, Saved)
+	result := s.db.WithContext(ctx).Exec(`
+WITH async AS (SELECT set_config('synchronous_commit', 'off', true))
+UPDATE enrollments e
+   SET ? = ?
+  FROM links l, async
+ WHERE `+openEnrollment+`
+   AND ? <> ?`,
+		clause.Column{Name: field.Key}, value, linkToken, digest, clause.Column{Table: "e", Name: field.Key}, value)
+	switch {
+	case result.Error != nil:
+		return Unavailable, result.Error
+	case result.RowsAffected == 1:
+		s.changed()
+		return Saved, nil
+	}
+	return s.formState(ctx, linkToken, digest, Saved)
 }
 
-// Submit commits final answers and the PIN to the enrollment, locking the form. A PIN held by an enrolled Student is refused here (PinTaken); one held by another submitted enrollment is refused by idx_enrollment_pin. No Student exists until Enroll.
+// Submit commits final answers and the PIN to the enrollment, locking the form, and spends one of its MaxPinChecks
+// in the same UPDATE. A PIN held by an enrolled Student is refused here; one held by another submitted enrollment
+// is refused by idx_enrollment_pin. A refused PIN still costs a check (PinTaken); a spent budget is PinLimited.
+// No Student exists until Enroll.
 // ponytail: a Submit racing a concurrent Enroll can still see the PIN free (READ COMMITTED); funding then fails on idx_student_pin. Upgrade: one PIN-reservation table or an advisory lock.
 func (s *Store) Submit(ctx context.Context, linkToken, cookieToken string, details students.Details, pin string) (SaveResult, error) {
-	if !validToken(linkToken) {
-		return Unavailable, nil
-	}
-	digest, ok := tokenDigest(cookieToken)
+	digest, ok := sessionDigest(linkToken, cookieToken)
 	if !ok {
 		return Unavailable, nil
 	}
 	result := s.db.WithContext(ctx).Exec(`
 UPDATE enrollments e
    SET name = ?, email = ?, phone = ?, municipality = ?, date_of_birth = ?, gender = ?, pin = ?,
+       pin_checks = e.pin_checks + 1,
        submitted_at = now(),
        expires_at = now() + interval '168 hours'
   FROM links l
- WHERE e.link_id = l.id
-   AND l.token = ?
-   AND l.canceled_at IS NULL
-   AND l.expires_at > now()
-   AND e.session_hash = ?
-   AND e.canceled_at IS NULL
-   AND e.expires_at > now()
-   AND e.submitted_at IS NULL
-   AND NOT EXISTS (SELECT 1 FROM students WHERE pin = ? AND pin <> '')
-`, details.Name, details.Email, details.Phone, details.Municipality, details.DateOfBirth, details.Gender, pin, linkToken, digest, pin)
-	if students.IsUniqueViolation(result.Error, pinIndex) {
+ WHERE `+openEnrollment+`
+   AND e.pin_checks < ?
+   AND NOT EXISTS (SELECT 1 FROM students WHERE pin = ? AND pin <> '')`,
+		details.Name, details.Email, details.Phone, details.Municipality, details.DateOfBirth, details.Gender, pin, linkToken, digest, MaxPinChecks, pin)
+	switch {
+	case result.Error == nil && result.RowsAffected == 1:
+		s.changed()
+		return Saved, nil
+	case result.Error != nil && !students.IsUniqueViolation(result.Error, pinIndex):
+		return Unavailable, result.Error
+	}
+	// Nothing was written: the PIN is held, the budget is spent, or the form is not open.
+	spent, err := s.spendPinCheck(ctx, linkToken, digest)
+	switch {
+	case err != nil:
+		return Unavailable, err
+	case spent:
 		return PinTaken, nil
 	}
-	return s.saveResult(ctx, linkToken, digest, result, PinTaken)
+	return s.formState(ctx, linkToken, digest, PinLimited)
 }
 
 // SpendPinCheck counts one PIN availability answer against the usable, unsubmitted enrollment
 // behind (linkToken, cookieToken) and reports whether the enrollment still had budget.
 func (s *Store) SpendPinCheck(ctx context.Context, linkToken, cookieToken string) (bool, error) {
-	if !validToken(linkToken) {
-		return false, nil
-	}
-	digest, ok := tokenDigest(cookieToken)
+	digest, ok := sessionDigest(linkToken, cookieToken)
 	if !ok {
 		return false, nil
 	}
-	result := s.activeUnsubmitted(ctx, linkToken, digest).Where("submitted_at IS NULL AND pin_checks < ?", MaxPinChecks).
-		Update("pin_checks", gorm.Expr("pin_checks + 1"))
+	return s.spendPinCheck(ctx, linkToken, digest)
+}
+
+func (s *Store) spendPinCheck(ctx context.Context, linkToken string, digest []byte) (bool, error) {
+	result := s.db.WithContext(ctx).Exec(`
+UPDATE enrollments e
+   SET pin_checks = e.pin_checks + 1
+  FROM links l
+ WHERE `+openEnrollment+`
+   AND e.pin_checks < ?`, linkToken, digest, MaxPinChecks)
 	return result.RowsAffected == 1, result.Error
 }
 
@@ -506,89 +470,61 @@ SELECT id, name, email, phone, municipality, date_of_birth, gender, pin, left(pr
 	return tx.Model(&Enrollment{}).Where("id = ?", enrollmentID).Updates(map[string]any{"paid_at": paidAt, "pin": ""}).Error
 }
 
-// AcceptTerms snapshots the displayed start date once, after contact submission.
-// Accepted replays preserve the original agreement even when settings change.
-// Once submitted, the enrollment relies on its own expiry and cancellation rather than the parent link's.
-func (s *Store) AcceptTerms(ctx context.Context, linkToken, cookieToken, shownStartDate string) (*Enrollment, error) {
-	if !validToken(linkToken) {
-		return nil, nil
+// AcceptTerms records the agreement against the start date the customer was shown, once, after contact
+// submission, and reports whether this call accepted. It refuses when no usable submitted enrollment still
+// awaits its terms (so a replay never rewrites the first acceptance) or when shownStartDate is not the
+// current program start date. Once submitted, the enrollment relies on its own expiry and cancellation
+// rather than the parent link's.
+func (s *Store) AcceptTerms(ctx context.Context, linkToken, cookieToken, shownStartDate string) (bool, error) {
+	digest, ok := sessionDigest(linkToken, cookieToken)
+	date, err := settings.ParseDate(shownStartDate)
+	if !ok || err != nil {
+		return false, nil
 	}
-	digest, ok := tokenDigest(cookieToken)
-	if !ok {
-		return nil, nil
+	startDate := date.Format(time.DateOnly)
+	// The settings row lock serializes acceptance with staff date changes. Correlating the subquery on e keeps
+	// that FOR SHARE contract while locking settings only for a candidate row; uncorrelated, it plans as an
+	// InitPlan that locks the row, and so writes WAL, on every POST.
+	result := s.db.WithContext(ctx).Exec(`
+UPDATE enrollments e
+   SET terms_accepted_at = now(), program_start_date = ?
+  FROM links l
+ WHERE `+usableSession+` AND e.submitted_at IS NOT NULL AND e.terms_accepted_at IS NULL
+   AND ? = (SELECT s.program_start_date FROM settings s WHERE s.id = 1 AND e.terms_accepted_at IS NULL FOR SHARE)`,
+		startDate, linkToken, digest, startDate)
+	if result.Error != nil || result.RowsAffected == 0 {
+		return false, result.Error
 	}
-	lookupSubmitted := func() (*Enrollment, error) {
-		var e Enrollment
-		res := s.activeSubmitted(ctx, linkToken, digest).Limit(1).Find(&e)
-		if res.Error != nil || res.RowsAffected == 0 {
-			return nil, res.Error
-		}
-		return &e, nil
-	}
-	e, err := lookupSubmitted()
-	if err != nil || e == nil {
-		return nil, err
-	}
-	if e.TermsAcceptedAt != nil {
-		return e, nil
-	}
-	startDate, err := settings.ParseProgramStartDate(shownStartDate)
-	if err != nil {
-		return nil, ErrProgramStartChanged
-	}
-	var accepted Enrollment
-	// The settings row lock serializes acceptance with staff date changes.
-	result := s.activeSubmitted(ctx, linkToken, digest).Model(&accepted).
-		Where("terms_accepted_at IS NULL").
-		Where("? = (SELECT program_start_date FROM settings WHERE id = 1 FOR SHARE)", startDate).
-		Clauses(clause.Returning{}).Updates(map[string]any{
-		"terms_accepted_at": gorm.Expr("now()"), "program_start_date": startDate,
-	})
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	if result.RowsAffected > 0 {
-		s.changed()
-		return &accepted, nil
-	}
-	e, err = lookupSubmitted()
-	if err != nil || e == nil {
-		return nil, err
-	}
-	if e.TermsAcceptedAt != nil {
-		return e, nil
-	}
-	return nil, ErrProgramStartChanged
+	s.changed()
+	return true, nil
 }
 
-func (s *Store) saveResult(ctx context.Context, linkToken string, digest []byte, result *gorm.DB, unfinishedResult SaveResult) (SaveResult, error) {
-	if result.Error != nil {
-		return Unavailable, result.Error
-	}
-	if result.RowsAffected == 1 {
-		s.changed()
-		return Saved, nil
-	}
-	var e Enrollment
-	res := s.activeUnsubmitted(ctx, linkToken, digest).Select("submitted_at").Limit(1).Find(&e)
-	if res.Error != nil {
-		return Unavailable, res.Error
-	}
-	if res.RowsAffected == 1 {
-		if e.SubmittedAt != nil {
-			return AlreadySubmitted, nil
-		}
-		return unfinishedResult, nil
-	}
-	// A submitted enrollment stays usable for AlreadySubmitted even if its parent link later lapsed or canceled.
-	res = s.activeSubmitted(ctx, linkToken, digest).Select("submitted_at").Limit(1).Find(&e)
-	if res.Error != nil {
-		return Unavailable, res.Error
-	}
-	if res.RowsAffected == 1 {
+// formState classifies the form behind (linkToken, digest) in one query, by LookupSession's rule:
+// a missing or unusable session is Unavailable.
+func (s *Store) formState(ctx context.Context, linkToken string, digest []byte, open SaveResult) (SaveResult, error) {
+	var submitted bool
+	err := s.db.WithContext(ctx).Raw(`SELECT e.submitted_at IS NOT NULL FROM enrollments e, links l WHERE `+usableSession,
+		linkToken, digest).Row().Scan(&submitted)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return Unavailable, nil
+	case err != nil:
+		return Unavailable, err
+	case submitted:
 		return AlreadySubmitted, nil
+	default:
+		return open, nil
 	}
-	return Unavailable, nil
+}
+
+// FormState reports, without writing, whether the form behind (linkToken, cookieToken) is Open,
+// AlreadySubmitted or Unavailable, by the rule a write that touched no row uses.
+func (s *Store) FormState(ctx context.Context, linkToken, cookieToken string) (SaveResult, error) {
+	digest, ok := sessionDigest(linkToken, cookieToken)
+	if !ok {
+		return Unavailable, nil
+	}
+	return s.formState(ctx, linkToken, digest, Open)
 }
 
 // CancelLink revokes an active link so new visitors can no longer start enrollments on it.
@@ -596,9 +532,6 @@ func (s *Store) saveResult(ctx context.Context, linkToken string, digest []byte,
 func (s *Store) CancelLink(ctx context.Context, id uint64, staff string) (*LinkEntry, error) {
 	if staff == "" {
 		return nil, errNoStaff
-	}
-	if !validID(id) {
-		return nil, nil
 	}
 	var link Link
 	result := s.db.WithContext(ctx).Model(&link).Scopes(Usable).Where("id = ?", id).
@@ -615,18 +548,13 @@ func (s *Store) CancelLink(ctx context.Context, id uint64, staff string) (*LinkE
 	} else {
 		s.changed()
 	}
-	var count int64
-	if err := s.db.WithContext(ctx).Model(&Enrollment{}).Where("link_id = ?", link.ID).Count(&count).Error; err != nil {
-		return nil, err
-	}
-	entry := link.entry(time.Now(), int(count))
+	entry := link.entry(time.Now())
 	return &entry, nil
 }
 
 const maxLinkNameRunes = 100
 
-// RenameLink updates a reusable link's display name on behalf of staff.
-// Unknown or out-of-range IDs return (nil, nil).
+// RenameLink updates a reusable link's display name on behalf of staff. An unknown ID returns (nil, nil).
 func (s *Store) RenameLink(ctx context.Context, id uint64, name, staff string) (*LinkEntry, error) {
 	if staff == "" {
 		return nil, errNoStaff
@@ -639,9 +567,6 @@ func (s *Store) RenameLink(ctx context.Context, id uint64, name, staff string) (
 		if r < 0x20 || r == 0x7f {
 			return nil, ErrInvalidLinkName
 		}
-	}
-	if !validID(id) {
-		return nil, nil
 	}
 	var link Link
 	upd := s.db.WithContext(ctx).Model(&link).Where("id = ? AND name <> ?", id, name).
@@ -657,50 +582,12 @@ func (s *Store) RenameLink(ctx context.Context, id uint64, name, staff string) (
 			return nil, res.Error
 		}
 	}
-	var count int64
-	if err := s.db.WithContext(ctx).Model(&Enrollment{}).Where("link_id = ?", link.ID).Count(&count).Error; err != nil {
-		return nil, err
-	}
-	entry := link.entry(time.Now(), int(count))
+	entry := link.entry(time.Now())
 	return &entry, nil
 }
 
-// CancelEnrollment revokes an unsubmitted, active enrollment on behalf of staff.
-// Submitted, finished, expired and previously canceled enrollments stay unchanged.
-// For billing-safe cancellation of submitted enrollments or expired PINs, use billing.Service.CancelEnrollment.
-func (s *Store) CancelEnrollment(ctx context.Context, id uint64, staff string) (*EnrollmentEntry, error) {
-	if staff == "" {
-		return nil, errNoStaff
-	}
-	if !validID(id) {
-		return nil, nil
-	}
-	var e Enrollment
-	result := s.usable(ctx).Model(&e).
-		Where("id = ? AND submitted_at IS NULL AND EXISTS (SELECT 1 FROM links WHERE links.id = enrollments.link_id AND links.canceled_at IS NULL AND links.expires_at > now())", id).
-		Clauses(clause.Returning{}).Updates(canceledBy(staff))
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	if result.RowsAffected == 0 {
-		e = Enrollment{}
-		result = s.db.WithContext(ctx).Where("id = ?", id).Limit(1).Find(&e)
-		if result.Error != nil || result.RowsAffected == 0 {
-			return nil, result.Error
-		}
-	} else {
-		s.changed()
-	}
-	var link Link
-	if err := s.db.WithContext(ctx).Where("id = ?", e.LinkID).Take(&link).Error; err != nil {
-		return nil, err
-	}
-	entry := e.entry(link, time.Now())
-	return &entry, nil
-}
-
-// CancelEnrollmentTx cancels an InProgress or AwaitingPayment enrollment (clearing its PIN),
-// or clears an Expired submission's PIN without turning it into Canceled.
+// CancelEnrollmentTx cancels an InProgress or AwaitingPayment enrollment (clearing its PIN), or clears an
+// Expired submission's PIN without turning it into Canceled. Any other enrollment is returned unchanged.
 // The caller must already hold the Enrollment row lock (and, when submitted, have verified billing safety).
 func CancelEnrollmentTx(tx *gorm.DB, id uint64, staff string) (entry *EnrollmentEntry, changed bool, err error) {
 	if staff == "" {
@@ -716,66 +603,45 @@ func CancelEnrollmentTx(tx *gorm.DB, id uint64, staff string) (entry *Enrollment
 		return nil, false, err
 	}
 	now := time.Now()
-	status, _ := e.status(link, now)
-	switch status {
-	case InProgress:
-		upd := tx.Model(&e).Where("id = ? AND canceled_at IS NULL AND submitted_at IS NULL", id).
-			Clauses(clause.Returning{}).Updates(canceledBy(staff))
-		if upd.Error != nil {
-			return nil, false, upd.Error
-		}
-		changed = upd.RowsAffected > 0
-	case AwaitingPayment:
-		updates := canceledBy(staff)
-		updates["pin"] = ""
-		upd := tx.Model(&e).Where("id = ? AND canceled_at IS NULL AND paid_at IS NULL", id).
-			Clauses(clause.Returning{}).Updates(updates)
-		if upd.Error != nil {
-			return nil, false, upd.Error
-		}
-		changed = upd.RowsAffected > 0
-	case Expired:
-		if e.Pin != "" {
-			upd := tx.Model(&e).Where("id = ? AND paid_at IS NULL AND pin <> ''", id).
-				Clauses(clause.Returning{}).Update("pin", "")
-			if upd.Error != nil {
-				return nil, false, upd.Error
-			}
-			changed = upd.RowsAffected > 0
-		}
-	}
 	out := e.entry(link, now)
-	return &out, changed, nil
+	if !out.Cancelable() {
+		return &out, false, nil
+	}
+	updates := map[string]any{"pin": ""}
+	if out.Status != Expired {
+		updates = canceledBy(staff)
+		updates["pin"] = ""
+	}
+	upd := tx.Model(&e).Where("id = ? AND canceled_at IS NULL AND paid_at IS NULL", id).
+		Clauses(clause.Returning{}).Updates(updates)
+	if upd.Error != nil {
+		return nil, false, upd.Error
+	}
+	out = e.entry(link, now)
+	return &out, upd.RowsAffected > 0, nil
 }
+
 func canceledBy(staff string) map[string]any {
 	return map[string]any{"canceled_at": gorm.Expr("now()"), "canceled_by": staff}
 }
 
-func validID(id uint64) bool {
-	return id > 0 && id <= 1<<63-1
-}
+// openEnrollment is the WHERE guard of every customer write to an unsubmitted form: enrollment e and
+// its link l are both Usable and e is not submitted. Its arguments are the link token, then the session digest.
+const openEnrollment = `e.link_id = l.id
+   AND l.token = ? AND l.canceled_at IS NULL AND l.expires_at > now()
+   AND e.session_hash = ? AND e.canceled_at IS NULL AND e.expires_at > now()
+   AND e.submitted_at IS NULL`
 
-func (s *Store) activeUnsubmitted(ctx context.Context, linkToken string, digest []byte) *gorm.DB {
-	return s.usable(ctx).Where(
-		"session_hash = ? AND EXISTS (SELECT 1 FROM links WHERE links.id = enrollments.link_id AND links.token = ? AND links.canceled_at IS NULL AND links.expires_at > now())",
-		digest, linkToken,
-	)
-}
-
-func (s *Store) activeSubmitted(ctx context.Context, linkToken string, digest []byte) *gorm.DB {
-	return s.usable(ctx).Where(
-		"submitted_at IS NOT NULL AND session_hash = ? AND EXISTS (SELECT 1 FROM links WHERE links.id = enrollments.link_id AND links.token = ?)",
-		digest, linkToken,
-	)
-}
+// usableSession matches enrollment e of link l for one session cookie while the customer may still use it:
+// not canceled, unexpired unless paid, and an unsubmitted form also needs its link usable.
+// Its arguments are the link token, then the session digest.
+const usableSession = `e.link_id = l.id AND l.token = ? AND e.session_hash = ?
+   AND e.canceled_at IS NULL AND (e.expires_at > now() OR e.paid_at IS NOT NULL)
+   AND (e.submitted_at IS NOT NULL OR (l.canceled_at IS NULL AND l.expires_at > now()))`
 
 // Usable scopes a query to rows that are neither canceled nor past their access deadline.
 func Usable(db *gorm.DB) *gorm.DB {
 	return db.Where("canceled_at IS NULL AND expires_at > now()")
-}
-
-func (s *Store) usable(ctx context.Context) *gorm.DB {
-	return s.db.WithContext(ctx).Model(&Enrollment{}).Scopes(Usable)
 }
 
 func randomToken() string {
@@ -796,4 +662,12 @@ func tokenDigest(token string) ([]byte, bool) {
 	}
 	digest := sha256.Sum256([]byte(token))
 	return digest[:], true
+}
+
+// sessionDigest checks both customer tokens before any query and returns the cookie token's digest.
+func sessionDigest(linkToken, cookieToken string) ([]byte, bool) {
+	if !validToken(linkToken) {
+		return nil, false
+	}
+	return tokenDigest(cookieToken)
 }

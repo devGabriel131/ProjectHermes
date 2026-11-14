@@ -105,17 +105,17 @@
   {{range $index, $field := .Fields}}
   <td>{{if eq $index 0}}<a id="student-link-{{$.ID}}" data-student-link href="/management/students/{{$.ID}}"
     hx-get="/management/students/{{$.ID}}" hx-target="#student-dialog-content" hx-swap="innerHTML">{{$field.Value}}</a>{{else}}{{$field.Value}}{{end}}</td>
-  {{if eq $index 0}}<td>{{if $.IsActive}}<span class="status-badge status-active">Active</span>{{else}}<span class="status-badge status-suspended">Suspended</span>{{end}}</td>{{end}}
+  {{if eq $index 0}}<td>{{if $.IsActive}}<span class="status-badge" data-tone="ok">Active</span>{{else}}<span class="status-badge" data-tone="danger">Suspended</span>{{end}}</td>{{end}}
   {{end}}
   <td>{{cohortLabel .Cohort}}</td>
-  <td><time datetime="{{.CreatedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.CreatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time></td>
+  <td>{{template "time" .CreatedAt}}</td>
 </tr>
 {{end}}
 
 {{define "student-detail"}}
 <div class="student-details" hx-sync="closest .student-details:queue all">
   <h1 id="student-heading">Student details</h1>
-  <p class="student-submitted">Enrolled <time datetime="{{.Student.CreatedAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{.Student.CreatedAt.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time>{{if .Student.Cohort}} in the {{cohortLabel .Student.Cohort}} cohort{{end}}</p>
+  <p class="student-submitted">Enrolled {{template "time" .Student.CreatedAt}}{{if .Student.Cohort}} in the {{cohortLabel .Student.Cohort}} cohort{{end}}</p>
   {{range .Student.Fields}}{{template "student-field" .}}{{end}}
   {{template "student-billing" .}}
   <p id="student-billing-{{.Student.ID}}-error" class="student-request-error" role="alert" hidden></p>
@@ -176,14 +176,12 @@
 {{if .Modal}}<template>{{template "student-row" .Student}}</template>{{end}}
 {{end}}
 
-{{define "billing-time"}}<time datetime="{{.UTC.Format "2006-01-02T15:04:05Z"}}">{{.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time>{{end}}
-
 {{define "student-billing"}}
 <div id="student-billing-{{.Student.ID}}" class="student-billing" hx-get="/management/students/{{.Student.ID}}/billing" hx-trigger="management-changed from:body" hx-swap="outerHTML">
   <h2>Billing</h2>
   {{with .Billing}}
   <dl class="student-billing-summary">
-    <div><dt>Funding</dt><dd>{{if .Funded}}Funded{{with .FundedAt}} {{template "billing-time" .}}{{end}}{{else}}Not funded{{end}}</dd></div>
+    <div><dt>Funding</dt><dd>{{if .Funded}}Funded{{with .FundedAt}} {{template "time" .}}{{end}}{{else}}Not funded{{end}}</dd></div>
     <div><dt>Plan</dt><dd>{{.PlanName}}</dd></div>
     <div><dt>Tuition total</dt><dd>{{money .TotalCents}}</dd></div>
     <div><dt>Tuition paid</dt><dd>{{money .TuitionPaidCents}}</dd></div>
@@ -192,8 +190,8 @@
     <div><dt>Remaining tuition</dt><dd>{{money .RemainingTuitionCents}}</dd></div>
     <div><dt>Overdue tuition</dt><dd>{{money .OverdueTuitionCents}}</dd></div>
     <div><dt>Reinstatement fee remaining</dt><dd>{{money .ReinstatementFeeRemainingCents}}</dd></div>
-    <div><dt>Status</dt><dd>{{if .IsSuspended}}Billing-suspended{{else if .IsActive}}Active{{else}}Suspended{{end}}</dd></div>
-    <div><dt>Last synced</dt><dd>{{with .LastSyncedAt}}{{template "billing-time" .}}{{else}}Never{{end}}</dd></div>
+    <div><dt>Status</dt><dd>{{if .IsSuspended}}Billing-suspended{{else}}Active{{end}}</dd></div>
+    <div><dt>Last synced</dt><dd>{{with .LastSyncedAt}}{{template "time" .}}{{else}}Never{{end}}</dd></div>
   </dl>
   {{if .ReviewReasons}}
   <p class="student-billing-review"><strong>Needs review:</strong> {{range $index, $reason := .ReviewReasons}}{{if $index}}, {{end}}<code>{{$reason}}</code>{{end}}</p>
@@ -208,9 +206,9 @@
       {{range .Installments}}
       <tr>
         <td>{{.Number}}</td>
-        <td>{{with .DueAt}}{{template "billing-time" .}}{{else}}Set when funded{{end}}</td>
+        <td>{{with .DueAt}}{{template "time" .}}{{else}}Set when funded{{end}}</td>
         <td>{{money .AmountCents}}</td>
-        <td>{{if eq .Status "paid"}}<span class="status-badge" data-tone="ok">Paid</span>{{with .PaidAt}} {{template "billing-time" .}}{{end}}{{else if eq .Status "overdue"}}<span class="status-badge" data-tone="danger">Overdue</span>{{else if eq .Status "action_required"}}<span class="status-badge" data-tone="warn">Action required</span>{{else}}<span class="status-badge">Scheduled</span>{{end}}</td>
+        <td>{{if eq .Status "paid"}}<span class="status-badge" data-tone="ok">Paid</span>{{with .PaidAt}} {{template "time" .}}{{end}}{{else if eq .Status "overdue"}}<span class="status-badge" data-tone="danger">Overdue</span>{{else if eq .Status "action_required"}}<span class="status-badge" data-tone="warn">Action required</span>{{else}}<span class="status-badge">Scheduled</span>{{end}}</td>
         <td>{{if .InvoiceReady}}<a href="/management/students/{{$.Student.ID}}/billing/invoices/{{.ID}}" target="_blank" rel="noopener noreferrer">View invoice</a>{{end}}</td>
       </tr>
       {{end}}

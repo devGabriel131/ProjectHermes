@@ -108,11 +108,11 @@ func TestProgramStartDate(t *testing.T) {
 		staff string
 		want  error
 	}{
-		{"empty", "", "dave", ErrProgramStartDate},
-		{"blank", " \t", "dave", ErrProgramStartDate},
-		{"zero year", "0000-01-01", "dave", ErrProgramStartDate},
-		{"malformed", "2027-1-31", "dave", ErrProgramStartDate},
-		{"impossible", "2027-02-29", "dave", ErrProgramStartDate},
+		{"empty", "", "dave", ErrDate},
+		{"blank", " \t", "dave", ErrDate},
+		{"zero year", "0000-01-01", "dave", ErrDate},
+		{"malformed", "2027-1-31", "dave", ErrDate},
+		{"impossible", "2027-02-29", "dave", ErrDate},
 		{"anonymous", "2028-02-29", "", errNoStaff},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -193,8 +193,8 @@ func TestBootcampDate(t *testing.T) {
 		name, raw, staff string
 		want             error
 	}{
-		{"empty", "", "dave", ErrBootcampDate},
-		{"impossible", "2027-02-29", "dave", ErrBootcampDate},
+		{"empty", "", "dave", ErrDate},
+		{"impossible", "2027-02-29", "dave", ErrDate},
 		{"anonymous", "2027-03-06", "", errNoStaff},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
