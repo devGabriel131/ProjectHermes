@@ -1,6 +1,6 @@
 # Stripe Setup
 
-What must exist in the Stripe account before the app can start, and which parts the code enforces. Variable validation and startup failure stages are in [Configuration](configuration.md); the Checkout and invoice behavior that depends on these settings is in [Checkout](../billing/checkout.md), [Webhooks](../billing/webhooks.md) and [Invoices](../billing/invoices.md); open questions before live mode are in [Go-live](../go-live.md).
+What must exist in the Stripe account before the app can start, and which parts the code enforces. Variable validation and startup failure stages are in [Configuration](configuration.md); the Checkout, invoice and refund behavior that depends on these settings is in [Checkout](../billing/checkout.md), [Webhooks](../billing/webhooks.md), [Invoices](../billing/invoices.md) and [Withdrawal](../billing/withdrawal.md); open questions before live mode are in [Go-live](../go-live.md).
 
 Do the setup once per mode. Sandbox and live each need their own key, prices, payment-method configuration, portal configuration and webhook endpoint; the code compares every price's `livemode` and every event's `livemode` with `STRIPE_MODE`. Settings that exist only in the Stripe dashboard, and so cannot be proven from the repository, are marked `[EXTERNAL]`.
 
@@ -47,12 +47,15 @@ Startup exercises only the price list; every other call first runs when a custom
 | Prices | list | Startup catalog |
 | Customers | create, retrieve, update | Customer at the first Checkout start; name and email sync; default payment method for later invoices |
 | Checkout Sessions | create, retrieve, list, expire | [Checkout](../billing/checkout.md) |
-| Invoices | create, retrieve, list, update, finalize, send, void, delete | Later installments and the reinstatement fee; cancelling a corrected fee |
+| Invoices | create, retrieve, list, update, finalize, send, void, delete | Later installments and the reinstatement fee; cancelling a corrected fee or a withdrawn contract's invoices |
 | Invoice items | create, list | Attaching the quoted price to a draft invoice |
 | Invoice payments | list | Proving the first payment before funding |
 | PaymentIntents, PaymentMethods, Charges | retrieve | Payment rows and the card check before arming |
-| Refunds, Disputes, Radar early fraud warnings | retrieve; list for disputes and warnings | Refund and payment-review state |
+| Refunds | create, retrieve | Withdrawal refunds on the PaymentIntent ([Withdrawal](../billing/withdrawal.md#refunds)); finding a refund's payment |
+| Disputes, Radar early fraud warnings | retrieve, list | Payment-review state |
 | Billing portal sessions | create | Staff portal link |
+
+A restricted (`rk_`) key therefore needs write access to Refunds (Stripe's permission name is `[EXTERNAL]`). Without it every withdrawal refund fails: the staff request answers 500, and every later sync of the withdrawn contract fails and retries a minute later.
 
 ## Payment methods
 
@@ -63,6 +66,17 @@ Startup exercises only the price list; every other call first runs when a custom
 ## Customer portal
 
 `PortalURL` creates a short-lived portal session for the contract's own Stripe Customer with `configuration` set to `STRIPE_PORTAL_CONFIGURATION_ID`, `locale` `es-419` and a `return_url` of `<PUBLIC_BASE_URL>/management/students/{id}`. It needs a contract that already has a Customer, never marks anything paid and never reactivates a student. The link is a payer credential, created on demand for staff and never stored. The portal configuration should offer invoice history and payment-method update only `[EXTERNAL]`; the app cannot check this. The staff button is described in [Students](../management/students.md).
+
+## Dashboard payment links
+
+The staff billing block links every payment to the Stripe Dashboard ("Open in Stripe", [Staff students](../management/students.md#billing-block)), where staff make refunds the app does not. `dashboardURL` builds the link from the PaymentIntent ID and the mode (`Config.Live`, from `STRIPE_MODE`):
+
+| Mode | Link |
+|---|---|
+| `live` | `https://dashboard.stripe.com/payments/<PaymentIntent ID>` |
+| `sandbox` | `https://dashboard.stripe.com/test/payments/<PaymentIntent ID>` |
+
+The link carries no credential: staff must be signed in to that Stripe account `[EXTERNAL]`.
 
 ## Dashboard-only settings
 
@@ -88,11 +102,13 @@ If webhook delivery is missing or the endpoint is not subscribed to a type, the 
 
 ## Source
 
-- `internal/billing/stripe.go`: `Config`, `Validate`, `LoadConfigFromEnv`, `LoadCatalog`, `priceKey`, `reinstatementFeeCents`, `reinstatementKey`, `stripeLocale`, `NewStripeClient`
+- `internal/billing/stripe.go`: `Config`, `Live`, `Validate`, `LoadConfigFromEnv`, `LoadCatalog`, `priceKey`, `reinstatementFeeCents`, `reinstatementKey`, `stripeLocale`, `NewStripeClient`
 - `internal/billing/checkout.go`: `sessionParams`, `AdaptivePricing`, `AllowedPaymentMethodTypes`, `PaymentMethodConfiguration`
 - `internal/billing/billing.go`: `PortalURL`, `New`
 - `internal/billing/webhook.go`: `webhookEvents`, `Webhook`
 - `internal/billing/invoices.go`: `createInvoice`, `invoiceMatches`, `ensureDefaultPaymentMethod`
+- `internal/billing/withdraw.go`: `refundPayments`
+- `internal/billing/summary.go`: `dashboardURL`
 - `internal/billing/worker.go`: `nextSyncAt`
 - `internal/payments/plans.go`: `Plans`
 - `main.go`: `LoadCatalog`, `LoadConfigFromEnv`, `billing_catalog`, `billing_configuration`

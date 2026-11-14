@@ -45,6 +45,7 @@ flowchart TD
 | `GET /management/students/{id}/billing` | same fragment | `student-billing` | Read-only; never calls Stripe. |
 | `POST /management/students/{id}/billing/reconcile` | same fragment | `student-billing` | Staff billing action. |
 | `POST /management/students/{id}/billing/reinstatement` | same fragment | `student-billing` | Staff billing action. |
+| `POST /management/students/{id}/billing/withdraw` | same fragment | `student-billing` | Staff billing action; irreversible ([Withdrawal](../billing/withdrawal.md)). |
 | `POST /management/students/{id}/billing/portal` | same fragment | `student-billing-portal` | One-off Stripe portal link. |
 | `GET /management/students/{id}/billing/invoices/{obligation}` | none | none | 303 to the Stripe hosted invoice URL, `Cache-Control: no-store`. |
 | `GET /management/events` | `text/event-stream` | n/a | Mounted in `main.go`, not in this package. |
@@ -117,7 +118,7 @@ Other POST handlers read no body. `GET /management/events` clears its own write 
 
 - `main.go`: `newServer`, `managementMux`, `RegisterRoutes`
 - `internal/management/management.go`: `RegisterRoutes`, `site`, `timed`, `dbTimeout`, `render`, `htmx`, `answer`, `list`, `postedValue`, `readForm`, `pageData`, `linkRow`, `settingsData`, `cancelEnrollment`, `cancelEnrollmentNotice`, `plural`, `MaxBytesReader`
-- `internal/management/students.go`: `pathID`, `billingFailure`, `act`
+- `internal/management/students.go`: `pathID`, `billingFailure`, `act`, `withdraw`
 - `internal/management/addstudents.go`: `addStudentsPage`, `addStudent`, `importStudents`, `readRoster`, `maxRosterRows`, `fixWorkbook`
 - `internal/management/dashboard.go`: `dashboard`
 - `internal/management/templates/index.html`: `link-rows`, `link`, `result`, `navigation`, `brand`, `account`, `time`

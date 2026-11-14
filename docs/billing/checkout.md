@@ -159,7 +159,7 @@ sequenceDiagram
 
 | Budget | Value | Where |
 |---|---|---|
-| `providerBudget` | 8 s | One `StartCheckout` call end to end, plus `InvoiceURL`, `PortalURL`, `ReconcileStudent` and `RequestReinstatement`. Stays under the server's 10 s write timeout, so a slower outcome is recorded and resumed instead of holding the browser |
+| `providerBudget` | 8 s | One `StartCheckout` call end to end, plus `InvoiceURL`, `PortalURL`, `ReconcileStudent`, `RequestReinstatement` and `Withdraw`. Stays under the server's 10 s write timeout, so a slower outcome is recorded and resumed instead of holding the browser |
 | `persistCtx` | `persistBudget`, 5 s, detached from the request | Recording a Stripe outcome after a call, for example `setAttempt` in `createSession` and `expireAttempt`, so a closed browser or spent budget still saves it |
 | Stripe HTTP client | 5 s timeout, 2 network retries, SDK logging off | `NewStripeClient` |
 | `checkoutKeyRetention` | 23 h | How long the worker replays a Session create under its original idempotency key; Stripe may prune keys after 24 h |
@@ -202,6 +202,7 @@ A stored code only counts while nothing is paying (`idleAttemptStates`: `open`, 
 
 - `internal/billing/checkout.go`: `StartCheckout`, `CheckoutResult`, `beginCheckout`, `claimExpiringAttempt`, `expireAttempt`, `createSession`, `sessionParams`, `createObligations`, `setAttempt`, `outcomeUnknown`, `activeAttemptStates`, `integrationIdentifier`, `errCheckoutMismatch`, `syncAttempt`, `recordDecline`, `resumeCreate`, `moveAttempt`, `checkoutKeyRetention`, `creatingGrace`, `sessionMatches`, `fund`
 - `internal/billing/billing.go`: `ErrUnavailable`, `ErrPlanLocked`, `ErrUnknownPlan`, `providerBudget`, `persistBudget`, `persistCtx`
+- `internal/billing/withdraw.go`: `Withdraw`
 - `internal/billing/contact.go`: `inFlightAttemptStates`, `UpdateContact`, `ContactEditable`
 - `internal/billing/summary.go`: `ReturnStatus`, `CancelStatus`, `attemptOutcome`, `declined`, `declineReason`, `idleAttemptStates`, `DeclinedEnrollments`
 - `internal/billing/stripe.go`: `stripeLocale`, `NewStripeClient`, `priceKey`

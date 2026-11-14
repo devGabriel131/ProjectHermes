@@ -124,7 +124,7 @@ Implementation notes that keep this order observable:
 
 ## Payments page
 
-`GET` calls `ForEnrollment` and, until funded, lists the three plans with `Plan.Schedule(now)` (dates anchored to today in Puerto Rico; real dates are fixed at funding, see [Billing overview](../billing/overview.md)). A funded contract shows its persisted plan, paid amount and installments instead of a way to pay again.
+`GET` calls `ForEnrollment` and, until funded, lists the three plans with `Plan.Schedule(now)` (dates anchored to today in Puerto Rico; real dates are fixed at funding, see [Billing overview](../billing/overview.md)). A funded contract shows its persisted plan, paid amount and installments instead of a way to pay again. Once staff withdrew the student (`Summary.WithdrawnAt` set), the intro reads "Tu matrícula fue retirada. No se cobrarán más pagos; el reembolso se envía a la tarjeta con la que pagaste.", the paid and remaining card is hidden, and installments a withdrawal cancelled read "Cancelado" while paid ones still read "Pagado" ([Withdrawal](../billing/withdrawal.md)).
 
 `POST /payments` outcomes:
 
@@ -194,10 +194,11 @@ Anyone holding a link can read the customer's submitted details, edit them while
 - `internal/customer/payments.go`: `site.payments`, `site.paymentReturn`, `maxReturnPolls`
 - `internal/customer/agreement.go`: `agreement`
 - `internal/customer/templates/index.html`: `htmx-config`, `includeIndicatorStyles`, `customer-content`
+- `internal/customer/templates/payments.html`: `payments`
 - `internal/customer/templates/payment-return.html`: `payment-return-status`, `decline-reason`, `noscript`
 - `internal/links/links.go`: `Store.LookupSession`, `Store.StartEnrollment`, `Store.SaveDraft`, `Store.Submit`, `Store.SpendPinCheck`, `Store.FormState`, `formState`
 - `internal/billing/contact.go`: `UpdateContact`, `ContactEditable`, `contactEditable`, `inFlightAttemptStates`, `ErrContactLocked`
 - `internal/students/students.go`: `Store.PinTaken`
 - `internal/billing/checkout.go`: `StartCheckout`
-- `internal/billing/summary.go`: `ForEnrollment`, `ReturnStatus`, `CancelStatus`
+- `internal/billing/summary.go`: `ForEnrollment`, `ReturnStatus`, `CancelStatus`, `WithdrawnAt`
 - `internal/billing/billing.go`: `providerBudget`, `ErrPlanLocked`, `ErrUnavailable`

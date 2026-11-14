@@ -1,6 +1,6 @@
 # Invoices and Obligations
 
-How a tuition installment or the reinstatement fee becomes a Stripe invoice: the obligation's states, the crash-safe creation stages, arming, the card gate and the display status staff see. The loop that runs all of it is in [Billing worker](worker.md); the funding model is in [Billing overview](overview.md); what a fee does to a student is in [Suspension](suspension.md); flags raised here are listed in [Reviews](reviews.md).
+How a tuition installment or the reinstatement fee becomes a Stripe invoice: the obligation's states, the crash-safe creation stages, arming, the card gate, cancellation and the display status staff see. The loop that runs all of it is in [Billing worker](worker.md); the funding model is in [Billing overview](overview.md); what a fee does to a student is in [Suspension](suspension.md); what a withdrawal stops is in [Withdrawal](withdrawal.md); flags raised here are listed in [Reviews](reviews.md).
 
 An obligation (`billing_obligations`) is one amount the student owes. The app never charges a card: it creates and arms invoices and Stripe collects.
 
@@ -29,11 +29,14 @@ stateDiagram-v2
     ItemStarted --> InReview : several candidate items
     ItemAttached --> InReview : missing or mismatching invoice
     Armed --> InReview : invoice void, uncollectible, deleted or changed
+    Dated --> Cancelled : withdrawal before any invoice
+    Armed --> Cancelled : withdrawal, see Cancellation
 ```
 
 - **Quoted**: `due_at` is NULL, `amount_remaining_cents` equals the amount. Changing plan before funding deletes the unfunded rows.
 - **Dated**: at funding, `due_at` becomes the Puerto Rico midnight dates of `Plan.Schedule(paid_at)` and the remaining amount is restored. Tuition #1 instead gets the Checkout invoice's ID, status `paid`, remaining 0 and `first_settled_at = paid_at`.
 - **InReview**: `review_reason` is set; `scheduleInvoices` skips reviewed obligations. See [Reviews](reviews.md) for when the flag clears.
+- **Cancelled**: a withdrawal sets `collection_disposition = cancel` on every unsettled stage; whatever reached Stripe is deleted or voided ([Cancellation](#cancellation)).
 - Any step can be retried after a crash: each persisted stage is the resume point.
 
 ### Creation stages and why there are two steps
@@ -96,9 +99,9 @@ On failure the contract gets review `unsupported_payment_method` and **no later 
 | `open` | Finalized | Remaining = invoice's remaining; `failure_or_action_required` = Stripe `attempted` |
 | `paid` | Settled | `first_settled_at` = invoice `paid_at`, set once and never moved earlier |
 | `void`, `uncollectible` | Written off by Stripe | Signed tuition is never forgiven: remaining = amount - paid - other, review `invoice_mismatch` |
-| `deleted` | Synthetic, not a Stripe status: Stripe answered 404 or a deleted invoice, or `cancelFee` deleted a draft | Review `missing_invoice`; the app never replaces a vanished invoice |
+| `deleted` | Synthetic, not a Stripe status: Stripe answered 404 or a deleted invoice, or `cancelObligation` deleted a draft | Review `missing_invoice`; the app never replaces a vanished invoice |
 
-For a fee with `collection_disposition = cancel`, `void` and `deleted` are the intended end state: remaining 0 and no review. `deleted` also feeds `invoiceReady` and the `cancelFees` filter, which is why it is stored.
+For an obligation with `collection_disposition = cancel`, `void` and `deleted` are the intended end state: remaining 0 and no review. `deleted` also feeds `invoiceReady` and `cancelPending`, which is why it is stored.
 
 | Column | Meaning |
 |---|---|
@@ -119,10 +122,10 @@ stateDiagram-v2
     Drafted --> Itemized : stripe_invoice_item_id
     Itemized --> Sent : sendFee finalizes and emails
     Sent --> Paid : invoice.paid, first_settled_at set
-    Requested --> Cancelled : episode corrected
-    Drafted --> Cancelled : episode corrected
-    Itemized --> Cancelled : episode corrected
-    Sent --> Cancelled : episode corrected, invoice voided
+    Requested --> Cancelled : episode corrected or withdrawal
+    Drafted --> Cancelled : episode corrected or withdrawal
+    Itemized --> Cancelled : episode corrected or withdrawal
+    Sent --> Cancelled : episode corrected or withdrawal, invoice voided
     Paid --> PaidAfterCancel : episode corrected after payment
 ```
 
@@ -134,16 +137,33 @@ stateDiagram-v2
 
 A fee has no `due_at`, so it is rechecked every 15 minutes while money remains ([Worker](worker.md)).
 
+## Cancellation
+
+An obligation whose `collection_disposition` is `cancel` must never collect. Two writers set it, always before any Stripe call: `correctEpisode` on the fee of a corrected episode ([Suspension](suspension.md)), and `withdraw` on every obligation of a withdrawn contract with no `first_settled_at`, tuition and fees alike ([Withdrawal](withdrawal.md)). Every sync then runs `cancelObligations`: it loads the contract's `cancel` rows by `id`, keeps those still `cancelPending` (an invoice ID is saved or its creation started, and the status is not `void`, `deleted` or `paid`) and runs `cancelObligation` on each, renewing the lease first.
+
+| Invoice | `cancelObligation` | Stored |
+|---|---|---|
+| Creation started, no ID saved | Lists the Customer's invoices by the obligation's metadata (`invoicesOf`): one is adopted and cancelled as below; several set review `unresolved_provider_create` and none is cancelled; none is listed again on the next sync (`ponytail` note) | The adopted `stripe_invoice_id` |
+| Draft | Deleted | `deleted`, remaining 0 |
+| Open or uncollectible | Voided | `void`, remaining 0 |
+| 404 or already deleted | Nothing | `deleted`, remaining 0 |
+| Paid or already void | Left alone; `syncInvoice` reports what remains | |
+
+An obligation that never started an invoice is not `cancelPending`: nothing exists at Stripe, and it keeps its remaining amount, which the summary and the dashboard ignore for a cancelled installment ([Invoice display status](#invoice-display-status), [Dashboard](../management/dashboard.md)). Nothing is ever recharged, and an uncertain create is only located so it can be cancelled, never finished or sent.
+
+A cancelled invoice that was paid anyway is judged by `invoiceStateOf(o, inv, withdrawn)`; `syncInvoice` loads the contract and passes whether it is withdrawn. On a contract that is not withdrawn it gets the obligation review `payment_review` and the money stays a staff matter ([Reviews](reviews.md)); on a withdrawn contract it gets no review, because the withdrawal refunds it.
+
 ## Invoice display status
 
 Staff and customer views derive a per-installment status from the stored columns (`summarize`); first match wins.
 
 | Order | Status | Condition |
 |---|---|---|
-| 1 | `paid` | `first_settled_at` set, or remaining 0 |
-| 2 | `action_required` | `failure_or_action_required` |
-| 3 | `overdue` | `due_at` is before now |
-| 4 | `scheduled` | otherwise |
+| 1 | `cancelled` | `collection_disposition = cancel` and no `first_settled_at`: a withdrawal stopped it. Never counted as remaining or overdue |
+| 2 | `paid` | `first_settled_at` set, or remaining 0 |
+| 3 | `action_required` | `failure_or_action_required` |
+| 4 | `overdue` | `due_at` is before now |
+| 5 | `scheduled` | otherwise |
 
 `invoiceReady` is true when an invoice ID exists and the status is not empty, `draft` or `deleted`: only then can staff open the hosted invoice. Where these appear: [Staff students](../management/students.md).
 
@@ -155,13 +175,15 @@ Staff and customer views derive a per-installment status from the stored columns
 | Marker written before the Stripe call | A crash between call and response leaves evidence to adopt |
 | Reviewed obligations are not re-armed because a stage is incomplete | A hold stays a hold until the invoice matches again |
 | A vanished invoice is reviewed, never replaced | Replacing could double-bill tuition |
-| `deleted` stored as a status | `invoiceReady` and the `cancelFees` filter need it |
+| `deleted` stored as a status | `invoiceReady` and `cancelPending` need it |
+| Cancel intent persisted before any Stripe call | Every retry only continues cancelling |
 
 ## Source
 
-- `internal/billing/invoices.go`: `scheduleInvoices`, `scheduleOne`, `createInvoice`, `createItem`, `invoicesOf`, `adopt`, `arm`, `sendFee`, `reviewObligation`, `ensureDefaultPaymentMethod`, `invoiceMatches`, `invoiceStateOf`, `reviewFor`, `syncInvoice`, `holdInvoice`, `store`, `cancelFees`, `cancelFee`
+- `internal/billing/invoices.go`: `scheduleInvoices`, `scheduleOne`, `createInvoice`, `createItem`, `invoicesOf`, `adopt`, `arm`, `sendFee`, `reviewObligation`, `ensureDefaultPaymentMethod`, `invoiceMatches`, `invoiceStateOf`, `reviewFor`, `syncInvoice`, `holdInvoice`, `store`, `cancelPending`, `cancelObligations`, `cancelObligation`
 - `internal/billing/checkout.go`: `fund`, `createObligations`
 - `internal/billing/suspension.go`: `requestFee`, `correctEpisode`
+- `internal/billing/withdraw.go`: `withdraw`
 - `internal/billing/summary.go`: `summarize`, `invoiceReady`
 - `internal/billing/billing.go`: `InvoiceURL`, `ErrInvoiceNotReady`
 - `internal/billing/stripe.go`: `reinstatementFeeCents`

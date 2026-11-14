@@ -422,8 +422,12 @@ func (s *Service) syncContract(ctx context.Context, c Contract) {
 // reconcileContract refreshes everything Stripe owns for one contract: in-flight Checkout
 // attempts, the later invoices, and every invoice with its payments, charges, refunds and
 // disputes. The same pass is the daily audit that finds events nobody delivered.
-// Last it applies the school's deadline rules to what Stripe just reported: suspension,
-// cleanup of corrected fees and reactivation.
+// Between the two it pays failed installments again whose retry is due (retry.go). Then it
+// applies the school's deadline rules to what Stripe just reported: suspension,
+// cleanup of corrected fees and reactivation. Tuition invoices are read before the deadline
+// rules that judge them, fee invoices after, so a fee whose episode this pass corrects is
+// read as cancelled and a paid one is flagged for refund review at once. A withdrawn contract
+// only mirrors, cancels and refunds: nothing is scheduled, retried or judged again.
 // ponytail: every sync re-reads all of the contract's invoices (at most six); narrow it to
 // changed invoices if per-contract request volume ever matters.
 func (s *Service) reconcileContract(ctx context.Context, l lease) error {
@@ -462,26 +466,49 @@ func (s *Service) reconcileContract(ctx context.Context, l lease) error {
 	if c.FundedAt == nil {
 		return nil
 	}
-	if err := s.scheduleInvoices(ctx, l); err != nil {
-		return err
+	withdrawn := c.WithdrawnAt != nil
+	if !withdrawn {
+		if err := s.scheduleInvoices(ctx, l); err != nil {
+			return err
+		}
 	}
 	var obligations []Obligation
 	if err := db.Where("contract_id = ? AND stripe_invoice_id IS NOT NULL", l.id).Order("number ASC").Find(&obligations).Error; err != nil {
 		return err
 	}
-	for _, o := range obligations {
-		if err := s.renew(ctx, l); err != nil {
+	syncKind := func(kind string) error {
+		for _, o := range obligations {
+			if o.Kind != kind {
+				continue
+			}
+			if err := s.renew(ctx, l); err != nil {
+				return err
+			}
+			if err := s.syncInvoice(ctx, l, o.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := syncKind("tuition"); err != nil {
+		return err
+	}
+	if !withdrawn {
+		if err := s.retryFailed(ctx, l); err != nil {
 			return err
 		}
-		if err := s.syncInvoice(ctx, l, o.ID); err != nil {
+		if err := s.evaluateDeadlines(ctx, l); err != nil {
 			return err
 		}
 	}
-	if err := s.evaluateDeadlines(ctx, l); err != nil {
+	if err := syncKind("reinstatement"); err != nil {
 		return err
 	}
-	if err := s.cancelFees(ctx, l); err != nil {
+	if err := s.cancelObligations(ctx, l); err != nil {
 		return err
+	}
+	if withdrawn {
+		return s.refundPayments(ctx, l)
 	}
 	return s.evaluateReactivation(ctx, l)
 }
@@ -564,8 +591,9 @@ func (s *Service) nextSync(ctx context.Context, id uint64, now time.Time) (time.
 
 // nextSyncAt picks the earliest of: the daily audit; a quarter-hour recheck while a Checkout
 // is in flight, tuition is overdue, an open fee (no DueAt, amount remaining) awaits payment,
-// or a payment still lacks fee/net data; the nearest unsettled installment date; and its
-// not-yet-handled 14-day deadline.
+// or a payment still lacks fee/net data; the nearest unsettled installment date; a failed
+// installment's next retry; and its not-yet-handled 14-day deadline. A withdrawn contract
+// rechecks only while a cancel or refund is pending or a payment lacks fee/net data.
 func nextSyncAt(now time.Time, c Contract, obligations []Obligation, pays []Payment, inFlight bool) time.Time {
 	next := now.Add(auditEvery)
 	soonest := func(t time.Time) {
@@ -580,7 +608,23 @@ func nextSyncAt(now time.Time, c Contract, obligations []Obligation, pays []Paym
 	if c.FundedAt == nil {
 		return next
 	}
+	if c.WithdrawnAt != nil { // only cancels and refunds remain
+		for _, o := range obligations {
+			if o.cancelPending() {
+				soonest(soon)
+			}
+		}
+		for _, p := range pays {
+			if p.refundableCents() > 0 || p.BalanceTransactionID == nil {
+				soonest(soon)
+			}
+		}
+		return next
+	}
 	for _, o := range obligations {
+		if t := o.NextRetryAt; t != nil && t.After(now) {
+			soonest(*t)
+		}
 		if o.AmountRemainingCents == 0 {
 			continue
 		}

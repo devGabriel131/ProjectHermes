@@ -43,7 +43,7 @@ func (s *Service) Overview(ctx context.Context, now time.Time, window time.Durat
 			count(*) FILTER (WHERE o.failure_or_action_required AND o.first_settled_at IS NULL AND o.amount_remaining_cents > 0)
 		FROM billing_obligations o
 		JOIN billing_contracts c ON c.id = o.contract_id
-		WHERE o.kind = 'tuition' AND c.funded_at IS NOT NULL`, at, until).Row().Scan(
+		WHERE o.kind = 'tuition' AND o.collection_disposition = 'collect' AND c.funded_at IS NOT NULL`, at, until).Row().Scan(
 		&o.OutstandingCents, &o.OverdueCents, &o.OverdueInstallments,
 		&o.DueSoonCents, &o.DueSoonInstallments, &o.FailedInstallments); err != nil {
 		return Overview{}, err

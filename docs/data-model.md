@@ -51,6 +51,7 @@ erDiagram
         string group "check: Básico | Regular"
         text cohort "check: YYYY-MM"
         boolean is_active
+        timestamptz withdrawn_at
         timestamptz created_at
     }
     billing_contracts {
@@ -63,6 +64,8 @@ erDiagram
         string stripe_customer_id UK
         string review_reason
         timestamptz funded_at
+        timestamptz withdrawn_at
+        string withdrawn_by
         timestamptz next_sync_at
     }
     billing_obligations {
@@ -133,13 +136,15 @@ Numeric primary keys are `BIGINT`, which Go holds as `uint64`. The range is chec
 | `settings` | `internal/settings` | Staff via `POST /management/settings`, `POST /management/program-start-date` and `POST /management/bootcamp-date` | Check `settings_single_row (id = 1)`. Check `link_lifetime_days_range (link_lifetime_days BETWEEN 2 AND 14)`. Primary key `id`. `bootcamp_date` (YYYY-MM-DD or empty) is read by ProjectHephaestus for its bootcamp employer letter: keep the column name. |
 | `links` | `internal/links` | Staff link create, rename and cancel; customer start (`enrollment_count`) | Primary key `id`. Unique index on `token` (`link_token_length` check: 43 chars). Non-null `name`, `created_by`, `expires_at`, `enrollment_count` (enrollments ever started; `StartEnrollment` increments it in the statement that inserts the enrollment, and caps it at `MaxLinkEnrollments`). |
 | `enrollments` | `internal/links` | Customer start (`StartEnrollment`), drafts, autosave, submit, accept; staff cancel (`billing.Service.CancelEnrollment` through `links.CancelEnrollmentTx`); `links.Enroll`; `billing.UpdateContact` | Primary key `id`. Foreign key `link_id` -> `links(id)`. Unique index `session_hash` and check `session_hash_size (octet_length(session_hash) = 32)`. Partial unique index `idx_enrollment_pin (pin WHERE pin <> '')`. Non-null contact defaults. |
-| `students` | `internal/students` | Billing worker/funding transaction (`links.Enroll`); staff edits; staff import (`Add`); billing worker and staff reinstatement (`is_active`) | Primary key `id`. Unique index and nullable foreign key `enrollment_id` -> `enrollments(id)`. Partial unique index `idx_student_pin (pin WHERE pin <> '')`. Check `student_group_valid ("group" IN ('Básico', 'Regular'))`. Check `student_cohort_valid (cohort = '' OR cohort ~ '^[0-9]{4}-(0[1-9]\|1[0-2])$')`. |
-| `billing_contracts` | `internal/billing` | Customer checkout start (`StartCheckout`); billing worker; staff edits (`TouchContract`); customer edits (`UpdateContact`/`touch`) | Primary key `id`. Unique index and foreign key `enrollment_id` -> `enrollments(id)`. Unique index `reference`. Unique index `stripe_customer_id`. Checks `contract_installment_count (installment_count > 0)`, `contract_total_cents (total_cents > 0)`. |
-| `billing_obligations` | `internal/billing` | Customer checkout start (`createObligations`); billing worker (`scheduleInvoices`, `syncInvoice`, `requestFee`) | Primary key `id`. Foreign key `contract_id` -> `billing_contracts(id)`. Unique index `reference`. Partial unique index `idx_tuition_contract_number (contract_id, number WHERE kind = 'tuition')`. Check `obligation_kind (kind IN ('tuition', 'reinstatement'))`. Check `obligation_amount_cents (amount_cents > 0)`. Check `obligation_disposition (collection_disposition IN ('collect', 'cancel'))`. Checks on `amount_paid_cents >= 0`, `amount_remaining_cents >= 0`, `other_settlement_cents >= 0`. Unique indexes on `suspension_id`, `stripe_invoice_id`, `stripe_invoice_item_id`. |
+| `students` | `internal/students` | Billing worker/funding transaction (`links.Enroll`); staff edits; staff import (`Add`); billing worker and staff reinstatement (`is_active`); staff withdrawal (`is_active`, `withdrawn_at`) | Primary key `id`. Unique index and nullable foreign key `enrollment_id` -> `enrollments(id)`. Partial unique index `idx_student_pin (pin WHERE pin <> '')`. Check `student_group_valid ("group" IN ('Básico', 'Regular'))`. Check `student_cohort_valid (cohort = '' OR cohort ~ '^[0-9]{4}-(0[1-9]\|1[0-2])$')`. Nullable `withdrawn_at`, no check. |
+| `billing_contracts` | `internal/billing` | Customer checkout start (`StartCheckout`); billing worker; staff edits (`TouchContract`); customer edits (`UpdateContact`/`touch`); staff withdrawal (`withdraw`) | Primary key `id`. Unique index and foreign key `enrollment_id` -> `enrollments(id)`. Unique index `reference`. Unique index `stripe_customer_id`. Checks `contract_installment_count (installment_count > 0)`, `contract_total_cents (total_cents > 0)`. Nullable `withdrawn_at` and `withdrawn_by` (staff username), no check. |
+| `billing_obligations` | `internal/billing` | Customer checkout start (`createObligations`); billing worker (`scheduleInvoices`, `syncInvoice`, `requestFee`, `cancelObligation`); staff withdrawal (`withdraw`) | Primary key `id`. Foreign key `contract_id` -> `billing_contracts(id)`. Unique index `reference`. Partial unique index `idx_tuition_contract_number (contract_id, number WHERE kind = 'tuition')`. Check `obligation_kind (kind IN ('tuition', 'reinstatement'))`. Check `obligation_amount_cents (amount_cents > 0)`. Check `obligation_disposition (collection_disposition IN ('collect', 'cancel'))`. Checks on `amount_paid_cents >= 0`, `amount_remaining_cents >= 0`, `other_settlement_cents >= 0`. Unique indexes on `suspension_id`, `stripe_invoice_id`, `stripe_invoice_item_id`. |
 | `billing_checkout_attempts` | `internal/billing` | Customer checkout start (`StartCheckout`); billing worker (`recordDecline`) | Primary key `id`. Foreign key `contract_id` -> `billing_contracts(id)`. Unique index `reference`. Partial unique index `idx_active_checkout_attempt (contract_id WHERE state IN ('creating', 'open', 'processing', 'expiring', 'uncertain'))`. Unique index `stripe_session_id`. Check `attempt_first_amount_cents (first_amount_cents > 0)`. Check `attempt_state (state IN ('creating', 'open', 'processing', 'expiring', 'uncertain', 'expired', 'failed', 'paid'))`. Nullable `decline_code`: the Stripe code of the latest failed payment try. |
 | `billing_payments` | `internal/billing` | Billing worker (`savePayment`) | Primary key `id` (Stripe PaymentIntent ID). Foreign key `contract_id` -> `billing_contracts(id)`. Unique index `stripe_charge_id`. Checks `payment_gross_received (gross_received_cents >= 0)`, `payment_gross_refunded (gross_refunded_cents >= 0)`. |
-| `billing_suspensions` | `internal/billing` | Billing worker (`evaluateDeadlines`, `evaluateReactivation`, `correctEpisode`); staff reinstatement (`requestFee`) | Primary key `id`. Foreign key `contract_id` -> `billing_contracts(id)`. Partial unique index `idx_active_suspension (contract_id WHERE closed_at IS NULL)`. Check `suspension_close_reason (close_reason IS NULL OR close_reason IN ('reinstated', 'corrected'))`. |
+| `billing_suspensions` | `internal/billing` | Billing worker (`evaluateDeadlines`, `evaluateReactivation`, `correctEpisode`); staff reinstatement (`requestFee`); staff withdrawal (`withdraw` closes the open episode, leaving `close_reason` NULL) | Primary key `id`. Foreign key `contract_id` -> `billing_contracts(id)`. Partial unique index `idx_active_suspension (contract_id WHERE closed_at IS NULL)`. Check `suspension_close_reason (close_reason IS NULL OR close_reason IN ('reinstated', 'corrected'))`. |
 | `billing_webhook_events` | `internal/billing` | Webhook HTTP handler (`/webhooks/stripe`); billing worker | Primary key `id` (Stripe Event ID). Partial index `idx_pending_events (created_at WHERE processed_at IS NULL)`: the worker's claim order. Non-null `event_type`, `resource_id`. |
+
+`AutoMigrate` adds the nullable withdrawal columns (`students.withdrawn_at`, `billing_contracts.withdrawn_at`, `billing_contracts.withdrawn_by`) to an existing database. No constraint changed. A withdrawal closes an episode with `close_reason` NULL, which `suspension_close_reason` already allows; a new close reason would have needed a manual migration, since AutoMigrate creates a missing named check but never rewrites an existing one ([Withdrawal](billing/withdrawal.md)).
 
 ## Cross-table PIN constraint
 
@@ -158,6 +163,7 @@ A concurrent race between `Submit` and `Enroll` can still see the PIN free under
 - `internal/auth/auth.go`: `User`, `Session`
 - `internal/settings/settings.go`: `Settings`
 - `internal/links/links.go`: `Link`, `Enrollment`, `Enroll`, `Store.Submit`
-- `internal/students/students.go`: `Student`, `Details`
-- `internal/billing/models.go`: `Contract`, `Obligation`, `CheckoutAttempt`, `Payment`, `Suspension`, `WebhookEvent`
+- `internal/students/students.go`: `Student`, `Details`, `WithdrawnAt`
+- `internal/billing/models.go`: `Contract`, `Obligation`, `CheckoutAttempt`, `Payment`, `Suspension`, `WebhookEvent`, `WithdrawnAt`, `WithdrawnBy`
+- `internal/billing/withdraw.go`: `withdraw`
 - `main.go`: `models`

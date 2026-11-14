@@ -37,7 +37,7 @@ type studentPageData struct {
 	Student  studentView
 	Field    *studentFieldView
 	Modal    bool
-	// The roster's filters, "" for all: Status is "active" or "suspended", Cohort one of
+	// The roster's filters, "" for all: Status is "active", "suspended" or "withdrawn", Cohort one of
 	// Cohorts, and Group one of Groups.
 	Status, Cohort, Group string
 	Cohorts               []string // every cohort with a student, newest first
@@ -148,9 +148,8 @@ func (s *site) studentList(w http.ResponseWriter, r *http.Request) {
 		Status: query.Get("status"), Cohort: query.Get("cohort"), Group: query.Get("group"),
 	}
 	var filter students.Filter
-	if data.Status == "active" || data.Status == "suspended" {
-		isActive := data.Status == "active"
-		filter.Active = &isActive
+	if slices.Contains([]string{"active", "suspended", "withdrawn"}, data.Status) {
+		filter.Status = data.Status
 	} else {
 		data.Status = ""
 	}
@@ -314,6 +313,10 @@ func (s *site) act(do func(context.Context, uint64) (*billing.Summary, error)) h
 
 func (s *site) requestReinstatement(ctx context.Context, studentID uint64) (*billing.Summary, error) {
 	return s.billing.RequestReinstatement(ctx, studentID, s.staff(ctx))
+}
+
+func (s *site) withdraw(ctx context.Context, studentID uint64) (*billing.Summary, error) {
+	return s.billing.Withdraw(ctx, studentID, s.staff(ctx))
 }
 
 // invoice sends staff to a hosted invoice. Its links expire and are never stored, so one is fetched now.

@@ -29,6 +29,8 @@ type Contract struct {
 	SyncedCustomerName  string
 	SyncedCustomerEmail string
 	ReviewReason        *string
+	WithdrawnAt         *time.Time
+	WithdrawnBy         *string
 	LastSyncedAt        *time.Time
 	NextSyncAt          *time.Time
 	LeaseToken          *string
@@ -100,6 +102,16 @@ type Payment struct {
 	NetCents                  *int64
 	CreatedAt                 time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt                 time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
+}
+
+// refundableCents is the cash a withdrawal still gives back: received minus refunded, or nothing
+// while a dispute moves the money (open or lost).
+func (p Payment) refundableCents() int64 {
+	switch deref(p.DisputeOrFraudReviewState) {
+	case "dispute_open", "dispute_lost":
+		return 0
+	}
+	return p.GrossReceivedCents - p.GrossRefundedCents
 }
 
 // Suspension represents an active or historic academic suspension due to missed tuition deadline.

@@ -6,15 +6,17 @@
   <header class="customer-heading payment-confirmed">
     <span class="payment-confirmed-icon">{{template "icon-check"}}</span>
     <h1>Tu plan de pago</h1>
-    <p>Confirmamos tu pago inicial.{{if gt (len .Installments) 1}} Los pagos restantes se cobran automáticamente en las fechas indicadas.{{end}}</p>
+    <p>{{if .WithdrawnAt}}Tu matrícula fue retirada. No se cobrarán más pagos; el reembolso se envía a la tarjeta con la que pagaste.{{else}}Confirmamos tu pago inicial.{{if gt (len .Installments) 1}} Los pagos restantes se cobran automáticamente en las fechas indicadas.{{end}}{{end}}</p>
   </header>
   {{with $.Error}}<p id="payment-error" class="customer-callout" role="alert">{{template "icon-alert"}}<span>{{.}}</span></p>{{end}}
+  {{if not .WithdrawnAt}}
   <div class="payment-progress customer-card" role="status">
     <p class="payment-progress-plan">{{.PlanName}}</p>
     <p class="payment-progress-paid"><strong>{{money .TuitionPaidCents}}</strong> pagados de {{money .TotalCents}}</p>
     <progress max="{{.TotalCents}}" value="{{.TuitionPaidCents}}">{{money .TuitionPaidCents}} de {{money .TotalCents}}</progress>
     <p class="payment-progress-left">Pendiente: <strong>{{money .RemainingTuitionCents}}</strong></p>
   </div>
+  {{end}}
   <section class="customer-card" aria-labelledby="payment-schedule-title">
     <h2 id="payment-schedule-title" class="payment-schedule-heading">Fechas y estado</h2>
     <ol class="payment-schedule" role="list">
@@ -22,7 +24,7 @@
       <li data-status="{{.Status}}">
         <span class="payment-installment-when">
           <strong>{{if .DueAt}}{{billingDate .DueAt}}{{else}}Fecha por confirmar{{end}}</strong>
-          <span class="payment-installment-state">{{if eq .Status "paid"}}Pagado{{if .PaidAt}} el {{billingDate .PaidAt}}{{end}}{{else if eq .Status "overdue"}}Vencido{{else if eq .Status "action_required"}}Requiere atención{{else}}Programado{{end}}</span>
+          <span class="payment-installment-state">{{if eq .Status "paid"}}Pagado{{if .PaidAt}} el {{billingDate .PaidAt}}{{end}}{{else if eq .Status "overdue"}}Vencido{{else if eq .Status "action_required"}}Requiere atención{{else if eq .Status "cancelled"}}Cancelado{{else}}Programado{{end}}</span>
         </span>
         <strong class="payment-installment-amount">{{money .AmountCents}}</strong>
       </li>

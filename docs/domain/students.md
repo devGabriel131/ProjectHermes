@@ -72,7 +72,8 @@ A `Submit` racing a concurrent `Enroll` can still see the PIN free under READ CO
 | `enrollment_id` | Nullable unique `RESTRICT` foreign key to `enrollments.id`: one Student per enrollment, and the enrollment cannot be deleted or rekeyed; `NULL` for staff-added students. |
 | six contact columns | Copied from the Enrollment at enrollment. After that the Student is canonical and staff edit it; the Enrollment keeps its last pre-payment snapshot. |
 | `created_at` | The payment instant: `enrollments.paid_at` and `billing_contracts.funded_at`. |
-| `is_active` | Default true. Billing flips it on suspension and reactivation ([Suspension](../billing/suspension.md)). Nothing in this package writes it. |
+| `is_active` | Default true. Billing flips it on suspension and reactivation ([Suspension](../billing/suspension.md)) and sets it false for good on withdrawal. Nothing in this package writes it. |
+| `withdrawn_at` | NULL until staff withdraw the student; billing then sets it with `is_active = false` ([Withdrawal](../billing/withdrawal.md)). Irreversible: nothing clears it or reactivates the student, and re-enrolling takes a new link. The row is kept, PIN included, and `heldPins` reads every student, so the same person re-enrolling needs another PIN unless staff change this one. Nothing in this package writes it. |
 | `pin` | Moved from the Enrollment by `Enroll`. |
 | `group` | The column default `Básico`: `Enroll` never sets it. Staff change it afterwards. |
 | `cohort` | `left(program_start_date, 7)` of the Enrollment's accepted agreement snapshot, `YYYY-MM`, or `''` for staff-added students. The `student_cohort_valid` check enforces the shape. No edit reaches it, so it stays the start month after a promotion. `CohortLabel` renders it as "November 2026". |
@@ -100,7 +101,7 @@ A write publishes a live event. Management then calls `TouchContract` so the con
 
 ## Source
 
-- `internal/students/students.go`: `Details`, `Student`, `CohortLabel`, `Store.List`, `Store.Get`, `Store.PinTaken`, `Store.UpdateField`, `Store.Add`, `heldPins`, `pinIndex`, `IsUniqueViolation`, `ErrUnknownField`
+- `internal/students/students.go`: `Details`, `Student`, `WithdrawnAt`, `CohortLabel`, `Store.List`, `Store.Get`, `Store.PinTaken`, `Store.UpdateField`, `Store.Add`, `heldPins`, `pinIndex`, `IsUniqueViolation`, `ErrUnknownField`
 - `internal/students/fields.go`: `Fields`, `StaffFields`, `FindField`, `FindStaffField`, `pinField`, `groupField`, `ParseName`, `ParseEmail`, `ParsePhone`, `ParseDateOfBirth`, `ParseGender`, `ParseGroup`, `ParsePin`, `ValidationError`
 - `internal/puertorico/puertorico.go`: `Zone`
 - `internal/students/municipalities.go`: `MunicipalityOptions`, `ParseMunicipality`
@@ -108,3 +109,4 @@ A write publishes a live event. Management then calls `TouchContract` so the con
 - `internal/customer/customer.go`: `checkPin`, `readSubmission`, `pinTakenMessage`, `pinLimitMessage`
 - `internal/billing/checkout.go`: `fund`
 - `internal/billing/suspension.go`: `evaluateDeadlines`
+- `internal/billing/withdraw.go`: `withdraw`

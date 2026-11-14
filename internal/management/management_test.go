@@ -234,7 +234,7 @@ func writePaths(id uint64) []string {
 		fmt.Sprintf("/management/enrollments/%d/cancel", id),
 		"/management/settings", "/management/program-start-date", "/management/bootcamp-date",
 		"/management/students", "/management/students/import",
-		"/management/students/1/fields/name", "/management/students/1/billing/reconcile", "/management/students/1/billing/reinstatement", "/management/students/1/billing/portal",
+		"/management/students/1/fields/name", "/management/students/1/billing/reconcile", "/management/students/1/billing/reinstatement", "/management/students/1/billing/portal", "/management/students/1/billing/withdraw",
 	}
 }
 

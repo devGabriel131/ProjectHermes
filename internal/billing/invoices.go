@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/stripe/stripe-go/v87"
@@ -53,9 +54,11 @@ func invoiceMatches(o Obligation, inv *stripe.Invoice) bool {
 }
 
 // reviewFor keeps a reason owned by another workflow; otherwise the invoice-derived one wins.
+// payment_review on an obligation is invoice-derived too, since only invoiceStateOf sets it, so a
+// withdrawal can clear it.
 func reviewFor(o Obligation, computed string) string {
 	switch current := deref(o.ReviewReason); current {
-	case "", reviewInvoiceMismatch, reviewMissingInvoice:
+	case "", reviewInvoiceMismatch, reviewMissingInvoice, reviewPaymentReview:
 		return computed
 	default:
 		return current
@@ -64,8 +67,9 @@ func reviewFor(o Obligation, computed string) string {
 
 // invoiceStateOf maps the current invoice onto the quoted obligation. Drafts owe the quoted
 // cents; void or uncollectible invoices never forgive signed tuition; credits and off-Stripe
-// settlement are kept apart from Stripe cash.
-func invoiceStateOf(o Obligation, inv *stripe.Invoice) (st invoiceState, settledAt time.Time) {
+// settlement are kept apart from Stripe cash. A cancelled invoice that was paid anyway is a
+// review case, unless the contract is withdrawn: the withdrawal refunds it.
+func invoiceStateOf(o Obligation, inv *stripe.Invoice, withdrawn bool) (st invoiceState, settledAt time.Time) {
 	st = invoiceState{
 		Status:  string(inv.Status),
 		Paid:    inv.AmountPaid,
@@ -81,7 +85,7 @@ func invoiceStateOf(o Obligation, inv *stripe.Invoice) (st invoiceState, settled
 			st.Settled = true
 			settledAt = time.Unix(inv.StatusTransitions.PaidAt, 0).UTC()
 		}
-		if o.CollectionDisposition == "cancel" {
+		if o.CollectionDisposition == "cancel" && !withdrawn {
 			computed = reviewPaymentReview // a corrected fee was collected anyway: staff refund review
 		}
 	case stripe.InvoiceStatusOpen:
@@ -143,7 +147,11 @@ func (s *Service) syncInvoice(ctx context.Context, l lease, obligationID uint64)
 		}
 		pays = append(pays, pay)
 	}
-	st, settledAt := invoiceStateOf(o, inv)
+	var c Contract
+	if err := require(firstRow(s.db.WithContext(ctx), &c, "id = ?", l.id)); err != nil {
+		return err
+	}
+	st, settledAt := invoiceStateOf(o, inv, c.WithdrawnAt != nil)
 	if err := s.store(ctx, l, &invoiceRead{o, st, settledAt}, pays); err != nil {
 		return err
 	}
@@ -197,10 +205,11 @@ func (s *Service) store(ctx context.Context, l lease, read *invoiceRead, pays []
 			}
 			changed = changed || did
 		}
-		// Refunds, disputes and fraud warnings are surfaced for staff; nothing is rebilled or refunded.
+		// Refunds, disputes and fraud warnings are surfaced for staff; a withdrawn contract's refunds are
+		// its own, so only disputes and fraud warnings flag it.
 		var flagged int64
 		if err := tx.Model(&Payment{}).
-			Where("contract_id = ? AND (gross_refunded_cents > 0 OR dispute_or_fraud_review_state IS NOT NULL)", c.ID).
+			Where("contract_id = ? AND ((? AND gross_refunded_cents > 0) OR dispute_or_fraud_review_state IS NOT NULL)", c.ID, c.WithdrawnAt == nil).
 			Count(&flagged).Error; err != nil {
 			return err
 		}
@@ -557,37 +566,49 @@ func (s *Service) ensureDefaultPaymentMethod(ctx context.Context, l lease, c Con
 	return true, s.mark(ctx, l, reviewUnsupportedPaymentMethod, false)
 }
 
-// ---- fee cancellation (corrected suspension episodes)
+// ---- cancellation (corrected fees, withdrawn contracts)
 
-// cancelFees finishes the Stripe side of fees whose episode was corrected. The intent is
-// already persisted as CollectionDisposition=cancel, so every retry only continues cancelling.
-func (s *Service) cancelFees(ctx context.Context, l lease) error {
+// cancelPending reports whether the obligation's invoice still has to be cancelled at Stripe:
+// its collection is cancelled and an invoice exists or may exist, and it is not already void,
+// deleted or paid.
+func (o Obligation) cancelPending() bool {
+	return o.CollectionDisposition == "cancel" && (o.StripeInvoiceID != nil || o.InvoiceCreationStartedAt != nil) &&
+		!slices.Contains([]string{"void", "deleted", "paid"}, deref(o.LatestStripeStatus))
+}
+
+// cancelObligations finishes the Stripe side of every obligation whose collection was cancelled:
+// fees of corrected suspension episodes and each unsettled obligation of a withdrawn contract.
+// The intent is already persisted as CollectionDisposition=cancel, so every retry only continues cancelling.
+func (s *Service) cancelObligations(ctx context.Context, l lease) error {
 	db := s.db.WithContext(ctx)
-	var fees []Obligation
-	if err := db.Where("contract_id = ? AND kind = 'reinstatement' AND collection_disposition = 'cancel' "+
-		"AND (stripe_invoice_id IS NOT NULL OR invoice_creation_started_at IS NOT NULL) "+
-		"AND COALESCE(latest_stripe_status, '') NOT IN ('void', 'deleted', 'paid')", l.id).
-		Order("id ASC").Find(&fees).Error; err != nil || len(fees) == 0 {
+	var cancelled []Obligation
+	if err := db.Where("contract_id = ? AND collection_disposition = 'cancel'", l.id).
+		Order("id ASC").Find(&cancelled).Error; err != nil {
 		return err
+	}
+	cancelled = slices.DeleteFunc(cancelled, func(o Obligation) bool { return !o.cancelPending() })
+	if len(cancelled) == 0 {
+		return nil
 	}
 	var c Contract
 	if err := require(firstRow(db, &c, "id = ?", l.id)); err != nil {
 		return err
 	}
-	for i := range fees {
-		if err := s.cancelFee(ctx, l, c, &fees[i]); err != nil {
+	for i := range cancelled {
+		if err := s.cancelObligation(ctx, l, c, &cancelled[i]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// cancelFee deletes a draft fee invoice or voids a finalized unpaid one. A paid fee is left
-// for staff refund review (syncInvoice flags it); nothing is ever recharged or refunded here,
-// and an uncertain create is only located so it can be cancelled, never finished or sent.
+// cancelObligation deletes a draft invoice or voids a finalized unpaid one. A paid one is left
+// alone: a withdrawal refunds it, otherwise syncInvoice flags it for staff refund review. Nothing
+// is ever recharged here, and an uncertain create is only located so it can be cancelled, never
+// finished or sent.
 // ponytail: an uncertain create that never shows at the provider is re-listed every sync; add
 // a terminal marker if that ever matters.
-func (s *Service) cancelFee(ctx context.Context, l lease, c Contract, o *Obligation) error {
+func (s *Service) cancelObligation(ctx context.Context, l lease, c Contract, o *Obligation) error {
 	if err := s.renew(ctx, l); err != nil {
 		return err
 	}

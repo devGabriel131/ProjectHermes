@@ -105,6 +105,7 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 	mux.Handle("GET /management/students/{id}/billing", timed(s.studentBilling))
 	mux.Handle("POST /management/students/{id}/billing/reconcile", s.act(s.billing.ReconcileStudent))
 	mux.Handle("POST /management/students/{id}/billing/reinstatement", s.act(s.requestReinstatement))
+	mux.Handle("POST /management/students/{id}/billing/withdraw", s.act(s.withdraw))
 	mux.Handle("GET /management/students/{id}/billing/invoices/{obligation}", http.HandlerFunc(s.invoice))
 	mux.Handle("POST /management/students/{id}/billing/portal", http.HandlerFunc(s.portal))
 	return nil

@@ -29,6 +29,8 @@ type Student struct {
 	Details
 	CreatedAt time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 	IsActive  bool      `gorm:"not null;default:true"`
+	// WithdrawnAt is set by billing when staff withdraw the student; IsActive is false from then on.
+	WithdrawnAt *time.Time
 	// Pin is Socrative's credential for the student. A Link holds it from submit until payment;
 	// Enroll then moves it here. The partial index keeps rows without a PIN from colliding.
 	// The index name is pinIndex.
@@ -76,7 +78,7 @@ func New(db *gorm.DB, changed func()) *Store {
 
 // Filter narrows List. Its zero value keeps every student; a student must match each set field.
 type Filter struct {
-	Active *bool  // is_active equals it when non-nil
+	Status string // "", "active", "suspended" or "withdrawn"; any other value keeps every student
 	Cohort string // a YYYY-MM month, or NoCohort
 	Group  string // one of GroupOptions
 }
@@ -85,8 +87,13 @@ type Filter struct {
 // ponytail: unbounded small mock history; paginate before sustained growth.
 func (s *Store) List(ctx context.Context, filter Filter) ([]Student, error) {
 	query := s.db.WithContext(ctx).Order("created_at DESC, id DESC")
-	if filter.Active != nil {
-		query = query.Where("is_active = ?", *filter.Active)
+	switch filter.Status {
+	case "active":
+		query = query.Where("is_active")
+	case "suspended":
+		query = query.Where("NOT is_active AND withdrawn_at IS NULL")
+	case "withdrawn":
+		query = query.Where("withdrawn_at IS NOT NULL")
 	}
 	if filter.Cohort != "" {
 		if filter.Cohort == NoCohort {
@@ -120,16 +127,18 @@ func (s *Store) Cohorts(ctx context.Context) ([]string, error) {
 }
 
 // Counts is the roster's headcount.
-type Counts struct{ Active, Suspended int }
+type Counts struct{ Active, Suspended, Withdrawn int }
 
-// Total is every retained student, active or not.
+// Total is every enrolled student; withdrawn ones are counted apart.
 func (c Counts) Total() int { return c.Active + c.Suspended }
 
-// Count returns the active and suspended headcounts.
+// Count returns the active, suspended and withdrawn headcounts.
 func (s *Store) Count(ctx context.Context) (Counts, error) {
 	var c Counts
 	err := s.db.WithContext(ctx).Model(&Student{}).Select(
-		"count(*) FILTER (WHERE is_active) AS active, count(*) FILTER (WHERE NOT is_active) AS suspended",
+		"count(*) FILTER (WHERE is_active) AS active, " +
+			"count(*) FILTER (WHERE NOT is_active AND withdrawn_at IS NULL) AS suspended, " +
+			"count(*) FILTER (WHERE withdrawn_at IS NOT NULL) AS withdrawn",
 	).Scan(&c).Error
 	return c, err
 }

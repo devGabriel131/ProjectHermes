@@ -157,7 +157,7 @@ func falseEpisode(e Suspension, tuition []Obligation) bool {
 }
 
 // correctEpisode closes a falsely detected episode, releases its deadline attributions and
-// persists the cancel intent on its fee, all before cancelFees touches Stripe.
+// persists the cancel intent on its fee, all before cancelObligations touches Stripe.
 func correctEpisode(tx *gorm.DB, id uint64, now time.Time) error {
 	if err := tx.Model(&Suspension{}).Where("id = ?", id).Updates(map[string]any{
 		"close_reason": "corrected",

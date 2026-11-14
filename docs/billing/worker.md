@@ -1,6 +1,6 @@
 # Billing Worker
 
-The leased background loop in `internal/billing` that turns stored Stripe webhook events and a timer into per-contract syncs. Intake is in [Webhooks](webhooks.md), money model in [Billing overview](overview.md); invoice creation, suspension policy and review flags have their own pages: [Invoices](invoices.md), [Suspension](suspension.md), [Reviews](reviews.md).
+The leased background loop in `internal/billing` that turns stored Stripe webhook events and a timer into per-contract syncs. Intake is in [Webhooks](webhooks.md), money model in [Billing overview](overview.md); invoice creation, suspension policy, withdrawal and review flags have their own pages: [Invoices](invoices.md), [Suspension](suspension.md), [Withdrawal](withdrawal.md), [Reviews](reviews.md).
 
 The worker never applies an event body. A stored event holds only `id`, `event_type` and `resource_id`; handling it means "re-read that object from Stripe and converge", so replays and out-of-order delivery are harmless. The app never charges a card itself: it creates and arms invoices and Stripe collects.
 
@@ -58,7 +58,7 @@ Wake sources: a stored webhook (`Webhook`), a customer contact edit (`UpdateCont
 
 Only event claims use `SKIP LOCKED`. The contract lease is a compare-and-set, so a second claimer simply gets zero rows. Lock order is Enrollment, then Contract, then Student, the same order checkout and contact edits take.
 
-Staff actions share the contract lease. `ReconcileStudent` and `RequestReinstatement` go through `withStaffContract`, which turns `errContractBusy` into `ErrPaymentPending` (management answers 409 "A payment is still pending. Try again shortly."). Staff find the contract through the Student row, which exists only after funding, so in production they sync funded contracts; the pipeline they run is the worker's own.
+Staff actions share the contract lease. `ReconcileStudent`, `RequestReinstatement` and `Withdraw` go through `withStaffContract`, which turns `errContractBusy` into `ErrPaymentPending` (management answers 409 "A payment is still pending. Try again shortly."). Staff find the contract through the Student row, which exists only after funding, so in production they sync funded contracts; the pipeline they run is the worker's own.
 
 ## Retry rules
 
@@ -89,7 +89,7 @@ An event whose Payment row does not exist yet is dropped as processed: the invoi
 
 ## Per-contract sync
 
-`reconcileContract` is the single orchestrator. The worker (`syncContract`), staff Reconcile (`ReconcileStudent`) and staff reinstatement (`RequestReinstatement`) all call it. Every contract syncs, funded or not. Any error aborts the pass; every step is idempotent, so the retry resumes where it stopped.
+`reconcileContract` is the single orchestrator. The worker (`syncContract`), staff Reconcile (`ReconcileStudent`), staff reinstatement (`RequestReinstatement`) and staff withdrawal (`Withdraw`) all call it. Every contract syncs, funded or not. Any error aborts the pass; every step is idempotent, so the retry resumes where it stopped.
 
 ```mermaid
 flowchart TD
@@ -107,6 +107,8 @@ flowchart TD
     J --> K["10. markSynced: write next_sync_at, release the lease"]
 ```
 
+A withdrawn contract (`withdrawn_at` set) skips steps 5, 6b and 7 and runs `refundPayments` instead of `evaluateReactivation`: it only mirrors, cancels and refunds ([Withdrawal](withdrawal.md)).
+
 | Step | Function | What it does |
 |---|---|---|
 | 2 | `resumeCreate`, `syncAttempt` | For each active attempt (`creating`, `open`, `processing`, `expiring`, `uncertain`). Without a Session ID: a `creating` attempt younger than `creatingGrace` (15 s: `providerBudget` + `persistBudget` + 2 s) is left to its web request; otherwise list the Customer's Sessions and match `client_reference_id` (one: adopt and sync; several: contract review `unresolved_provider_create`; none and younger than 23 h: replay the create under the same idempotency key; none and older: `failed`). With a Session: move the attempt, adopt a payable URL, or `fund`; a paid Session of an already funded contract is a no-op. States and sessions: [Checkout](checkout.md) |
@@ -117,6 +119,7 @@ flowchart TD
 | 7-9 | `evaluateDeadlines`, `cancelFees`, `evaluateReactivation` | School policy on the freshly refreshed state: [Suspension](suspension.md) |
 
 Staff Reconcile is therefore not charge-free: it can create and arm invoices (a past-due invoice is finalized at once, so Stripe then collects) and suspend or reactivate a student. The attempt and funding steps are the same code, but staff reach only funded contracts (an enrollment's Student exists only after funding), so in production funding itself happens in the worker path. Staff reinstatement runs the same pass first, then creates the fee.
+Staff Reconcile is therefore not charge-free: it can create and arm invoices (a past-due invoice is finalized at once, so Stripe then collects), pay a failed installment again when its retry is due, and suspend or reactivate a student. The attempt and funding steps are the same code, but staff reach only funded contracts (an enrollment's Student exists only after funding), so in production funding itself happens in the worker path. Staff reinstatement runs the same pass first, then creates the fee. Staff withdrawal records the withdrawal first, then runs the pass, which on a withdrawn contract charges nothing: it only cancels and refunds, and so does Reconcile on a withdrawn student.
 
 ### Funding and scheduling
 
@@ -135,12 +138,13 @@ Staff Reconcile is therefore not charge-free: it can create and arm invoices (a 
 | Every contract, funded or not | now + 24 h |
 | A Checkout attempt is active | now + 15 min |
 | Unfunded contract | stop here (only the two rules above apply) |
+| Withdrawn contract | now + 15 min while an obligation is `cancelPending`, a Payment has refundable cents or a Payment lacks `balance_transaction_id`; then stop here (the rules below do not apply) |
 | Obligation with money remaining and no due date, or a due date already passed (including an open reinstatement fee) | now + 15 min |
 | Obligation with money remaining and a future due date | that due date |
 | Obligation with a due date, money remaining and no `deadline_episode_id` | `due_at + 14 days` while still in the future |
 | A Payment without `balance_transaction_id` (fee and net not yet known) | now + 15 min |
 
-Other writers move the schedule: funding sets `next_sync_at = NULL` (due at once, see [Funding and scheduling](#funding-and-scheduling)), `touch` sets it to now (contact edits, `TouchContract`), a failed sync sets now + 1 min. The 15-minute rechecks and the daily audit are how Stripe changes are found when no webhook arrives.
+Other writers move the schedule: funding sets `next_sync_at = NULL` (due at once, see [Funding and scheduling](#funding-and-scheduling)), `touch` sets it to now (contact edits, `TouchContract`), a withdrawal sets it to now, a failed sync sets now + 1 min. The 15-minute rechecks and the daily audit are how Stripe changes are found when no webhook arrives.
 
 ## Graceful stop
 
@@ -159,11 +163,12 @@ The worker context derives from the process signal context, so the worker stops 
 | `checkout.go`, `payments` | `paymentFrom`, `reviewState`, `savePayment`, `syncPayment` |
 | `invoices.go`, `invoices` | `invoiceStateOf`, `syncInvoice`, `holdInvoice`, `store` |
 | `invoices.go`, `invoice creation (later tuition, reinstatement fee)` | `scheduleInvoices`, `scheduleOne`, `createInvoice`, `createItem`, `adopt`, `arm`, `sendFee`, `reviewObligation`, `ensureDefaultPaymentMethod` |
-| `invoices.go`, `fee cancellation` | `cancelFees`, `cancelFee` |
+| `invoices.go`, `cancellation (corrected fees, withdrawn contracts)` | `cancelPending`, `cancelObligations`, `cancelObligation` |
 | `suspension.go` | `deadlineWindow`, deadline policy, `RequestReinstatement`, `evaluateReactivation` |
+| `withdraw.go` | `Withdraw`, `withdraw`, `refundPayments`, `refundRefused` |
 | `contact.go` | `UpdateContact` (customer edit) and `TouchContract` (staff edit) set `next_sync_at` to now and wake the worker; `ContactEditable` is the lock-free pre-check for showing the edit link |
 
-The worker's work splits by file: queue and lease mechanics plus contract reconciliation (`worker.go`), mirroring Checkout attempts, funding and payments (`checkout.go`), mirroring and creating invoices (`invoices.go`), and the school's policy (`suspension.go`). `suspension.go` reuses the invoice pipeline (`scheduleOne`) for the reinstatement fee; `contact.go` feeds step 3. Whole package: [Billing overview](overview.md).
+The worker's work splits by file: queue and lease mechanics plus contract reconciliation (`worker.go`), mirroring Checkout attempts, funding and payments (`checkout.go`), mirroring, creating and cancelling invoices (`invoices.go`), the school's policy (`suspension.go`) and withdrawal refunds (`withdraw.go`). `suspension.go` reuses the invoice pipeline (`scheduleOne`) for the reinstatement fee; `contact.go` feeds step 3. Whole package: [Billing overview](overview.md).
 
 ## Deliberate choices
 
@@ -184,10 +189,11 @@ The worker's work splits by file: queue and lease mechanics plus contract reconc
 
 - `internal/billing/worker.go`: `Run`, `drain`, `claimEvent`, `drainEvents`, `drainContracts`, `processEvent`, `backoff`, `logFailure`, `handleEvent`, `syncSession`, `paymentIntentOf`, `withContract`, `release`, `renew`, `leased`, `leasedStudent`, `markContract`, `mark`, `syncContract`, `reconcileContract`, `syncCustomerContact`, `markSynced`, `nextSyncAt`, `workerTick`, `eventBatch`, `contractBatch`, `retryMin`, `retryMax`, `contractRetry`, `activeSyncEvery`, `auditEvery`, `leaseSQL`, `eventsDue`, `errContractBusy`, `errLeaseLost`, `ignoreMissing`
 - `internal/billing/checkout.go`: `syncAttempt`, `recordDecline`, `resumeCreate`, `creatingGrace`, `moveAttempt`, `fund`, `savePayment`, `syncPayment`
-- `internal/billing/invoices.go`: `scheduleInvoices`, `syncInvoice`, `holdInvoice`, `store`, `cancelFees`
+- `internal/billing/invoices.go`: `scheduleInvoices`, `syncInvoice`, `holdInvoice`, `store`, `invoiceStateOf`, `cancelPending`, `cancelObligations`
+- `internal/billing/withdraw.go`: `Withdraw`, `refundPayments`
 - `internal/billing/billing.go`: `withStaffContract`, `ReconcileStudent`, `ErrPaymentPending`, `providerBudget`, `persistBudget`, `persistCtx`, `wakeWorker`
 - `internal/billing/suspension.go`: `deadlineWindow`, `RequestReinstatement`, `evaluateDeadlines`, `evaluateReactivation`
 - `internal/billing/contact.go`: `TouchContract`, `UpdateContact`, `ContactEditable`, `touch`
 - `internal/billing/webhook.go`: `Webhook`, `webhookEvents`
-- `internal/billing/models.go`: `WebhookEvent`, `idx_pending_events`, `Contract`
+- `internal/billing/models.go`: `WebhookEvent`, `idx_pending_events`, `Contract`, `WithdrawnAt`, `refundableCents`
 - `main.go`: `run`

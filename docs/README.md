@@ -8,7 +8,7 @@ This directory contains the architecture, domain, billing, management, and opera
 2. [Architecture](architecture.md) — System context, mounted routes, middleware chain, and package dependencies.
 3. [Data model](data-model.md) — The 12 PostgreSQL tables, keys, and database-enforced constraints.
 4. **Domain pages**: [Links](domain/links.md) -> [Customer flow](domain/customer-flow.md) -> [Students](domain/students.md) -> [Agreement](domain/agreement.md).
-5. **Billing pages**: [Billing overview](billing/overview.md) -> [Checkout](billing/checkout.md) -> [Webhooks](billing/webhooks.md) -> [Worker](billing/worker.md) -> [Invoices](billing/invoices.md) -> [Suspension](billing/suspension.md) -> [Reviews](billing/reviews.md).
+5. **Billing pages**: [Billing overview](billing/overview.md) -> [Checkout](billing/checkout.md) -> [Webhooks](billing/webhooks.md) -> [Worker](billing/worker.md) -> [Invoices](billing/invoices.md) -> [Suspension](billing/suspension.md) -> [Withdrawal](billing/withdrawal.md) -> [Reviews](billing/reviews.md).
 6. **Management and UI**: [Management overview](management/overview.md) -> [Students management](management/students.md) -> [Dashboard](management/dashboard.md) -> [Frontend](frontend.md) -> [Live updates](live-updates.md) -> [Staff auth](staff-auth.md).
 7. **Operations and Testing**: [Configuration](operations/configuration.md) -> [Startup & shutdown](operations/startup-shutdown.md) -> [Local development](operations/local-development.md) -> [Stripe setup](operations/stripe-setup.md) -> [Railway](operations/railway.md) -> [Observability](operations/observability.md) -> [Testing](testing.md) -> [Go-live](go-live.md).
 
@@ -34,6 +34,7 @@ This directory contains the architecture, domain, billing, management, and opera
 | Billing | [billing/worker.md](billing/worker.md) | How does the leased background worker synchronize Stripe state? |
 | Billing | [billing/invoices.md](billing/invoices.md) | How are later tuition and reinstatement invoices armed and paid? |
 | Billing | [billing/suspension.md](billing/suspension.md) | When are students suspended for missed tuition and reinstated? |
+| Billing | [billing/withdrawal.md](billing/withdrawal.md) | How does staff withdraw a student with a full refund? |
 | Billing | [billing/reviews.md](billing/reviews.md) | What causes review flags and how do they block automation? |
 | Management | [management/overview.md](management/overview.md) | How do staff views, HTMX fragments, and navigation operate? |
 | Management | [management/students.md](management/students.md) | How do staff inspect student details and perform billing actions? |

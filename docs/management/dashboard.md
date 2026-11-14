@@ -15,7 +15,7 @@ flowchart LR
     Loop --> Sent["LinksCreated, ActiveLinks"]
     Loop --> Started["EnrollmentsStarted, LinksInProgress"]
     Loop --> Forms["FormsCompleted"]
-    Overview --> Q1["Query 1: tuition obligations of funded contracts"]
+    Overview --> Q1["Query 1: collectable tuition obligations of funded contracts"]
     Overview --> Q2["Query 2: every billing_payments row"]
     Overview --> Q3["Query 3: every billing_contracts row"]
     Q1 --> Money["Outstanding, Overdue, DueSoon, Failed"]
@@ -46,10 +46,11 @@ flowchart LR
 | Section | Label in the UI | Derivation |
 |---|---|---|
 | Students | Active | `students` rows with `is_active` true |
-| Students | Suspended | `students` rows with `is_active` false |
-| Students | Total enrolled | Active + Suspended, so every Student row; an enrollment's Student exists only after payment, and staff-added students count too |
+| Students | Suspended | `students` rows with `is_active` false and `withdrawn_at` NULL |
+| Students | Withdrawn | `students` rows with `withdrawn_at` set ([Withdrawal](../billing/withdrawal.md)) |
+| Students | Total enrolled | Active + Suspended, so every Student row except withdrawn ones; an enrollment's Student exists only after payment, and staff-added students count too |
 | Tuition | Collected | `SUM(gross_received_cents - gross_refunded_cents)` over **every** `billing_payments` row. After refunds, before Stripe fees. No funding or obligation-kind filter, so reinstatement fee cash is included |
-| Tuition | Outstanding | `SUM(amount_remaining_cents)` over tuition obligations of funded contracts, due or not. Reinstatement fee obligations and unfunded contracts are excluded |
+| Tuition | Outstanding | `SUM(amount_remaining_cents)` over tuition obligations of funded contracts whose `collection_disposition` is `collect`, due or not. Reinstatement fee obligations, installments a withdrawal cancelled and unfunded contracts are excluded |
 | Tuition | Overdue (amount and count) | Amount: remaining cents of those obligations with `due_at < now`. Count: the same obligations with remaining above zero |
 | Tuition | Due in the next 30 days (amount and count) | Same shape for `now <= due_at < now + 30 d` |
 | Enrollment | Links created | Links created within the window, whatever became of them (Trash included) |
@@ -62,7 +63,7 @@ Three more counts appear only in the attention list:
 
 | Count | Derivation |
 |---|---|
-| Failed installments (`FailedInstallments`) | Tuition obligations of funded contracts with `failure_or_action_required`, no `first_settled_at` and remaining above zero. No due-date condition |
+| Failed installments (`FailedInstallments`) | Tuition obligations of funded contracts, still `collect`, with `failure_or_action_required`, no `first_settled_at` and remaining above zero. No due-date condition |
 | Contracts in review (`ContractsInReview`) | Contracts, **funded or not**, with `review_reason` set, or having any obligation (any kind) with `review_reason` set. Reasons: [Reviews](../billing/reviews.md) |
 | Payments in review (`PaymentsInReview`) | `billing_payments` rows whose `dispute_or_fraud_review_state` is non-empty |
 
@@ -70,7 +71,7 @@ An installment that is both overdue and failed counts once in each of Overdue an
 
 ## Needs attention
 
-`NeedsAttention` is true when `Students.Suspended + OverdueInstallments + FailedInstallments + ContractsInReview + PaymentsInReview` is above zero. The panel then lists only the non-zero rows:
+`NeedsAttention` is true when `Students.Suspended + OverdueInstallments + FailedInstallments + ContractsInReview + PaymentsInReview` is above zero; a withdrawn student is not counted as suspended. The panel then lists only the non-zero rows:
 
 | Row | Text | Link |
 |---|---|---|
@@ -96,7 +97,7 @@ Nothing publishes an event for the clock alone. A figure that changes only becau
 ## Source
 
 - `internal/management/dashboard.go`: `dashboardWindow`, `dashboardData`, `NeedsAttention`, `dashboard`, `LinksCreated`, `ActiveLinks`, `EnrollmentsStarted`, `FormsCompleted`, `LinksInProgress`
-- `internal/management/templates/dashboard.html`: `dashboard-content`, `dashboard-attention`, `dashboard-alert`, `management-changed`
+- `internal/management/templates/dashboard.html`: `dashboard-content`, `dashboard-attention`, `dashboard-alert`, `dashboard-stats`, `management-changed`
 - `internal/billing/overview.go`: `Overview`, `CollectedCents`, `OutstandingCents`, `OverdueInstallments`, `DueSoonInstallments`, `FailedInstallments`, `ContractsInReview`, `PaymentsInReview`, `FundedRecently`
 - `internal/students/students.go`: `Counts`, `Count`, `Total`
 - `internal/links/links.go`: `ListGroups`, `LinkEntry`, `EnrollmentEntry`

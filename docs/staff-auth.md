@@ -228,6 +228,7 @@ Only this browser's session row is deleted; other devices stay signed in. A sign
 | Link or enrollment canceled | `links.canceled_by` or `enrollments.canceled_by`; the first cancellation's audit is kept | `Store.CancelLink`, `CancelEnrollmentTx` |
 | Link lifetime, program start date or bootcamp date saved | `settings.updated_by` and `updated_at`, row-level: the last writer of any setting | `SetLinkLifetimeDays`, `SetProgramStartDate`, `SetBootcampDate` |
 | Reinstatement requested | `billing_suspensions.requested_by`; a repeated request keeps the first | `billing.Service.RequestReinstatement` |
+| Student withdrawn | `billing_contracts.withdrawn_by` and `withdrawn_at`, and the Stripe refund metadata `withdrawn_by`; a repeated withdrawal keeps the first | `billing.Service.Withdraw` |
 
 **Not attributed:** student field edits (`students.Store.UpdateField` takes no staff argument) and the Reconcile, portal and invoice billing actions. See [Go-live](go-live.md).
 
@@ -250,7 +251,8 @@ Only this browser's session row is deleted; other devices stay signed in. A sign
 - `internal/links/links.go`: `Store.CreateLink`, `Store.CancelLink`, `CancelEnrollmentTx`, `errNoStaff`, `CreatedBy`, `CanceledBy`
 - `internal/settings/settings.go`: `SetLinkLifetimeDays`, `SetProgramStartDate`, `SetBootcampDate`, `UpdatedBy`
 - `internal/billing/suspension.go`: `RequestReinstatement`
+- `internal/billing/withdraw.go`: `Withdraw`, `refundPayments`
 - `internal/billing/billing.go`: `errStaffRequired`
-- `internal/billing/models.go`: `RequestedBy`
+- `internal/billing/models.go`: `RequestedBy`, `WithdrawnBy`
 - `internal/students/students.go`: `UpdateField`
 - `go.mod`: `github.com/alexedwards/scs/v2`, `github.com/alexedwards/scs/postgresstore`, `github.com/alexedwards/argon2id`, `golang.org/x/time`

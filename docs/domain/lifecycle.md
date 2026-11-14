@@ -12,9 +12,10 @@ The central fact: a Student does not exist until the first payment is confirmed.
 | **paid / funded** | `enrollments.paid_at` and `billing_contracts.funded_at` are set, to the same instant: the paid time of the first Stripe invoice. Set once, in one transaction. |
 | **enrolled** | A `students` row exists. For an enrollment it is created only at funding, by `links.Enroll`; staff can also add students directly (`students.Store.Add`), with no enrollment, contract or cohort. |
 | **Finished** | The Enrollment status once it is paid. |
+| **withdrawn** | `students.withdrawn_at` and `billing_contracts.withdrawn_at` are set by a staff withdrawal: every undisputed payment refunded, every unpaid installment cancelled, the Student inactive for good. Irreversible; the person re-enrolls through a new link. [Withdrawal](../billing/withdrawal.md) |
 | Link | One reusable customer URL in `links`: name, token, lifetime, audit. [Links](links.md) |
 | Enrollment | One customer's session in `enrollments`: session digest, drafts, PIN, agreement snapshot. [Links](links.md) |
-| Student | The enrolled person: canonical contact details, PIN, group, cohort, `is_active`. [Students](students.md) |
+| Student | The enrolled person: canonical contact details, PIN, group, cohort, `is_active`, `withdrawn_at`. [Students](students.md) |
 | Contract | `billing_contracts`: the financial agreement for one Enrollment (1:1 by `enrollment_id`). Created at the first Checkout start, before any Student. [Billing overview](../billing/overview.md) |
 | Obligation | `billing_obligations`: one tuition installment, or one reinstatement fee. [Invoices](../billing/invoices.md) |
 | Attempt | `billing_checkout_attempts`: one hosted Checkout try for the first payment. [Checkout](../billing/checkout.md) |
@@ -77,6 +78,7 @@ sequenceDiagram
 | Worker, funding, retries | [Worker](../billing/worker.md) |
 | Later installments | [Invoices](../billing/invoices.md) |
 | 14-day sweep, reinstatement | [Suspension](../billing/suspension.md) |
+| Withdrawal and full refund | [Withdrawal](../billing/withdrawal.md) |
 
 Only the worker (event handling or contract sync) first-funds a contract. Staff Reconcile and Reinstatement run the same sync, but they find the contract through the `students` row, which for an enrollment exists only after funding (a staff-added student has no contract), so in production they re-sync an already funded contract ([Billing overview](../billing/overview.md) lists who can reach `fund`). The app never charges a card itself: Stripe collects the invoices.
 
@@ -88,7 +90,8 @@ Only the worker (event handling or contract sync) first-funds a contract. Staff 
 | Enrollment contact snapshot edit before payment | `enrollments` contact columns | `billing.UpdateContact`, which locks the Enrollment, then the Contract |
 | `paid_at`, Student row | `enrollments.paid_at`, `students` | `links.Enroll`, called by `billing.Service.fund` |
 | Student contact, PIN, group | `students` | `students.Store.UpdateField` (staff) |
-| `students.is_active` | `students` | `internal/billing` suspension code |
+| `students.is_active` | `students` | `internal/billing` suspension and withdrawal code |
+| `withdrawn_at` and `withdrawn_by` | `students`, `billing_contracts` | `internal/billing` withdrawal (`withdraw`) |
 | Plan quote, contract, obligations | `billing_contracts`, `billing_obligations` | `internal/billing` |
 | Checkout attempt | `billing_checkout_attempts` | `internal/billing` |
 | Received payments | `billing_payments` | `internal/billing` worker |
@@ -112,6 +115,8 @@ stateDiagram-v2
         [*] --> Active
         Active --> Suspended : unpaid installment passes 14 days
         Suspended --> Active : reinstatement requested and fee and due installments paid
+        Active --> Withdrawn : staff withdraw and refund
+        Suspended --> Withdrawn : staff withdraw and refund
     }
     [*] --> InProgress : customer POST /start
     InProgress --> AwaitingPayment : submit
@@ -122,7 +127,7 @@ stateDiagram-v2
     Expired --> Finished : late funding
 ```
 
-Inside Finished the Enrollment status stays Finished while the Student alternates between active and suspended. Reactivation also needs staff to have requested reinstatement; an episode later proven on time is corrected automatically ([Suspension](../billing/suspension.md)).
+Inside Finished the Enrollment status stays Finished while the Student alternates between active and suspended. Reactivation also needs staff to have requested reinstatement; an episode later proven on time is corrected automatically ([Suspension](../billing/suspension.md)). Withdrawn is final: nothing leaves it, and no route undoes it ([Withdrawal](../billing/withdrawal.md)).
 
 | State | Page |
 |---|---|
@@ -130,13 +135,15 @@ Inside Finished the Enrollment status stays Finished while the Student alternate
 | Awaiting payment | [Customer flow](customer-flow.md), [Agreement](agreement.md) |
 | Finished, Student active | [Students](students.md) |
 | Student suspended | [Suspension](../billing/suspension.md) |
+| Student withdrawn | [Withdrawal](../billing/withdrawal.md) |
+
 ## Reading the rest of the docs
 
 | Area | Pages |
 |---|---|
 | System | [Architecture](../architecture.md), [Data model](../data-model.md) |
 | Domain | [Links](links.md), [Customer flow](customer-flow.md), [Students](students.md), [Agreement](agreement.md) |
-| Billing | [Overview](../billing/overview.md), [Checkout](../billing/checkout.md), [Webhooks](../billing/webhooks.md), [Worker](../billing/worker.md), [Invoices](../billing/invoices.md), [Suspension](../billing/suspension.md), [Reviews](../billing/reviews.md) |
+| Billing | [Overview](../billing/overview.md), [Checkout](../billing/checkout.md), [Webhooks](../billing/webhooks.md), [Worker](../billing/worker.md), [Invoices](../billing/invoices.md), [Suspension](../billing/suspension.md), [Withdrawal](../billing/withdrawal.md), [Reviews](../billing/reviews.md) |
 | Staff | [Staff auth](../staff-auth.md), [Live updates](../live-updates.md), [Management overview](../management/overview.md), [Management students](../management/students.md), [Dashboard](../management/dashboard.md), [Frontend](../frontend.md) |
 | Operations | [Configuration](../operations/configuration.md), [Startup and shutdown](../operations/startup-shutdown.md), [Observability](../operations/observability.md), [Stripe setup](../operations/stripe-setup.md), [Railway](../operations/railway.md), [Local development](../operations/local-development.md) |
 | Project | [Testing](../testing.md), [Go-live](../go-live.md) |
@@ -153,6 +160,7 @@ Inside Finished the Enrollment status stays Finished while the Student alternate
 - `internal/billing/worker.go`: `reconcileContract`
 - `internal/billing/invoices.go`: `scheduleInvoices`
 - `internal/billing/suspension.go`: `evaluateDeadlines`, `evaluateReactivation`, `deadlineWindow`
+- `internal/billing/withdraw.go`: `Withdraw`, `withdraw`
 - `internal/billing/models.go`: `Contract`, `Obligation`, `CheckoutAttempt`, `Suspension`, `ReviewReason`
 - `internal/settings/settings.go`: `Settings`
 - `internal/payments/plans.go`: `Plan.Schedule`

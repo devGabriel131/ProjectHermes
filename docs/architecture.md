@@ -139,7 +139,7 @@ All GET patterns also answer HEAD (`ServeMux` behavior). On the outer mux, a met
 | `GET /management/events` | `newServer` (`live.Feed`) |
 | `GET /management/{$}`, `GET /management/trash`, `POST /management/program-start-date`, `POST /management/bootcamp-date`, `POST /management/links`, `POST /management/links/{id}/rename`, `POST /management/links/{id}/cancel`, `POST /management/enrollments/{id}/cancel`, `GET`/`POST /management/settings` | `management.RegisterRoutes` |
 | `GET /management/dashboard` | `management.RegisterRoutes` |
-| `GET /management/students`, `GET /management/students/new`, `POST /management/students`, `POST /management/students/import`, `GET /management/students/{id}`, `GET`/`POST /management/students/{id}/fields/{field}`, `GET /management/students/{id}/billing`, `POST .../billing/reconcile`, `POST .../billing/reinstatement`, `GET .../billing/invoices/{obligation}`, `POST .../billing/portal` | `management.RegisterRoutes` |
+| `GET /management/students`, `GET /management/students/new`, `POST /management/students`, `POST /management/students/import`, `GET /management/students/{id}`, `GET`/`POST /management/students/{id}/fields/{field}`, `GET /management/students/{id}/billing`, `POST .../billing/reconcile`, `POST .../billing/reinstatement`, `POST .../billing/withdraw`, `GET .../billing/invoices/{obligation}`, `POST .../billing/portal` | `management.RegisterRoutes` |
 
 Behavior of each route is documented in [Management overview](management/overview.md), [Students](management/students.md) and [Dashboard](management/dashboard.md). Inside the management mux a wrong method gives 405 and an unknown path 404, both only after sign-in.
 

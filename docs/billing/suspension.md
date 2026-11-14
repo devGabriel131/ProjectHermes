@@ -2,7 +2,7 @@
 
 The 14-day rule, suspension episodes, the staff-requested reinstatement fee, automatic correction and automatic reactivation. All of it runs inside the worker's sync ([Billing worker](worker.md)) on freshly mirrored invoice state; the fee's invoice mechanics are in [Invoices](invoices.md) and the review flags that block it are in [Reviews](reviews.md). Staff buttons: [Staff students](../management/students.md).
 
-Suspension changes one thing: `students.is_active`. The only readers of that flag in this repository are the staff student list (badge and status filter, counts) and the billing summary. Whatever grants classroom access (the PIN is Socrative's credential) is outside the app.
+Suspension changes one thing: `students.is_active`. The only readers of that flag in this repository are the staff student list (badge and status filter, counts) and the billing summary. Whatever grants classroom access (the PIN is Socrative's credential) is outside the app. A staff withdrawal also sets the flag false, for good, and closes any open episode; it is told apart by `students.withdrawn_at` ([Withdrawal](withdrawal.md)).
 
 ## Terms
 
@@ -12,7 +12,7 @@ Suspension changes one thing: `students.is_active`. The only readers of that fla
 | Triggering installment | `TriggeringTuitionInstallmentNumber`: the installment whose missed deadline opened the episode |
 | Attribution | `billing_obligations.deadline_episode_id`: the episode a missed installment was assigned to |
 | `started_at` | The missed deadline itself, not the moment of detection |
-| `close_reason` | `reinstated` or `corrected`; NULL while open |
+| `close_reason` | `reinstated` or `corrected`; NULL while open, and also on an episode a withdrawal closed (the contract's `withdrawn_at` explains it) |
 | Fee | The episode's single reinstatement obligation, `reinstatementFeeCents` = 2500 ($25), created only by the staff request |
 
 ## The 14-day rule
@@ -41,8 +41,11 @@ stateDiagram-v2
     Open --> Corrected : triggering installment proven on time
     FeeRequested --> Corrected : triggering installment proven on time
     Reinstated --> Corrected : triggering installment proven on time
+    Open --> ClosedByWithdrawal : staff withdrawal
+    FeeRequested --> ClosedByWithdrawal : staff withdrawal
     Reinstated --> [*]
     Corrected --> [*]
+    ClosedByWithdrawal --> [*]
 ```
 
 | State | Stored as | Student `is_active` |
@@ -51,8 +54,9 @@ stateDiagram-v2
 | FeeRequested | `closed_at` NULL, `reinstatement_requested_at` and `requested_by` set | false |
 | Reinstated | `closed_at` set, `close_reason = reinstated` | true |
 | Corrected | `close_reason = corrected`, `closed_at` set if it was open | true unless another episode is open |
+| ClosedByWithdrawal | `closed_at` set, `close_reason` NULL, contract `withdrawn_at` set | false, permanently |
 
-`is_active` goes true to false when an episode is created and the student is active. It returns to true when an episode is reinstated, or when an open episode is corrected and no other open episode remains.
+`is_active` goes true to false when an episode is created and the student is active. It returns to true when an episode is reinstated, or when an open episode is corrected and no other open episode remains. A withdrawn contract is never evaluated again (no `evaluateDeadlines`, no `evaluateReactivation`), so its episodes are no longer corrected and its student stays inactive.
 
 ## Detection and correction
 
@@ -91,7 +95,7 @@ sequenceDiagram
 
 | Refusal | Error | Staff sees (409 unless noted) |
 |---|---|---|
-| No open episode | `ErrNotSuspended` | "This student is not suspended for billing." |
+| No open episode, including one a withdrawal closed | `ErrNotSuspended` | "This student is not suspended for billing." |
 | Any review on the contract or any obligation | `ErrNeedsReview` | "This student's billing needs review before this can continue." |
 | Contract lease held by the worker | `ErrPaymentPending` | "A payment is still pending. Try again shortly." |
 | Unknown student, or no Stripe Customer | `ErrUnavailable` | 404 "Student or billing record not found." |
@@ -127,7 +131,8 @@ Then, in one transaction: `closed_at = now`, `close_reason = reinstated`, `stude
 ## Source
 
 - `internal/billing/suspension.go`: `deadlineWindow`, `reinstatable`, `RequestReinstatement`, `requestFee`, `missedDeadline`, `hasReview`, `episodeFor`, `falseEpisode`, `correctEpisode`, `evaluateDeadlines`, `evaluateReactivation`
-- `internal/billing/invoices.go`: `cancelFees`, `cancelFee`, `syncInvoice`
+- `internal/billing/invoices.go`: `cancelObligations`, `cancelObligation`, `syncInvoice`
+- `internal/billing/withdraw.go`: `withdraw`
 - `internal/billing/models.go`: `Suspension`, `Obligation`
 - `internal/billing/stripe.go`: `reinstatementFeeCents`
 - `internal/billing/billing.go`: `ErrNotSuspended`, `ErrNeedsReview`, `ErrPaymentPending`, `ErrUnavailable`, `errStaffRequired`, `providerBudget`, `withStaffContract`

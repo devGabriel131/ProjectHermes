@@ -1,6 +1,6 @@
 # Observability
 
-What the application logs, in what shape, and what it deliberately never logs. The logging package sits at the outer edge of the middleware chain described in [Architecture](../architecture.md); lifecycle events are explained in [Startup and shutdown](startup-shutdown.md); the billing events are produced by the code in [Worker](../billing/worker.md), [Checkout](../billing/checkout.md) and [Webhooks](../billing/webhooks.md).
+What the application logs, in what shape, and what it deliberately never logs. The logging package sits at the outer edge of the middleware chain described in [Architecture](../architecture.md); lifecycle events are explained in [Startup and shutdown](startup-shutdown.md); the billing events are produced by the code in [Worker](../billing/worker.md), [Checkout](../billing/checkout.md), [Webhooks](../billing/webhooks.md) and [Withdrawal](../billing/withdrawal.md).
 
 ## Output format
 
@@ -116,6 +116,8 @@ Every event that reports an error builds it with `logging.ErrorAttrs`. It expose
 | `checkout_expire_unresolved` | warn | error attrs, `attempt` | A Session being expired could not be resolved; the attempt stays `expiring` |
 | `billing_reconcile_failed` | warn | error attrs, `stage`, `ref` | A worker step failed; silent once the worker context is cancelled |
 | `billing_review_required` | warn | `contract` and `reason`, or `contract` and `obligation`, or `obligation` and `reason` | A review flag was newly set; reasons are in [Reviews](../billing/reviews.md) |
+| `student_withdrawn` | info | `contract` | A staff withdrawal committed; logged once per contract, since a repeat writes nothing. See [Withdrawal](../billing/withdrawal.md) |
+| `withdrawal_refund` | info | `contract`, `amount_cents` | Stripe answered a withdrawal refund request for one payment with success; `amount_cents` is what was asked back. See [Withdrawal](../billing/withdrawal.md#refunds) |
 
 `billing_reconcile_failed` stages and `ref` values:
 
@@ -151,7 +153,7 @@ Flush points are three distinct moments: right after the startup migration, ever
 - Methods outside the nine standard verbs are logged as `OTHER`.
 - `http_server_error` keeps only a fixed class; the standard library's diagnostic text, which can include remote addresses, is dropped.
 - Stripe webhook body, signature and secret are never logged, and the Stripe SDK's own logger is set to null.
-- Billing events carry only opaque references the app generated (`contract`, `obligation`, `attempt`) or Stripe event ids; no names, emails, phone numbers, PINs or tokens appear in any event above.
+- Billing events carry only opaque references the app generated (`contract`, `obligation`, `attempt`), Stripe event ids and amounts; no names, emails, phone numbers, PINs, tokens or staff usernames appear in any event above (the withdrawing staff name goes only to Stripe refund metadata).
 - `main_logging_integration_test.go` drives real failures through `newServer` and fails if a query string, header, credential, cookie, token, contact value or SQL text reaches the event ([Testing](../testing.md)).
 
 ## Deliberate choices
@@ -171,4 +173,5 @@ Flush points are three distinct moments: right after the startup migration, ever
 - `internal/billing/checkout.go`: `checkout_create_uncertain`, `checkout_expire_unresolved`
 - `internal/billing/worker.go`: `billing_reconcile_failed`, `billing_review_required` (contract), `logFailure`
 - `internal/billing/invoices.go`: `billing_review_required` (obligation)
+- `internal/billing/withdraw.go`: `student_withdrawn`, `withdrawal_refund`
 - `internal/billing/stripe.go`: `NewStripeClient`

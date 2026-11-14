@@ -25,7 +25,7 @@ stateDiagram-v2
 
 `markContract` sets a reason only while the slot is empty and clears it only when the slot holds exactly that reason. A second reason is not queued: it is simply detected again by a later sync once the first one clears. This is deliberate: the reasons come from independent workflows, each of which re-runs its own check every sync.
 
-Obligations use `reviewObligation`, which writes unconditionally, and `reviewFor`, which lets invoice-derived reasons recompute: a stored `invoice_mismatch` or `missing_invoice` follows the freshly computed value; any other stored reason is kept.
+Obligations use `reviewObligation`, which writes unconditionally, and `reviewFor`, which lets invoice-derived reasons recompute: a stored `invoice_mismatch`, `missing_invoice` or `payment_review` follows the freshly computed value; any other stored reason is kept. An obligation's `payment_review` counts as invoice-derived because only `invoiceStateOf` sets it, so a withdrawal can clear it.
 
 ## Reasons
 
@@ -35,11 +35,11 @@ Obligations use `reviewObligation`, which writes unconditionally, and `reviewFor
 | `configuration_mismatch` | Contract | `syncAttempt`: a Checkout Session recovered for an attempt that never recorded its Session ID does not exactly match (USD, payment mode, same Customer, quoted amount) | The funding transaction (`fund`) |
 | `invoice_mismatch` | Contract | `fund`: the Checkout invoice, or its payment, does not match the quote. Funding is blocked and the attempt stays `processing` | The funding transaction, once funding succeeds |
 | `unresolved_provider_create` | Contract | `resumeCreate`: more than one Checkout Session carries the attempt's `client_reference_id` | Never |
-| `payment_review` | Contract | `store`: any Payment has refunded cents above zero or a dispute or fraud state | Recomputed on every `store`. Refunded amounts never decrease and any fraud warning stays, so in practice only disputes that end won, warning-closed or prevented clear it |
+| `payment_review` | Contract | `store`: any Payment has a dispute or fraud state, or, on a contract that is not withdrawn, refunded cents above zero | Recomputed on every `store`. Refunded amounts never decrease and any fraud warning stays, so on a contract that is not withdrawn only disputes that end won, warning-closed or prevented clear it. On a withdrawn contract refunds no longer count, so the withdrawal's own refunds never set it and earlier ones stop holding it ([Withdrawal](withdrawal.md)) |
 | `invoice_mismatch` | Obligation | `arm`: the invoice is not the exact quote (or a fee's total is not 2500); `invoiceStateOf`: the same mismatch, or an invoice that is `void` or `uncollectible` without a cancel disposition | `reviewFor` on a later sync, once the invoice matches again and is neither void nor uncollectible |
-| `missing_invoice` | Obligation | `arm`: Stripe answers 404; `syncInvoice`: the invoice is 404 or deleted (unless the fee was meant to vanish) | Recomputed like the above; a deleted invoice stays missing, so effectively never |
-| `unresolved_provider_create` | Obligation | `adopt`: several invoices or invoice items carry the obligation's metadata, during creation or during a fee cancellation lookup | Never |
-| `payment_review` | Obligation | `syncInvoice`: a fee whose episode was corrected (`collection_disposition = cancel`) was paid anyway | Never; refunding is a staff matter outside the app |
+| `missing_invoice` | Obligation | `arm`: Stripe answers 404; `syncInvoice`: the invoice is 404 or deleted (unless its collection was cancelled, so it was meant to vanish) | Recomputed like the above; a deleted invoice stays missing, so effectively never |
+| `unresolved_provider_create` | Obligation | `adopt`: several invoices or invoice items carry the obligation's metadata, during creation or during a cancellation lookup | Never |
+| `payment_review` | Obligation | `syncInvoice`: an obligation with `collection_disposition = cancel` (in practice a fee whose episode was corrected) was paid anyway, on a contract that is not withdrawn | `reviewFor` once `invoiceStateOf` stops computing it, which happens only when the contract is withdrawn: the withdrawal refunds the payment instead. Otherwise never; refunding is a staff matter in the Stripe Dashboard |
 
 Pre-funding reasons (`configuration_mismatch`, `invoice_mismatch`) are cleared when `fund` succeeds. If `unresolved_provider_create` was set and a webhook later matches and funds the attempt by `client_reference_id`, it survives into the funded contract and shows on the student's page. Reasons are logged at WARN as `billing_review_required` with opaque references, and a visible change announces a live update ([Observability](../operations/observability.md)).
 
@@ -62,11 +62,11 @@ flowchart LR
 | Funding | `fund` on an invoice/payment amount or line mismatch | The attempt stays `processing`; no Student is created, and `invoice_mismatch` is recorded on the contract |
 | An unexpected invoice collecting | `holdInvoice` after the review is persisted | Stripe auto-advance is switched off for that invoice |
 
-Not blocked: syncing, payment mirroring and the 14-day rule keep running. A student can therefore be suspended while a review is held and then be unable to be reinstated until it clears. Review state is not part of any customer-facing page.
+Not blocked: syncing, payment mirroring, the 14-day rule and a staff withdrawal keep running. A student can therefore be suspended while a review is held and then be unable to be reinstated until it clears. Review state is not part of any customer-facing page.
 
 ## No staff release
 
-No code path outside the table above writes `review_reason`. Management only displays it (and the dashboard only counts it); there is no staff button, route or setting that clears or acknowledges a review. Reasons marked "Never" leave reinstatement refused for that contract permanently, and the ones that clear on their own depend on Stripe's state changing. This gap is tracked in [Go-live](../go-live.md).
+No code path outside the table above writes `review_reason`. Management only displays it (and the dashboard only counts it); there is no staff button, route or setting that clears or acknowledges a review. The one staff action that changes a reason is a withdrawal, and only indirectly: from then on the sync stops computing `payment_review` from refunds and from a paid cancelled obligation, so those clear; a dispute or fraud warning keeps the contract's, and every other reason stays ([Withdrawal](withdrawal.md)). Reasons marked "Never" leave reinstatement refused for that contract permanently, and the ones that clear on their own depend on Stripe's state changing. This gap is tracked in [Go-live](../go-live.md).
 
 ## Deliberate choices
 
@@ -74,8 +74,8 @@ No code path outside the table above writes `review_reason`. Management only dis
 |---|---|
 | One contract slot, no queue | Every workflow re-detects its own condition each sync, so nothing is lost and no priority rules are needed |
 | Review persisted before any provider action | A crash cannot leave an unexpected invoice collecting with no record |
-| Reasons that mean "which Stripe object is right?" never self-clear | The app must not guess between candidate invoices, Sessions or a collected cancelled fee |
-| `payment_review` never refunds or rebills | Money movement after disputes and refunds is a staff decision |
+| Reasons that mean "which Stripe object is right?" never self-clear | The app must not guess between candidate invoices, Sessions or a collected cancelled fee (until a withdrawal refunds it) |
+| `payment_review` never refunds or rebills by itself | Money moves back only on a staff decision: a withdrawal refunds in full, any other refund is made in the Stripe Dashboard |
 
 ## Source
 
@@ -86,5 +86,6 @@ No code path outside the table above writes `review_reason`. Management only dis
 - `internal/billing/suspension.go`: `hasReview`, `reinstatable`, `evaluateReactivation`
 - `internal/billing/summary.go`: `summarize`, `Summary`
 - `internal/billing/overview.go`: `ContractsInReview`
-- `internal/billing/models.go`: `Contract`, `Obligation`
+- `internal/billing/models.go`: `Contract`, `Obligation`, `WithdrawnAt`
+- `internal/billing/withdraw.go`: `withdraw`, `refundPayments`
 - `internal/management/students.go`: `billingRefusals`

@@ -19,6 +19,14 @@ type SummaryInstallment struct {
 	InvoiceReady bool
 }
 
+// SummaryPayment is one received payment in Summary, with where staff can refund part of it.
+type SummaryPayment struct {
+	PaidAt                     time.Time
+	AmountCents, RefundedCents int64
+	Review                     string // dispute or fraud state, "" when none
+	DashboardURL               string
+}
+
 // Summary exposes financial standing, suspension and review reasons.
 type Summary struct {
 	PlanID                         string
@@ -36,6 +44,10 @@ type Summary struct {
 	ReinstatementInvoiceReady      bool
 	Installments                   []SummaryInstallment
 	IsSuspended                    bool
+	WithdrawnAt                    *time.Time
+	WithdrawnBy                    string
+	RefundableCents                int64 // undisputed cash a withdrawal refunds, or still has to
+	Payments                       []SummaryPayment
 	LastSyncedAt                   *time.Time
 	ReviewReasons                  []string
 	Decline                        string // set while the unfunded contract's newest attempt ended its latest try in a decline; same groups as ReturnStatus.Decline
@@ -81,7 +93,7 @@ func (s *Service) summarize(ctx context.Context, contract Contract) (*Summary, e
 		return nil, err
 	}
 	var payments []Payment
-	if err := s.db.WithContext(ctx).Where("contract_id = ?", contract.ID).Find(&payments).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("contract_id = ?", contract.ID).Order("payment_time ASC, id ASC").Find(&payments).Error; err != nil {
 		return nil, err
 	}
 	var suspension Suspension
@@ -99,9 +111,19 @@ func (s *Service) summarize(ctx context.Context, contract Contract) (*Summary, e
 		FundedAt:     contract.FundedAt,
 		IsSuspended:  suspended,
 		LastSyncedAt: contract.LastSyncedAt,
+		WithdrawnAt:  contract.WithdrawnAt,
+		WithdrawnBy:  deref(contract.WithdrawnBy),
 	}
 	for _, p := range payments {
 		summary.CashPaidCents += p.GrossReceivedCents - p.GrossRefundedCents
+		summary.RefundableCents += p.refundableCents()
+		summary.Payments = append(summary.Payments, SummaryPayment{
+			PaidAt:        p.PaymentTime,
+			AmountCents:   p.GrossReceivedCents,
+			RefundedCents: p.GrossRefundedCents,
+			Review:        deref(p.DisputeOrFraudReviewState),
+			DashboardURL:  s.dashboardURL(p.ID),
+		})
 	}
 	addReason := func(reason *string) {
 		if reason != nil && !slices.Contains(summary.ReviewReasons, *reason) {
@@ -122,19 +144,23 @@ func (s *Service) summarize(ctx context.Context, contract Contract) (*Summary, e
 				}
 			}
 		case "tuition":
-			summary.RemainingTuitionCents += o.AmountRemainingCents
 			summary.TuitionPaidCents += o.AmountPaidCents
-			if overdue {
-				summary.OverdueTuitionCents += o.AmountRemainingCents
-			}
 			status := "scheduled"
 			switch {
+			case o.CollectionDisposition == "cancel" && o.FirstSettledAt == nil:
+				status = "cancelled" // a withdrawal stopped it: never remaining or overdue
 			case o.FirstSettledAt != nil || o.AmountRemainingCents == 0:
 				status = "paid"
 			case o.FailureOrActionRequired:
 				status = "action_required"
 			case overdue:
 				status = "overdue"
+			}
+			if status != "cancelled" {
+				summary.RemainingTuitionCents += o.AmountRemainingCents
+				if overdue {
+					summary.OverdueTuitionCents += o.AmountRemainingCents
+				}
 			}
 			summary.Installments = append(summary.Installments, SummaryInstallment{
 				ID:           o.ID,
@@ -163,6 +189,14 @@ func (s *Service) summarize(ctx context.Context, contract Contract) (*Summary, e
 // invoiceReady reports whether the obligation has a finalized Stripe invoice with a hosted page.
 func (o Obligation) invoiceReady() bool {
 	return o.StripeInvoiceID != nil && !slices.Contains([]string{"", "draft", "deleted"}, deref(o.LatestStripeStatus))
+}
+
+// dashboardURL is where staff open one PaymentIntent in the Stripe Dashboard, for refunds the app does not make.
+func (s *Service) dashboardURL(paymentIntentID string) string {
+	if s.cfg.Live {
+		return "https://dashboard.stripe.com/payments/" + paymentIntentID
+	}
+	return "https://dashboard.stripe.com/test/payments/" + paymentIntentID
 }
 
 // ReturnStatus maps the Checkout Session Stripe redirected to after completion (success_url) to a

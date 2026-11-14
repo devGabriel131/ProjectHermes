@@ -48,6 +48,7 @@
           <label><input type="radio" name="status" value=""{{if not .Status}} checked{{end}}>All</label>
           <label><input type="radio" name="status" value="active"{{if eq .Status "active"}} checked{{end}}>Active</label>
           <label><input type="radio" name="status" value="suspended"{{if eq .Status "suspended"}} checked{{end}}>Suspended</label>
+          <label><input type="radio" name="status" value="withdrawn"{{if eq .Status "withdrawn"}} checked{{end}}>Withdrawn</label>
         </div>
         <div class="student-filter-selects">
           <label>Cohort
@@ -105,7 +106,7 @@
   {{range $index, $field := .Fields}}
   <td>{{if eq $index 0}}<a id="student-link-{{$.ID}}" data-student-link href="/management/students/{{$.ID}}"
     hx-get="/management/students/{{$.ID}}" hx-target="#student-dialog-content" hx-swap="innerHTML">{{$field.Value}}</a>{{else}}{{$field.Value}}{{end}}</td>
-  {{if eq $index 0}}<td>{{if $.IsActive}}<span class="status-badge" data-tone="ok">Active</span>{{else}}<span class="status-badge" data-tone="danger">Suspended</span>{{end}}</td>{{end}}
+  {{if eq $index 0}}<td>{{if $.WithdrawnAt}}<span class="status-badge">Withdrawn</span>{{else if $.IsActive}}<span class="status-badge" data-tone="ok">Active</span>{{else}}<span class="status-badge" data-tone="danger">Suspended</span>{{end}}</td>{{end}}
   {{end}}
   <td>{{cohortLabel .Cohort}}</td>
   <td>{{template "time" .CreatedAt}}</td>
@@ -190,11 +191,14 @@
     <div><dt>Remaining tuition</dt><dd>{{money .RemainingTuitionCents}}</dd></div>
     <div><dt>Overdue tuition</dt><dd>{{money .OverdueTuitionCents}}</dd></div>
     <div><dt>Reinstatement fee remaining</dt><dd>{{money .ReinstatementFeeRemainingCents}}</dd></div>
-    <div><dt>Status</dt><dd>{{if .IsSuspended}}Billing-suspended{{else}}Active{{end}}</dd></div>
+    <div><dt>Status</dt><dd>{{if .WithdrawnAt}}Withdrawn {{template "time" .WithdrawnAt}}{{with .WithdrawnBy}} by {{.}}{{end}}{{else if .IsSuspended}}Billing-suspended{{else}}Active{{end}}</dd></div>
     <div><dt>Last synced</dt><dd>{{with .LastSyncedAt}}{{template "time" .}}{{else}}Never{{end}}</dd></div>
   </dl>
   {{if .ReviewReasons}}
   <p class="student-billing-review"><strong>Needs review:</strong> {{range $index, $reason := .ReviewReasons}}{{if $index}}, {{end}}<code>{{$reason}}</code>{{end}}</p>
+  {{end}}
+  {{if and .WithdrawnAt (gt .RefundableCents 0)}}
+  <p class="student-billing-review"><strong>Refund pending:</strong> {{money .RefundableCents}}, retried automatically; Reconcile retries now.</p>
   {{end}}
   {{if .Installments}}
   <table class="student-billing-installments">
@@ -208,8 +212,27 @@
         <td>{{.Number}}</td>
         <td>{{with .DueAt}}{{template "time" .}}{{else}}Set when funded{{end}}</td>
         <td>{{money .AmountCents}}</td>
-        <td>{{if eq .Status "paid"}}<span class="status-badge" data-tone="ok">Paid</span>{{with .PaidAt}} {{template "time" .}}{{end}}{{else if eq .Status "overdue"}}<span class="status-badge" data-tone="danger">Overdue</span>{{else if eq .Status "action_required"}}<span class="status-badge" data-tone="warn">Action required</span>{{else}}<span class="status-badge">Scheduled</span>{{end}}</td>
+        <td>{{if eq .Status "paid"}}<span class="status-badge" data-tone="ok">Paid</span>{{with .PaidAt}} {{template "time" .}}{{end}}{{else if eq .Status "overdue"}}<span class="status-badge" data-tone="danger">Overdue</span>{{else if eq .Status "action_required"}}<span class="status-badge" data-tone="warn">Action required</span>{{else if eq .Status "cancelled"}}<span class="status-badge">Cancelled</span>{{else}}<span class="status-badge">Scheduled</span>{{end}}</td>
         <td>{{if .InvoiceReady}}<a href="/management/students/{{$.Student.ID}}/billing/invoices/{{.ID}}" target="_blank" rel="noopener noreferrer">View invoice</a>{{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{end}}
+  {{if .Payments}}
+  <table class="student-billing-installments">
+    <caption>Payments</caption>
+    <thead>
+      <tr><th scope="col">Paid</th><th scope="col">Amount</th><th scope="col">Refunded</th><th scope="col">Note</th><th scope="col">Stripe</th></tr>
+    </thead>
+    <tbody>
+      {{range .Payments}}
+      <tr>
+        <td>{{template "time" .PaidAt}}</td>
+        <td>{{money .AmountCents}}</td>
+        <td>{{money .RefundedCents}}</td>
+        <td>{{with .Review}}<code>{{.}}</code>{{end}}</td>
+        <td><a href="{{.DashboardURL}}" target="_blank" rel="noopener noreferrer">Open in Stripe</a></td>
       </tr>
       {{end}}
     </tbody>
@@ -228,6 +251,11 @@
     {{end}}
     <button type="button" hx-post="/management/students/{{$.Student.ID}}/billing/portal"
       hx-target="#student-billing-portal-{{$.Student.ID}}" hx-swap="innerHTML" hx-disabled-elt="this">Customer Portal</button>
+    {{if and .Funded (not .WithdrawnAt)}}
+    <button type="button" hx-post="/management/students/{{$.Student.ID}}/billing/withdraw"
+      hx-confirm="Withdraw this student and refund {{money .RefundableCents}}? Unpaid installments are cancelled and the student is deactivated. This cannot be undone."
+      hx-target="closest .student-billing" hx-swap="outerHTML" hx-disabled-elt="this">Withdraw and refund</button>
+    {{end}}
   </div>
   {{else}}
   <p class="student-billing-empty">No billing record for this student.</p>

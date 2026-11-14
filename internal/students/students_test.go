@@ -92,17 +92,16 @@ func TestListRetainsExpiredSourcesAndOrdersNewestFirst(t *testing.T) {
 	if cohorts, err := roster.Cohorts(ctx); err != nil || !reflect.DeepEqual(cohorts, []string{"2026-11", "2026-10"}) {
 		t.Fatalf("Cohorts() = %v, %v, want newest first without repeats", cohorts, err)
 	}
-	active, suspended := true, false
 	for _, filter := range []struct {
 		filter students.Filter
 		want   []uint64
 	}{
-		{students.Filter{Active: &active}, wantIDs[:2]},
-		{students.Filter{Active: &suspended}, wantIDs[2:]},
+		{students.Filter{Status: "active"}, wantIDs[:2]},
+		{students.Filter{Status: "suspended"}, wantIDs[2:]},
 		{students.Filter{Cohort: "2026-11"}, wantIDs[:2]},
 		{students.Filter{Group: "Básico"}, []uint64{lastTie.ID, oldest.ID}},
-		{students.Filter{Active: &active, Cohort: "2026-11", Group: "Básico"}, []uint64{lastTie.ID}},
-		{students.Filter{Active: &suspended, Group: "Regular"}, nil},
+		{students.Filter{Status: "active", Cohort: "2026-11", Group: "Básico"}, []uint64{lastTie.ID}},
+		{students.Filter{Status: "suspended", Group: "Regular"}, nil},
 	} {
 		filtered, err := roster.List(ctx, filter.filter)
 		if err != nil || len(filtered) != len(filter.want) {

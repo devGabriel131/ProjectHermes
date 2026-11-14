@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -42,6 +44,7 @@ type workerMockServer struct {
 	refundedCents         int64
 	earlyWarningsReturned []map[string]any
 	invoicesByID          map[string]map[string]any
+	refunds               []string          // "<payment intent> <cents> <idempotency key>" of each refund created, in call order
 }
 
 func newWorkerMockServer(paidAt time.Time, initialAmount int64) *workerMockServer {
@@ -346,6 +349,20 @@ func newWorkerMockServer(paidAt time.Time, initialAmount int64) *workerMockServe
 		inv := wms.invoicesByID[id]
 		wms.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(inv)
+	})
+
+	// POST /v1/refunds: the withdrawal's refund of one PaymentIntent
+	mux.HandleFunc("POST /v1/refunds", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		amount, _ := strconv.ParseInt(r.FormValue("amount"), 10, 64)
+		wms.mu.Lock()
+		defer wms.mu.Unlock()
+		wms.refunds = append(wms.refunds, r.FormValue("payment_intent")+" "+r.FormValue("amount")+" "+r.Header.Get("Idempotency-Key"))
+		wms.refundedCents += amount
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": fmt.Sprintf("re_w_%d", len(wms.refunds)), "object": "refund", "status": "succeeded",
+			"amount": amount, "payment_intent": r.FormValue("payment_intent"),
+		})
 	})
 
 	wms.mux = mux
@@ -1084,6 +1101,109 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 	db.First(&checkStudent3, student3.ID)
 	if !checkStudent3.IsActive {
 		t.Fatal("on-time payment settled before 14-day deadline should NOT suspend student")
+	}
+}
+
+// TestWithdrawalRefundsAndStopsCollection: a withdrawal refunds what the payer paid, cancels every
+// unsettled invoice and ends the student, and repeating it moves no money again.
+func TestWithdrawalRefundsAndStopsCollection(t *testing.T) {
+	mock := newWorkerMockServer(time.Now(), 20834)
+	db := testdb.Open(t, append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)...)
+	svc := billingtest.New(t, db, mock.mux)
+	student, contract := seedFundedStudent(t, db, "Withdrawn Student", "withdrawn@example.com")
+	customer := *contract.StripeCustomerID
+	now := time.Now().UTC()
+
+	seed := func(number int, amount int64, invoice, status string, due time.Time) {
+		t.Helper()
+		item := fmt.Sprintf("ii_w_%d", number)
+		o := billing.Obligation{
+			ContractID: contract.ID, Reference: rand.Text(), Kind: "tuition", Number: number,
+			AmountCents: amount, StripePriceID: "pr_three", StripeInvoiceID: &invoice, StripeInvoiceItemID: &item,
+			DueAt: &due, ScheduledFinalizationAt: &due, CollectionDisposition: "collect",
+			LatestStripeStatus: &status, AmountRemainingCents: amount,
+		}
+		mock.registerInvoice(invoice, amount, status, customer)
+		if status == "paid" {
+			o.AmountPaidCents, o.AmountRemainingCents, o.FirstSettledAt = amount, 0, &due
+			mock.patchInvoice(invoice, map[string]any{"status_transitions": map[string]any{"paid_at": due.Unix()}})
+		}
+		mustCreate(t, db, &o)
+	}
+	seed(1, 20834, "in_w_1", "paid", now.Add(-30*24*time.Hour))
+	seed(2, 20833, "in_w_2", "open", now.Add(-24*time.Hour))
+	seed(3, 20833, "in_w_3", "draft", now.Add(30*24*time.Hour))
+
+	summary, err := svc.Withdraw(t.Context(), student.ID, "director_carmen")
+	if err != nil {
+		t.Fatalf("Withdraw: %v", err)
+	}
+	moved := func() (refunds, cancels []string) {
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+		return slices.Clone(mock.refunds), slices.Clone(mock.cancels)
+	}
+	refunds, cancels := moved()
+	if len(refunds) != 1 || !strings.HasPrefix(refunds[0], "pi_in_w_1 20834 withdrawal:") {
+		t.Fatalf("refunds = %v, want one full refund of pi_in_w_1", refunds)
+	}
+	slices.Sort(cancels)
+	if want := []string{"delete in_w_3", "void in_w_2"}; !slices.Equal(cancels, want) {
+		t.Fatalf("Stripe cancels = %v, want %v", cancels, want)
+	}
+
+	var obligations []billing.Obligation
+	if err := db.Where("contract_id = ?", contract.ID).Order("number ASC").Find(&obligations).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []struct{ disposition, status string }{{"collect", "paid"}, {"cancel", "void"}, {"cancel", "deleted"}} {
+		o := obligations[i]
+		if o.CollectionDisposition != want.disposition || *o.LatestStripeStatus != want.status || (i > 0 && o.AmountRemainingCents != 0) {
+			t.Fatalf("installment %d = %s/%s remaining %d, want %s/%s", i+1, o.CollectionDisposition, *o.LatestStripeStatus, o.AmountRemainingCents, want.disposition, want.status)
+		}
+	}
+	if err := db.First(&student, student.ID).Error; err != nil || student.IsActive || student.WithdrawnAt == nil {
+		t.Fatalf("student active = %v, withdrawn at %v (err %v), want deactivated and withdrawn", student.IsActive, student.WithdrawnAt, err)
+	}
+	var stored billing.Contract
+	if err := db.First(&stored, contract.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.WithdrawnBy == nil || *stored.WithdrawnBy != "director_carmen" || stored.WithdrawnAt == nil || stored.ReviewReason != nil {
+		t.Fatalf("contract withdrawn by %v at %v review %v, want director_carmen, set, none", stored.WithdrawnBy, stored.WithdrawnAt, stored.ReviewReason)
+	}
+	var payment billing.Payment
+	if err := db.First(&payment, "id = ?", "pi_in_w_1").Error; err != nil || payment.GrossRefundedCents != 20834 {
+		t.Fatalf("payment refunded %d (err %v), want 20834", payment.GrossRefundedCents, err)
+	}
+
+	if summary.CashPaidCents != 0 || summary.RefundableCents != 0 || summary.RemainingTuitionCents != 0 || summary.WithdrawnBy != "director_carmen" {
+		t.Fatalf("summary cash %d refundable %d remaining %d by %q, want 0, 0, 0, director_carmen",
+			summary.CashPaidCents, summary.RefundableCents, summary.RemainingTuitionCents, summary.WithdrawnBy)
+	}
+	if len(summary.Installments) != 3 || summary.Installments[1].Status != "cancelled" || summary.Installments[2].Status != "cancelled" {
+		t.Fatalf("installments = %+v, want 2 and 3 cancelled", summary.Installments)
+	}
+	if len(summary.Payments) != 1 || summary.Payments[0].DashboardURL != "https://dashboard.stripe.com/test/payments/pi_in_w_1" {
+		t.Fatalf("payments = %+v, want pi_in_w_1 with its test Dashboard link", summary.Payments)
+	}
+
+	// Repeating the withdrawal, or any sync, moves no money again and keeps who withdrew and when.
+	if _, err := svc.ReconcileStudent(t.Context(), student.ID); err != nil {
+		t.Fatalf("ReconcileStudent: %v", err)
+	}
+	if _, err := svc.Withdraw(t.Context(), student.ID, "someone_else"); err != nil {
+		t.Fatalf("second Withdraw: %v", err)
+	}
+	againRefunds, againCancels := moved()
+	var after billing.Contract
+	if err := db.First(&after, contract.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(againRefunds) != len(refunds) || len(againCancels) != len(cancels) ||
+		!after.WithdrawnAt.Equal(*stored.WithdrawnAt) || *after.WithdrawnBy != "director_carmen" {
+		t.Fatalf("repeat refunds %v cancels %v withdrawn %v by %q, want nothing new and the first withdrawal kept",
+			againRefunds, againCancels, after.WithdrawnAt, *after.WithdrawnBy)
 	}
 }
 
