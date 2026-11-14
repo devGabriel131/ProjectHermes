@@ -116,6 +116,7 @@ Every event that reports an error builds it with `logging.ErrorAttrs`. It expose
 | `checkout_expire_unresolved` | warn | error attrs, `attempt` | A Session being expired could not be resolved; the attempt stays `expiring` |
 | `billing_reconcile_failed` | warn | error attrs, `stage`, `ref` | A worker step failed; silent once the worker context is cancelled |
 | `billing_review_required` | warn | `contract` and `reason`, or `contract` and `obligation`, or `obligation` and `reason` | A review flag was newly set; reasons are in [Reviews](../billing/reviews.md) |
+| `installment_retry` | info | `contract`, `obligation`, `attempt` (the retry number being made), `decline` (Stripe code of the failure, `""` when none is on record), `retried` | A failed installment's retry came due. `retried=false` means the decline needs the payer and no charge was made; see [Invoices](../billing/invoices.md#retrying-a-failed-installment) |
 | `student_withdrawn` | info | `contract` | A staff withdrawal committed; logged once per contract, since a repeat writes nothing. See [Withdrawal](../billing/withdrawal.md) |
 | `withdrawal_refund` | info | `contract`, `amount_cents` | Stripe answered a withdrawal refund request for one payment with success; `amount_cents` is what was asked back. See [Withdrawal](../billing/withdrawal.md#refunds) |
 
@@ -173,5 +174,6 @@ Flush points are three distinct moments: right after the startup migration, ever
 - `internal/billing/checkout.go`: `checkout_create_uncertain`, `checkout_expire_unresolved`
 - `internal/billing/worker.go`: `billing_reconcile_failed`, `billing_review_required` (contract), `logFailure`
 - `internal/billing/invoices.go`: `billing_review_required` (obligation)
+- `internal/billing/retry.go`: `installment_retry`
 - `internal/billing/withdraw.go`: `student_withdrawn`, `withdrawal_refund`
 - `internal/billing/stripe.go`: `NewStripeClient`

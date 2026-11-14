@@ -34,6 +34,7 @@ type Config struct {
 	PaymentMethodConfigurationID string
 	PortalConfigurationID        string
 	Live                         bool
+	RetryDelay                   time.Duration // wait before each payment retry of a failed installment; zero means defaultRetryDelay
 }
 
 // Validate validates that Config adheres to trusted base URL and provider requirements.
@@ -100,6 +101,13 @@ func LoadConfigFromEnv() (Config, string, error) {
 		PaymentMethodConfigurationID: os.Getenv("STRIPE_PAYMENT_METHOD_CONFIGURATION_ID"),
 		PortalConfigurationID:        os.Getenv("STRIPE_PORTAL_CONFIGURATION_ID"),
 		Live:                         live,
+	}
+	if value, ok := os.LookupEnv("INSTALLMENT_RETRY_DELAY"); ok {
+		delay, err := time.ParseDuration(value)
+		if err != nil || delay <= 0 {
+			return Config{}, "", errors.New("billing: INSTALLMENT_RETRY_DELAY must be a positive duration such as 24h")
+		}
+		cfg.RetryDelay = delay
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, "", err

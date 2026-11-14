@@ -187,6 +187,12 @@ func (s *Service) store(ctx context.Context, l lease, read *invoiceRead, pays []
 				"failure_or_action_required": st.Failed,
 				"review_reason":              nullable(st.Review),
 			}
+			switch {
+			case !st.Failed:
+				updates["next_retry_at"] = nil
+			case !read.o.FailureOrActionRequired: // newly failed: schedule the first retry
+				updates["next_retry_at"] = s.firstRetryAt(read.o, time.Now().UTC())
+			}
 			if st.Settled && read.o.FirstSettledAt == nil {
 				updates["first_settled_at"] = read.settledAt // earliest authoritative settlement is kept
 			}

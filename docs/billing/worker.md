@@ -2,7 +2,7 @@
 
 The leased background loop in `internal/billing` that turns stored Stripe webhook events and a timer into per-contract syncs. Intake is in [Webhooks](webhooks.md), money model in [Billing overview](overview.md); invoice creation, suspension policy, withdrawal and review flags have their own pages: [Invoices](invoices.md), [Suspension](suspension.md), [Withdrawal](withdrawal.md), [Reviews](reviews.md).
 
-The worker never applies an event body. A stored event holds only `id`, `event_type` and `resource_id`; handling it means "re-read that object from Stripe and converge", so replays and out-of-order delivery are harmless. The app never charges a card itself: it creates and arms invoices and Stripe collects.
+The worker never applies an event body. A stored event holds only `id`, `event_type` and `resource_id`; handling it means "re-read that object from Stripe and converge", so replays and out-of-order delivery are harmless. The app creates and arms invoices and Stripe collects; the one charge the app makes itself is the retry of a failed later installment ([Invoices](invoices.md#retrying-a-failed-installment)), and the only money it sends back is a withdrawn contract's refunds ([Withdrawal](withdrawal.md)).
 
 ## Tick
 
@@ -99,12 +99,17 @@ flowchart TD
     B --> C["3. syncCustomerContact: push name and email to the Stripe Customer"]
     C --> D{"4. funded_at set?"}
     D -->|"no"| K
-    D -->|"yes"| E["5. scheduleInvoices: card gate, create and arm later tuition"]
-    E --> G["6. syncInvoice for every obligation that has an invoice"]
-    G --> H["7. evaluateDeadlines"]
-    H --> I["8. cancelFees"]
-    I --> J["9. evaluateReactivation"]
-    J --> K["10. markSynced: write next_sync_at, release the lease"]
+    D -->|"yes"| E["5. scheduleInvoices: card gate, create and arm later tuition (not when withdrawn)"]
+    E --> G["6. syncInvoice for every tuition obligation that has an invoice"]
+    G --> R["6b. retryFailed: pay due failed installments again (not when withdrawn)"]
+    R --> H["7. evaluateDeadlines (not when withdrawn)"]
+    H --> L["8. syncInvoice for every fee that has an invoice"]
+    L --> I["9. cancelObligations"]
+    I --> X{"withdrawn_at set?"}
+    X -->|"no"| J["10. evaluateReactivation"]
+    X -->|"yes"| Y["10. refundPayments"]
+    J --> K["11. markSynced: write next_sync_at, release the lease"]
+    Y --> K
 ```
 
 A withdrawn contract (`withdrawn_at` set) skips steps 5, 6b and 7 and runs `refundPayments` instead of `evaluateReactivation`: it only mirrors, cancels and refunds ([Withdrawal](withdrawal.md)).
@@ -115,10 +120,12 @@ A withdrawn contract (`withdrawn_at` set) skips steps 5, 6b and 7 and runs `refu
 | 2 | `fund` | After every Stripe read, one transaction under the lease: dates the obligations from the paid invoice's `paid_at` (`Plan.Schedule`), records tuition #1 as paid, stores the Payment, marks the attempt `paid`, clears the funding-blocking reviews, calls `links.Enroll` (the only Student creation for an enrollment, which also sets `enrollments.paid_at` and clears `enrollments.pin`), sets `funded_at` and `next_sync_at = NULL`. It schedules nothing itself ([Funding and scheduling](#funding-and-scheduling)). A mismatching first invoice blocks funding and keeps the attempt `processing` |
 | 3 | `syncCustomerContact` | When name or email differ from the `synced_customer_*` stamp, update the Stripe Customer, then the stamp. The source is the Enrollment before funding (`contactOf`), the Student after |
 | 5 | `scheduleInvoices` | Later tuition (`number > 1`, `collect`, dated, no review) with any creation stage still missing (`stripe_invoice_id IS NULL OR stripe_invoice_item_id IS NULL OR scheduled_finalization_at IS NULL`); runs `ensureDefaultPaymentMethod` first. Detail: [Invoices](invoices.md) |
-| 6 | `syncInvoice` | Fetch the invoice, record each paid InvoicePayment's PaymentIntent as a Payment, map the invoice onto the obligation (`invoiceStateOf`), save through `store`, which also recomputes the contract's `payment_review` flag. A non-matching invoice that could still collect is held (`auto_advance` off) after its review is persisted |
-| 7-9 | `evaluateDeadlines`, `cancelFees`, `evaluateReactivation` | School policy on the freshly refreshed state: [Suspension](suspension.md) |
+| 6, 8 | `syncInvoice` | Fetch the invoice, record each paid InvoicePayment's PaymentIntent as a Payment, map the invoice onto the obligation (`invoiceStateOf`, told whether the contract is withdrawn), save through `store`, which also recomputes the contract's `payment_review` flag. A non-matching invoice that could still collect is held (`auto_advance` off) after its review is persisted. Tuition is read before `evaluateDeadlines` judges it; fees after, so a fee whose episode this pass corrects is read as `cancel` and, if already paid, gets `payment_review` in the same pass |
+| 6b | `retryFailed` | Failed tuition whose `next_retry_at` is due, no review and `retry_count` below the limit: read the last decline, pay the invoice again under a per-attempt idempotency key unless the decline needs the payer, record the attempt, then `syncInvoice` it. Rules: [Invoices](invoices.md#retrying-a-failed-installment) |
+| 7, 10 | `evaluateDeadlines`, `evaluateReactivation` | School policy on the freshly refreshed state: [Suspension](suspension.md) |
+| 9 | `cancelObligations` | Delete or void the invoices of obligations whose collection was cancelled (corrected fees, a withdrawn contract's unsettled obligations): [Invoices](invoices.md#cancellation) |
+| 10, withdrawn | `refundPayments` | Refund every undisputed payment in full: [Withdrawal](withdrawal.md#refunds) |
 
-Staff Reconcile is therefore not charge-free: it can create and arm invoices (a past-due invoice is finalized at once, so Stripe then collects) and suspend or reactivate a student. The attempt and funding steps are the same code, but staff reach only funded contracts (an enrollment's Student exists only after funding), so in production funding itself happens in the worker path. Staff reinstatement runs the same pass first, then creates the fee.
 Staff Reconcile is therefore not charge-free: it can create and arm invoices (a past-due invoice is finalized at once, so Stripe then collects), pay a failed installment again when its retry is due, and suspend or reactivate a student. The attempt and funding steps are the same code, but staff reach only funded contracts (an enrollment's Student exists only after funding), so in production funding itself happens in the worker path. Staff reinstatement runs the same pass first, then creates the fee. Staff withdrawal records the withdrawal first, then runs the pass, which on a withdrawn contract charges nothing: it only cancels and refunds, and so does Reconcile on a withdrawn student.
 
 ### Funding and scheduling
@@ -142,6 +149,7 @@ Staff Reconcile is therefore not charge-free: it can create and arm invoices (a 
 | Obligation with money remaining and no due date, or a due date already passed (including an open reinstatement fee) | now + 15 min |
 | Obligation with money remaining and a future due date | that due date |
 | Obligation with a due date, money remaining and no `deadline_episode_id` | `due_at + 14 days` while still in the future |
+| A failed installment with a retry in the future | that `next_retry_at` |
 | A Payment without `balance_transaction_id` (fee and net not yet known) | now + 15 min |
 
 Other writers move the schedule: funding sets `next_sync_at = NULL` (due at once, see [Funding and scheduling](#funding-and-scheduling)), `touch` sets it to now (contact edits, `TouchContract`), a withdrawal sets it to now, a failed sync sets now + 1 min. The 15-minute rechecks and the daily audit are how Stripe changes are found when no webhook arrives.
@@ -164,6 +172,7 @@ The worker context derives from the process signal context, so the worker stops 
 | `invoices.go`, `invoices` | `invoiceStateOf`, `syncInvoice`, `holdInvoice`, `store` |
 | `invoices.go`, `invoice creation (later tuition, reinstatement fee)` | `scheduleInvoices`, `scheduleOne`, `createInvoice`, `createItem`, `adopt`, `arm`, `sendFee`, `reviewObligation`, `ensureDefaultPaymentMethod` |
 | `invoices.go`, `cancellation (corrected fees, withdrawn contracts)` | `cancelPending`, `cancelObligations`, `cancelObligation` |
+| `retry.go` | `retryFailed`, `retryInvoice`, `lastDecline`, `firstRetryAt`, `retryDelay` |
 | `suspension.go` | `deadlineWindow`, deadline policy, `RequestReinstatement`, `evaluateReactivation` |
 | `withdraw.go` | `Withdraw`, `withdraw`, `refundPayments`, `refundRefused` |
 | `contact.go` | `UpdateContact` (customer edit) and `TouchContract` (staff edit) set `next_sync_at` to now and wake the worker; `ContactEditable` is the lock-free pre-check for showing the edit link |
@@ -191,6 +200,7 @@ The worker's work splits by file: queue and lease mechanics plus contract reconc
 - `internal/billing/checkout.go`: `syncAttempt`, `recordDecline`, `resumeCreate`, `creatingGrace`, `moveAttempt`, `fund`, `savePayment`, `syncPayment`
 - `internal/billing/invoices.go`: `scheduleInvoices`, `syncInvoice`, `holdInvoice`, `store`, `invoiceStateOf`, `cancelPending`, `cancelObligations`
 - `internal/billing/withdraw.go`: `Withdraw`, `refundPayments`
+- `internal/billing/retry.go`: `retryFailed`, `retryInvoice`, `lastDecline`
 - `internal/billing/billing.go`: `withStaffContract`, `ReconcileStudent`, `ErrPaymentPending`, `providerBudget`, `persistBudget`, `persistCtx`, `wakeWorker`
 - `internal/billing/suspension.go`: `deadlineWindow`, `RequestReinstatement`, `evaluateDeadlines`, `evaluateReactivation`
 - `internal/billing/contact.go`: `TouchContract`, `UpdateContact`, `ContactEditable`, `touch`

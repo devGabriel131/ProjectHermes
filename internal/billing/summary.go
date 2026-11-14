@@ -8,6 +8,12 @@ import (
 	"projecthermes/internal/students"
 )
 
+// overdueGrace is how long past its due date an unpaid installment still reads as scheduled, not
+// overdue. Stripe finalizes and charges an armed invoice a little after due_at (5-67 s observed) and the
+// webhook and worker record it seconds later, so flagging it the instant due_at passes is a false alarm.
+// It only affects display and the dashboard; the 14-day deadline counts from due_at (suspension.go).
+const overdueGrace = 5 * time.Minute
+
 // SummaryInstallment represents the status of one tuition installment in Summary.
 type SummaryInstallment struct {
 	ID           uint64
@@ -134,7 +140,7 @@ func (s *Service) summarize(ctx context.Context, contract Contract) (*Summary, e
 	for _, o := range obligations {
 		summary.OtherSettlementCents += o.OtherSettlementCents
 		addReason(o.ReviewReason)
-		overdue := o.DueAt != nil && o.DueAt.Before(now)
+		overdue := o.DueAt != nil && o.DueAt.Add(overdueGrace).Before(now)
 		switch o.Kind {
 		case "reinstatement":
 			if o.CollectionDisposition == "collect" { // a corrected fee is no longer owed

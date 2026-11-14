@@ -66,6 +66,11 @@ func TestOverviewCountsOnlyFundedTuition(t *testing.T) {
 	b := contract(student(), at(-60*day), &attention)
 	obligation(b, "tuition", 1, at(-60*day), 0, settled)
 	obligation(b, "tuition", 2, at(40*day), 30000, review)
+	// D: funded long ago; #2 fell due a minute ago (inside the grace period, so due soon) and #3 ten minutes ago (overdue).
+	d := contract(student(), at(-60*day), nil)
+	obligation(d, "tuition", 1, at(-60*day), 0, settled)
+	obligation(d, "tuition", 2, at(-time.Minute), 10000, nil)
+	obligation(d, "tuition", 3, at(-10*time.Minute), 30000, nil)
 	// C: an abandoned Checkout owes nothing yet.
 	c := contract(student(), nil, nil)
 	obligation(c, "tuition", 1, nil, 20000, nil)
@@ -79,9 +84,9 @@ func TestOverviewCountsOnlyFundedTuition(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := billing.Overview{
-		CollectedCents: 20100, OutstandingCents: 70000,
-		OverdueCents: 20000, OverdueInstallments: 1,
-		DueSoonCents: 20000, DueSoonInstallments: 1,
+		CollectedCents: 20100, OutstandingCents: 110000,
+		OverdueCents: 50000, OverdueInstallments: 2,
+		DueSoonCents: 30000, DueSoonInstallments: 2,
 		FailedInstallments: 1, ContractsInReview: 2, PaymentsInReview: 1, FundedRecently: 1,
 	}
 	if got != want {

@@ -102,7 +102,7 @@ Staff edits are not locked by funding, a payment in flight or the contract lease
 | Tuition paid | sum of tuition obligations' `AmountPaidCents` |
 | Stripe cash paid | sum over every payment of gross received minus gross refunded; includes reinstatement fee cash |
 | Other settlement | sum of obligations' `OtherSettlementCents` |
-| Remaining tuition, Overdue tuition | sum of tuition `AmountRemainingCents`, leaving out `cancelled` installments; the overdue part has `DueAt` before now |
+| Remaining tuition, Overdue tuition | sum of tuition `AmountRemainingCents`, leaving out `cancelled` installments; the overdue part has `DueAt` more than `overdueGrace` (5 min) before now |
 | Reinstatement fee remaining | remaining on reinstatement obligations whose `CollectionDisposition` is `collect`; a fee of a corrected episode or a withdrawn contract is no longer owed |
 | Status | "Withdrawn", its time and "by" the staff name when `WithdrawnAt` is set; else "Billing-suspended" when an episode is open (`IsSuspended`); else "Active" |
 | Last synced | `LastSyncedAt` or "Never" |
@@ -119,7 +119,7 @@ flowchart TD
     Paid -->|"yes"| PaidStatus["paid, shown as Paid with its time"]
     Paid -->|"no"| Failed{"FailureOrActionRequired?"}
     Failed -->|"yes"| Action["action_required, shown as Action required"]
-    Failed -->|"no"| Overdue{"DueAt before now?"}
+    Failed -->|"no"| Overdue{"DueAt more than 5 min before now?"}
     Overdue -->|"yes"| OverdueStatus["overdue, shown as Overdue"]
     Overdue -->|"no"| Scheduled["scheduled, shown as Scheduled"]
 ```
@@ -132,7 +132,7 @@ When the contract has payments, a Payments table follows, oldest first (`Summary
 
 | Button | Route | Shown | What it does |
 |---|---|---|---|
-| Reconcile | `POST .../billing/reconcile` | Always | Runs the worker's full contract sync for this student under the contract lease; may create or arm invoices, finalize a past-due one and evaluate deadlines. Never charges a card. Returns the fresh block. |
+| Reconcile | `POST .../billing/reconcile` | Always | Runs the worker's full contract sync for this student under the contract lease; may create or arm invoices, finalize a past-due one, pay a failed installment again when its retry is due, and evaluate deadlines. Returns the fresh block. |
 | Request Reinstatement | `POST .../billing/reinstatement` | Only while `IsSuspended` | Creates or resumes the open episode's fee invoice, recording the signed-in staff name. Returns the fresh block. See [Suspension](../billing/suspension.md). |
 | Customer Portal | `POST .../billing/portal` | Always | Creates a short-lived Stripe customer-portal link and shows it in `#student-billing-portal-{id}` (`role="status"`). It is a bearer credential: `no-store`, `no-referrer`, opened with `rel="noopener noreferrer"`. |
 | Withdraw and refund | `POST .../billing/withdraw` | Only while `Funded` and not yet withdrawn | First an `hx-confirm`: "Withdraw this student and refund $X? Unpaid installments are cancelled and the student is deactivated. This cannot be undone." with `RefundableCents` as $X. Then `Withdraw` records the signed-in staff name, cancels every unpaid installment and fee, deactivates the student and refunds every undisputed payment. Irreversible. Returns the fresh block. See [Withdrawal](../billing/withdrawal.md). |

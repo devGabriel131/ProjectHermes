@@ -518,10 +518,15 @@ func (s *Service) moveAttempt(ctx context.Context, l lease, id uint64, to string
 	return err
 }
 
+// declineCode is the most specific Stripe code of a failed payment try.
+func declineCode(e *stripe.Error) string {
+	return cmp.Or(string(e.DeclineCode), string(e.Code), string(e.Type))
+}
+
 // recordDecline stores the latest failed try's Stripe code; Checkout keeps an open Session
 // payable after a decline, so the attempt's state is left alone.
 func (s *Service) recordDecline(ctx context.Context, l lease, a CheckoutAttempt, e *stripe.Error) error {
-	code := cmp.Or(string(e.DeclineCode), string(e.Code), string(e.Type))
+	code := declineCode(e)
 	if code == deref(a.DeclineCode) {
 		return nil
 	}

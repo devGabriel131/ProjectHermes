@@ -119,7 +119,7 @@ Tests do not prove randomness statistically. No test proves these browser checks
 - "No test calls Stripe" holds for Go tests only. `checkout.js`, and `capacity.js` unless `CHECKOUT=0`, create **real Stripe sandbox Checkout Sessions** through the app they target.
 - `BASE_URL` is required by `loadtest/lib.js`; a run without it fails instead of picking a host ([Railway](operations/railway.md)).
 - `capacity.js` sends its customers one after another over `WINDOW` seconds (default 60); `WINDOW=0` is the all-at-once burst. Every failed check carries a reason (`pin_taken`, `validation`, `server_error`, ...) and each journey step has its own latency budget, so a failing run says which step and why.
-- `capacity.js` only creates Checkout Sessions; `pay.fish` pays them with sandbox cards in a Playwright browser (Docker), so the sandbox shows real payments and, against a deployed app, its webhooks fund the customers. With `INSTALLMENT_SPACING=15m` set on that app ([Configuration](operations/configuration.md)), later installments fall due in minutes instead of months, so their charging can be checked the same day.
+- `capacity.js` only creates Checkout Sessions; `pay.fish` pays them with sandbox cards in a Playwright browser (Docker), so the sandbox shows real payments and, against a deployed app, its webhooks fund the customers. With `INSTALLMENT_SPACING` set on that app (for example `3m`, [Configuration](operations/configuration.md)), later installments fall due in minutes instead of months, so their charging can be checked the same day.
 
 ## Known test gaps
 

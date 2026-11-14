@@ -29,21 +29,22 @@ type Overview struct {
 func (s *Service) Overview(ctx context.Context, now time.Time, window time.Duration) (Overview, error) {
 	var o Overview
 	db := s.db.WithContext(ctx)
-	at := sql.Named("now", now)
+	// Installments inside the grace period still count as due soon, so none falls between the two figures.
+	overdueBefore := sql.Named("overdue_before", now.Add(-overdueGrace))
 	until := sql.Named("until", now.Add(window))
 	since := sql.Named("since", now.Add(-window))
 
 	if err := db.Raw(`
 		SELECT
 			COALESCE(SUM(o.amount_remaining_cents), 0)::bigint,
-			COALESCE(SUM(o.amount_remaining_cents) FILTER (WHERE o.due_at < @now), 0)::bigint,
-			count(*) FILTER (WHERE o.due_at < @now AND o.amount_remaining_cents > 0),
-			COALESCE(SUM(o.amount_remaining_cents) FILTER (WHERE o.due_at >= @now AND o.due_at < @until), 0)::bigint,
-			count(*) FILTER (WHERE o.due_at >= @now AND o.due_at < @until AND o.amount_remaining_cents > 0),
+			COALESCE(SUM(o.amount_remaining_cents) FILTER (WHERE o.due_at < @overdue_before), 0)::bigint,
+			count(*) FILTER (WHERE o.due_at < @overdue_before AND o.amount_remaining_cents > 0),
+			COALESCE(SUM(o.amount_remaining_cents) FILTER (WHERE o.due_at >= @overdue_before AND o.due_at < @until), 0)::bigint,
+			count(*) FILTER (WHERE o.due_at >= @overdue_before AND o.due_at < @until AND o.amount_remaining_cents > 0),
 			count(*) FILTER (WHERE o.failure_or_action_required AND o.first_settled_at IS NULL AND o.amount_remaining_cents > 0)
 		FROM billing_obligations o
 		JOIN billing_contracts c ON c.id = o.contract_id
-		WHERE o.kind = 'tuition' AND o.collection_disposition = 'collect' AND c.funded_at IS NOT NULL`, at, until).Row().Scan(
+		WHERE o.kind = 'tuition' AND o.collection_disposition = 'collect' AND c.funded_at IS NOT NULL`, overdueBefore, until).Row().Scan(
 		&o.OutstandingCents, &o.OverdueCents, &o.OverdueInstallments,
 		&o.DueSoonCents, &o.DueSoonInstallments, &o.FailedInstallments); err != nil {
 		return Overview{}, err

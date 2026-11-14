@@ -38,8 +38,8 @@ flowchart LR
 | Links created (`LinksCreated`) | `links.created_at` not before `now - 30 d` |
 | Enrollments started (`EnrollmentsStarted`) | `enrollments.created_at` not before `now - 30 d` |
 | Forms completed (`FormsCompleted`) | `enrollments.submitted_at` not before `now - 30 d` |
-| Due in the next 30 days (`DueSoon`) | `now <= due_at < now + 30 d` (looks ahead) |
-| Overdue | `due_at < now` (no lower bound) |
+| Due in the next 30 days (`DueSoon`) | `now - 5 min <= due_at < now + 30 d` (looks ahead; the 5-minute `overdueGrace` keeps a just-due installment here instead of in Overdue) |
+| Overdue | `due_at < now - 5 min` (no lower bound) |
 
 ## Figures
 
@@ -51,8 +51,8 @@ flowchart LR
 | Students | Total enrolled | Active + Suspended, so every Student row except withdrawn ones; an enrollment's Student exists only after payment, and staff-added students count too |
 | Tuition | Collected | `SUM(gross_received_cents - gross_refunded_cents)` over **every** `billing_payments` row. After refunds, before Stripe fees. No funding or obligation-kind filter, so reinstatement fee cash is included |
 | Tuition | Outstanding | `SUM(amount_remaining_cents)` over tuition obligations of funded contracts whose `collection_disposition` is `collect`, due or not. Reinstatement fee obligations, installments a withdrawal cancelled and unfunded contracts are excluded |
-| Tuition | Overdue (amount and count) | Amount: remaining cents of those obligations with `due_at < now`. Count: the same obligations with remaining above zero |
-| Tuition | Due in the next 30 days (amount and count) | Same shape for `now <= due_at < now + 30 d` |
+| Tuition | Overdue (amount and count) | Amount: remaining cents of those obligations with `due_at < now - overdueGrace` (5 min). Count: the same obligations with remaining above zero |
+| Tuition | Due in the next 30 days (amount and count) | Same shape for `now - overdueGrace <= due_at < now + 30 d` |
 | Enrollment | Links created | Links created within the window, whatever became of them (Trash included) |
 | Enrollment | Enrollments started | Enrollments started within the window, whatever became of them |
 | Enrollment | Forms completed | Enrollments with `submitted_at` in the window, paid or not. The label says "completed"; the figure counts **submitted** enrollments |

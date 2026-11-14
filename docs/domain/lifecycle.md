@@ -80,7 +80,7 @@ sequenceDiagram
 | 14-day sweep, reinstatement | [Suspension](../billing/suspension.md) |
 | Withdrawal and full refund | [Withdrawal](../billing/withdrawal.md) |
 
-Only the worker (event handling or contract sync) first-funds a contract. Staff Reconcile and Reinstatement run the same sync, but they find the contract through the `students` row, which for an enrollment exists only after funding (a staff-added student has no contract), so in production they re-sync an already funded contract ([Billing overview](../billing/overview.md) lists who can reach `fund`). The app never charges a card itself: Stripe collects the invoices.
+Only the worker (event handling or contract sync) first-funds a contract. Staff Reconcile, Reinstatement and Withdrawal run the same sync, but they find the contract through the `students` row, which for an enrollment exists only after funding (a staff-added student has no contract), so in production they re-sync an already funded contract ([Billing overview](../billing/overview.md) lists who can reach `fund`). Stripe collects the invoices; the app charges a card itself only to retry a failed later installment ([Invoices](../billing/invoices.md#retrying-a-failed-installment)), and refunds only when staff withdraw the student ([Withdrawal](../billing/withdrawal.md)).
 
 ## Who owns which state
 

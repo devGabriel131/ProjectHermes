@@ -18,6 +18,7 @@ The application never loads a `.env` file itself; locally, Air injects `.env` (`
 | `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID` | server only | none; required | Not blank | `billing_configuration` |
 | `STRIPE_PORTAL_CONFIGURATION_ID` | server only | none; required | Not blank | `billing_configuration` |
 | `INSTALLMENT_SPACING` | server only | unset: monthly due dates | Optional. A positive Go duration such as `15m`; refused when `STRIPE_MODE=live`. Sandbox testing only: installment *i* falls due `i × INSTALLMENT_SPACING` after funding instead of on monthly midnights ([Billing overview](../billing/overview.md#due-dates)) | `configuration` |
+| `INSTALLMENT_RETRY_DELAY` | server only | unset: 24 h | Optional. A positive Go duration such as `24h`: how long after a failure, and between retries, the app pays a failed later installment again, at most twice ([Invoices](../billing/invoices.md#retrying-a-failed-installment)) | `billing_configuration` |
 | `TEST_DATABASE_URL` | integration tests only (`-tags=integration`) | none; the test fails | Must parse as a URL with a host and scheme `postgres` or `postgresql`; use a dedicated database | none (test failure) |
 | `RAILWAY_SERVICE_NAME` | server, `user` CLI (log field `service`) | `ProjectHermes` | None | never fails |
 | `RAILWAY_ENVIRONMENT_NAME` | server, `user` CLI (log field `environment`) | `local` | None | never fails |
@@ -55,7 +56,7 @@ A startup failure logs `startup_failed` with a `stage` field, then the process e
 | `database_pool` | `db.DB()` | GORM holds no `*sql.DB`; not reachable with the PostgreSQL driver in use [INFERENCE] |
 | `database_connect` | `PingContext` | Server unreachable, rejected credentials, the shared 10 s budget spent, or a signal during startup |
 | `database_migrate` | `AutoMigrate(models()...)` | DDL failure or the shared 10 s budget spent |
-| `billing_configuration` | `billing.LoadConfigFromEnv` | Any Stripe variable above |
+| `billing_configuration` | `billing.LoadConfigFromEnv` | Any Stripe variable above; `INSTALLMENT_RETRY_DELAY` not a positive duration |
 | `billing_catalog` | `billing.LoadCatalog` | Price missing, duplicated, inactive, wrong mode, currency, billing scheme, type or amount; Stripe unreachable within 15 s |
 | `billing_initialize` | `billing.New` | Repeats the `Config.Validate` that `LoadConfigFromEnv` already passed, so it cannot fail after `billing_configuration` succeeds |
 | `auth_initialize` | `auth.New` | Login template parse, Argon2 dummy-hash creation, or `db.DB()` |
@@ -68,8 +69,8 @@ Failures after `listen` succeeds are `server_failed` or `shutdown_failed`, not s
 ## Source
 
 - `main.go`: `run`, `startupError`, `SESSION_COOKIE_SECURE`, `INSTALLMENT_SPACING`, `DATABASE_URL`, `PORT`, `RAILWAY_SERVICE_NAME`, `RAILWAY_ENVIRONMENT_NAME`, `RAILWAY_GIT_COMMIT_SHA`, `RAILWAY_DEPLOYMENT_ID`, `RAILWAY_REPLICA_ID`
-- `internal/billing/stripe.go`: `Config.Validate`, `LoadConfigFromEnv`, `LoadCatalog`, `STRIPE_API_KEY`, `STRIPE_MODE`, `PUBLIC_BASE_URL`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID`, `STRIPE_PORTAL_CONFIGURATION_ID`
+- `internal/billing/stripe.go`: `Config.Validate`, `LoadConfigFromEnv`, `LoadCatalog`, `STRIPE_API_KEY`, `STRIPE_MODE`, `PUBLIC_BASE_URL`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID`, `STRIPE_PORTAL_CONFIGURATION_ID`, `INSTALLMENT_RETRY_DELAY`
 - `internal/billing/billing.go`: `New`
 - `internal/testdb/testdb.go`: `Open`, `TEST_DATABASE_URL`
 - `.air.toml`: `env_files`
-- `.env.example`: `STRIPE_MODE`, `PUBLIC_BASE_URL`, `INSTALLMENT_SPACING`
+- `.env.example`: `STRIPE_MODE`, `PUBLIC_BASE_URL`, `INSTALLMENT_SPACING`, `INSTALLMENT_RETRY_DELAY`

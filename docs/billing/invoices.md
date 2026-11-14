@@ -2,7 +2,7 @@
 
 How a tuition installment or the reinstatement fee becomes a Stripe invoice: the obligation's states, the crash-safe creation stages, arming, the card gate, cancellation and the display status staff see. The loop that runs all of it is in [Billing worker](worker.md); the funding model is in [Billing overview](overview.md); what a fee does to a student is in [Suspension](suspension.md); what a withdrawal stops is in [Withdrawal](withdrawal.md); flags raised here are listed in [Reviews](reviews.md).
 
-An obligation (`billing_obligations`) is one amount the student owes. The app never charges a card: it creates and arms invoices and Stripe collects.
+An obligation (`billing_obligations`) is one amount the student owes. The app creates and arms invoices and Stripe makes the first collection attempt; the app itself charges a card only to retry a failed later installment ([Retrying a failed installment](#retrying-a-failed-installment)).
 
 | Kind | `number` | Collected by | Created by |
 |---|---|---|---|
@@ -108,8 +108,24 @@ For an obligation with `collection_disposition = cancel`, `void` and `deleted` a
 | `amount_paid_cents` | Stripe cash paid on the invoice |
 | `other_settlement_cents` | Credits and off-Stripe settlement, kept apart from cash |
 | `failure_or_action_required` | Open invoice with a payment attempt made |
-| `collection_disposition` | `collect`, or `cancel` for a fee of a corrected episode |
+| `retry_count` | App retries made after Stripe's own failed attempt, at most `maxRetries` (2) |
+| `next_retry_at` | When the next retry is due; NULL while none is pending, and cleared by a withdrawal |
+| `collection_disposition` | `collect`, or `cancel` for a fee of a corrected episode and for every unsettled obligation of a withdrawn contract ([Cancellation](#cancellation)) |
 | `deadline_episode_id` | Episode this installment's missed deadline is attributed to |
+
+## Retrying a failed installment
+
+Stripe makes the first attempt when an armed invoice finalizes. When it fails (`open` with `attempted`, which `store` records as `failure_or_action_required`), `store` stamps `next_retry_at = now + retry delay`, and the worker pays the same invoice again at that time ([Worker](worker.md), step 6b). It retries at most `maxRetries` (2) times, `INSTALLMENT_RETRY_DELAY` apart (default 24 h, [Configuration](../operations/configuration.md)). This is the one place the app itself charges a card; only later tuition is retried, never the fee or the Checkout payment.
+
+| Rule | Why |
+|---|---|
+| Only soft declines are retried: `generic_decline`, `insufficient_funds`, `card_velocity_exceeded`, `processing_error`, `try_again_later`, `issuer_not_available`. Any other decline, or none on record, sets `retry_count` to the limit at once | A lost or stolen card, an expired card or a required authentication needs the payer; charging it again off-session cannot succeed and issuers hold repeats against the merchant. The code is read from the invoice's latest PaymentIntent error just before each retry (`lastDecline`) |
+| The call carries the key `tuition:<obligation reference>:retry:<n>`, and `retry_count` moves only after Stripe answered | A crash or an unknown outcome (timeout, 5xx, 429, a key still in flight; `outcomeUnknown`) fails the sync and replays the same key after 1 min instead of charging twice. A paid invoice cannot be paid again: Stripe refuses with "Invoice is already paid" `[EXTERNAL]` |
+| Stripe's answer, a decline included, uses up the attempt | The sync that follows reads the outcome: paid settles the obligation, still failing re-arms `next_retry_at` until the limit |
+| Reviewed obligations are skipped | A hold stays a hold, as when arming |
+| `store` clears `next_retry_at` as soon as the invoice stops failing | A paid invoice is never retried |
+
+The retry runs inside `reconcileContract`, so staff Reconcile pays a due retry too, never earlier than its time. `nextSyncAt` wakes the contract at `next_retry_at`. Stripe's own Smart Retries, when enabled in the Dashboard, run independently of this `[EXTERNAL]`.
 
 ## Reinstatement fee
 
@@ -133,7 +149,7 @@ stateDiagram-v2
 2. It runs the same `scheduleOne` stages with differences: `collection_method` `send_invoice` with `days_until_due` 1 (the student pays on Stripe's hosted page by the next day, never from a saved card), item description "Reinstalación", and the invoice total must equal 2500 exactly.
 3. `sendFee` finalizes with `auto_advance` (key `reinstatement:<ref>:finalize`), then calls `SendInvoice` (key `...:send`), and stores `scheduled_finalization_at = now` and status `open`. Past the keys' retention a retried send could email again; the fee is never duplicated.
 4. `invoice.paid` reaches `syncInvoice`; reactivation conditions are in [Suspension](suspension.md). Staff open the hosted page through `InvoiceURL`, fetched on demand and never stored (`ErrInvoiceNotReady` while there is none); the button needs `invoiceReady`.
-5. When the episode is corrected, `correctEpisode` persists `collection_disposition = cancel` first; `cancelFees` then deletes a draft (`deleted`), voids an open or uncollectible invoice (`void`) and sets remaining 0. A fee already paid is left alone and `syncInvoice` sets the obligation review `payment_review`, which nothing clears.
+5. When the episode is corrected, `correctEpisode` persists `collection_disposition = cancel` first; [Cancellation](#cancellation) then deletes or voids its invoice. A fee already paid is left alone and `syncInvoice` sets the obligation review `payment_review`. The sync reads fee invoices after the correction, so that review appears in the same pass. A withdrawal cancels an unsettled fee the same way and refunds a paid one ([Withdrawal](withdrawal.md)).
 
 A fee has no `due_at`, so it is rechecked every 15 minutes while money remains ([Worker](worker.md)).
 
@@ -162,7 +178,7 @@ Staff and customer views derive a per-installment status from the stored columns
 | 1 | `cancelled` | `collection_disposition = cancel` and no `first_settled_at`: a withdrawal stopped it. Never counted as remaining or overdue |
 | 2 | `paid` | `first_settled_at` set, or remaining 0 |
 | 3 | `action_required` | `failure_or_action_required` |
-| 4 | `overdue` | `due_at` is before now |
+| 4 | `overdue` | `due_at` is more than `overdueGrace` (5 min) before now. Inside the grace period it stays `scheduled`: Stripe charges an armed invoice a little after `due_at` and the app records it seconds later. Only display and the dashboard use the grace; the 14-day deadline counts from `due_at` |
 | 5 | `scheduled` | otherwise |
 
 `invoiceReady` is true when an invoice ID exists and the status is not empty, `draft` or `deleted`: only then can staff open the hosted invoice. Where these appear: [Staff students](../management/students.md).
@@ -181,6 +197,7 @@ Staff and customer views derive a per-installment status from the stored columns
 ## Source
 
 - `internal/billing/invoices.go`: `scheduleInvoices`, `scheduleOne`, `createInvoice`, `createItem`, `invoicesOf`, `adopt`, `arm`, `sendFee`, `reviewObligation`, `ensureDefaultPaymentMethod`, `invoiceMatches`, `invoiceStateOf`, `reviewFor`, `syncInvoice`, `holdInvoice`, `store`, `cancelPending`, `cancelObligations`, `cancelObligation`
+- `internal/billing/retry.go`: `retryFailed`, `retryInvoice`, `lastDecline`, `firstRetryAt`, `retryDelay`, `maxRetries`, `defaultRetryDelay`, `retryableDeclines`
 - `internal/billing/checkout.go`: `fund`, `createObligations`
 - `internal/billing/suspension.go`: `requestFee`, `correctEpisode`
 - `internal/billing/withdraw.go`: `withdraw`

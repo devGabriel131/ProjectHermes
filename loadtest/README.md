@@ -72,5 +72,5 @@ loadtest/pay.fish                                                               
 loadtest/link.fish verify $token                                                           # paid, students, checkout states
 ```
 
-With `INSTALLMENT_SPACING=15m` set on the app (sandbox only, see [Configuration](../docs/operations/configuration.md)), the `three` and `six` customers' later installments fall due 15, 30, ... minutes after they pay,
+With `INSTALLMENT_SPACING=3m` set on the app (sandbox only, see [Configuration](../docs/operations/configuration.md)), the `three` and `six` customers' later installments fall due 3, 6, ... minutes after they pay,
 so running `link.fish verify` again after that shows whether those installments were charged.

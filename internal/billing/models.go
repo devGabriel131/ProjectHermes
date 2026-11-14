@@ -64,6 +64,8 @@ type Obligation struct {
 	OtherSettlementCents     int64 `gorm:"not null;default:0;check:obligation_other_settlement,other_settlement_cents >= 0"`
 	FirstSettledAt           *time.Time
 	FailureOrActionRequired  bool `gorm:"not null;default:false"`
+	RetryCount               int  `gorm:"not null;default:0"` // app-driven payment retries made after Stripe's own failed attempt
+	NextRetryAt              *time.Time
 	ReviewReason             *string
 	CreatedAt                time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt                time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`

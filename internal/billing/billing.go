@@ -196,7 +196,7 @@ func (s *Service) PortalURL(ctx context.Context, studentID uint64) (string, erro
 
 // ReconcileStudent runs the worker's full contract sync for staff: it can fund the contract, create or
 // arm invoices (a past-due invoice is finalized at once, so Stripe then collects), replay a Checkout
-// create, and evaluate deadlines and reactivation. It never charges a card itself.
+// create, pay a failed installment again when its retry is due, and evaluate deadlines and reactivation.
 func (s *Service) ReconcileStudent(ctx context.Context, studentID uint64) (*Summary, error) {
 	ctx, cancel := context.WithTimeout(ctx, providerBudget)
 	defer cancel()
