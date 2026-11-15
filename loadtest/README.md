@@ -26,7 +26,7 @@ The summary JSON goes to `OUT` (default `/tmp/k6/out/<script>.json`).
   the journey steps (`welcome` with its assets, `start`, `completeStarted`, `completeToPayments`), `think` time, `journeyMetrics` (the 200-399 response
   callback plus `journey_duration`), `stepThresholds` and the summary.
 - `run.fish` runs a script in Docker with the live dashboard and a failure-cause summary; `link.fish` seeds, verifies and cleans a link;
-  `pay.fish` (with `pay.cjs`) pays the Checkout Sessions a `capacity.js` run created, by typing sandbox cards into Stripe's hosted page in a headless browser (Playwright in Docker).
+  `pay.fish` (with `pay.cjs`) pays the Checkout Sessions a `capacity.js` run created, by typing sandbox cards into Stripe's hosted page in a headless browser (Playwright in Docker), one card scenario per customer.
 
 ## Reading a run
 
@@ -62,8 +62,11 @@ removes the link's enrollments, students and billing rows, and leaves Stripe san
 
 ### Paying the sessions: 100 customers, all three plans
 
-`capacity.js` only creates the Checkout Sessions; k6 cannot type a card. `pay.fish` pays every `CHECKOUT` line in the log (`LOG`, default `/tmp/k6/out/capacity.log`), three tabs at a time,
-rotating the sandbox cards by customer index and retrying failures one at a time. The plan is already spread by index (`full`, `three`, `six`), so 100 customers give 34 / 33 / 33.
+`capacity.js` only creates the Checkout Sessions; k6 cannot type a card. `pay.fish` pays every `CHECKOUT` line in the log (`LOG`, default `/tmp/k6/out/capacity.log`), `CONCURRENCY` tabs at a time (default 3),
+and retries failures one at a time. Each customer plays one of the 35 `SCENARIOS` in `pay.cjs`, picked by index: card brands and funding types (Visa, Mastercard, Amex, Discover, Diners, JCB, UnionPay, debit, prepaid),
+3-D Secure challenges completed on the page, declines the customer fixes with another card (generic, insufficient funds, lost, stolen, expired, incorrect CVC, processing error), declines the customer gives up on
+(the Session stays open and unpaid, so staff see "Payment declined"; `pay.fish` prints `DECLINED`), and cards Stripe disputes or flags after paying. The plan is spread by index too (`full`, `three`, `six`), so 100 customers give 34 / 33 / 33,
+and a "3ds always required" customer pays on the page but its later installments fail with `authentication_required`.
 The first run pulls the Playwright image (about 2 GB). Pay against sessions a deployed app created: Stripe sends its webhooks to the app's `PUBLIC_BASE_URL`, so a local app never hears the payment.
 
 ```fish
@@ -73,5 +76,5 @@ loadtest/pay.fish                                                               
 loadtest/link.fish verify $token                                                           # paid, students, checkout states
 ```
 
-With `INSTALLMENT_SPACING=3m` set on the app (sandbox only, see [Configuration](../docs/operations/configuration.md)), the `three` and `six` customers' later installments fall due 3, 6, ... minutes after they pay,
+With `INSTALLMENT_SPACING` set on the app (for example `2m`; sandbox only, see [Configuration](../docs/operations/configuration.md)), the `three` and `six` customers' later installments fall due 2, 4, ... minutes after they pay,
 so running `link.fish verify` again after that shows whether those installments were charged.

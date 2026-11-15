@@ -1,8 +1,9 @@
 #!/usr/bin/env fish
 # Pays the Checkout Sessions a capacity.js run created, by typing sandbox cards into Stripe's hosted page
 # in a headless browser (Playwright in Docker; the first run pulls the ~2 GB image and installs the package).
-#   loadtest/pay.fish [LOG=/tmp/k6/out/capacity.log] [CONCURRENCY=3] [CARDS=4242...,5555...]
-# Prints PAID/FAILED per customer. The sandbox then sends webhooks to the app's PUBLIC_BASE_URL, so run this
+# Each customer plays a card scenario from SCENARIOS in pay.cjs: brands, 3-D Secure, declines, disputes.
+#   loadtest/pay.fish [LOG=/tmp/k6/out/capacity.log] [CONCURRENCY=3]
+# Prints PAID / DECLINED / FAILED per customer. The sandbox then sends webhooks to the app's PUBLIC_BASE_URL, so run this
 # against sessions made by a deployed app (a local app never hears Stripe) for the payments to land in its database.
 set root (path resolve (status dirname)/..)
 set playwright 1.65.1
