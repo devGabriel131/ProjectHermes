@@ -58,6 +58,7 @@ flowchart LR
   main --> live
   main --> logging
   main --> management
+  main --> payments
   main --> settings
   main --> students
   auth --> logging

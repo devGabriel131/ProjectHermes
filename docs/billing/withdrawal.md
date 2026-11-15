@@ -14,7 +14,7 @@ sequenceDiagram
     Staff->>M: POST /management/students/{id}/billing/withdraw, after hx-confirm
     M->>B: Withdraw(ctx, id, staff(ctx))
     B->>DB: contractFor, ErrUnavailable unless funded
-    B->>DB: withStaffContract lease, ErrPaymentPending when busy
+    B->>DB: staffSync lease, ErrPaymentPending when busy
     B->>DB: withdraw, one transaction, skipped when already withdrawn
     B->>S: reconcileContract, withdrawn pass: mirror, void or delete, refund
     B->>DB: markSynced
@@ -51,7 +51,7 @@ From then on every contract sync (the worker's, staff Reconcile, or a repeated w
 
 - **Cancelling**: every cancelled obligation whose invoice could still collect has its draft deleted or its open invoice voided ([Invoices](invoices.md#cancellation)). An obligation that never got an invoice needs no Stripe call. An invoice paid between its sync and its void is mirrored as paid, gets no review, and is refunded with the rest.
 - **Refunding**: below.
-- **Next sync**: every 15 minutes while a cancel is pending, a payment has refundable cents or a payment lacks its balance transaction; otherwise the daily audit ([Worker](worker.md#when-the-next-sync-runs)).
+- **Next sync**: every 15 minutes while a cancel is pending or a payment has refundable cents; otherwise the daily audit ([Worker](worker.md#when-the-next-sync-runs)).
 
 ## Refunds
 
@@ -108,7 +108,7 @@ The Student row and its PIN are kept; the PIN stays held ([Students](../domain/s
 - `internal/billing/worker.go`: `reconcileContract`, `nextSyncAt`, `leasedStudent`, `markSynced`, `renew`
 - `internal/billing/invoices.go`: `cancelPending`, `cancelObligations`, `cancelObligation`, `invoiceStateOf`, `reviewFor`, `store`
 - `internal/billing/checkout.go`: `syncPayment`, `reviewState`
-- `internal/billing/billing.go`: `contractFor`, `withStaffContract`, `providerBudget`, `errStaffRequired`, `ErrUnavailable`, `ErrPaymentPending`
+- `internal/billing/billing.go`: `contractFor`, `staffSync`, `providerBudget`, `errStaffRequired`, `ErrUnavailable`, `ErrPaymentPending`
 - `internal/billing/suspension.go`: `reinstatable`, `RequestReinstatement`
 - `internal/billing/summary.go`: `Summary`, `SummaryPayment`, `summarize`, `dashboardURL`
 - `internal/students/students.go`: `Student`, `WithdrawnAt`

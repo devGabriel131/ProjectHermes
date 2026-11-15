@@ -90,7 +90,7 @@ func TestServeLifecycle(t *testing.T) {
 			})
 			go func() {
 				defer close(serveDone)
-				serveErr = serve(signalContext, server, listener, log, logging.NewDBLogger(log), test.drain)
+				serveErr = serve(signalContext, server, listener, log, func() {}, test.drain)
 			}()
 			go func() {
 				defer close(clientDone)

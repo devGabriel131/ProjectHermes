@@ -15,7 +15,7 @@ How tuition money is modeled and moved: one hosted Checkout for the first paymen
 | Entry point | Path | Notes |
 |---|---|---|
 | Worker, webhook event | `handleEvent` -> `syncAttempt` -> `fund` | Event wakes the worker; see [Worker](worker.md) |
-| Worker, due contract | `syncContract` -> `reconcileContract` -> `syncAttempt` -> `fund` | New contracts are due 1 minute after creation |
+| Worker, due contract | `syncContract` -> `reconcileContract` -> `syncAttempt` -> `fund` | A contract is due 1 minute after each new Checkout attempt |
 | Staff Reconcile | `ReconcileStudent` -> `reconcileContract` | Same sync pass, under the staff lease |
 | Staff Reinstatement | `RequestReinstatement` -> `reconcileContract` -> `requestFee` | Same sync pass first, then the fee |
 | Staff Withdrawal | `Withdraw` -> `withdraw` -> `reconcileContract` | Funded contracts only (`ErrUnavailable` otherwise); records the withdrawal first, so the pass only mirrors, cancels and refunds ([Withdrawal](withdrawal.md)) |
@@ -39,7 +39,7 @@ flowchart LR
   handlers --> start
   handlers -->|"ForEnrollment and ReturnStatus, read only"| db
   start -->|"locked decision transaction"| db
-  start -->|"Customer and Checkout Session create"| stripe
+  start -->|"Checkout Session create"| stripe
   customer -->|"redirect to hosted Checkout"| stripe
   stripe -->|"signed event"| webhook
   webhook -->|"insert event ID, no payload"| db
@@ -90,7 +90,7 @@ Everything lives in `internal/billing` unless stated.
 
 | File | Owns |
 |---|---|
-| `billing.go` | Package comment, `Service` and `New`, `providerBudget` and `persistBudget`, review-reason constants, the error block, shared helpers (`forUpdate`, `persistCtx`, `firstRow`, `require`, `deref`), staff actions `InvoiceURL`, `PortalURL`, `ReconcileStudent` |
+| `billing.go` | Package comment, `Service` and `New`, `providerBudget` and `persistBudget`, review-reason constants, the error block, shared helpers (`forUpdate`, `persistCtx`, `firstRow`, `require`, `deref`), the staff-action wrapper `staffSync`, staff actions `InvoiceURL`, `PortalURL`, `ReconcileStudent` |
 | `checkout.go` | `StartCheckout` and `CheckoutResult`, the locked decision transaction, Session creation and expiry, attempt state writes, `outcomeUnknown` ([Checkout](checkout.md)); the worker's attempt sync, funding and payment mirroring ([Worker](worker.md)) |
 | `cancel.go` | `CancelEnrollment`, the billing-safe staff cancellation of an enrollment |
 | `contact.go` | `TouchContract`, `UpdateContact`, `ContactEditable`, the `contactEditable` predicate and the in-flight attempt states that lock contact edits |
@@ -132,18 +132,18 @@ Everything lives in `internal/billing` unless stated.
 
 - **`billing.New` validates `Config` again** although `LoadConfigFromEnv` already did. `New` is the public constructor that tests call directly (`billingtest.New`), so validation belongs at that boundary.
 - **Stored webhook events carry no payload.** The worker always re-reads the current Stripe object, so storing bodies would add personal data and staleness for no benefit ([Webhooks](webhooks.md)).
-- **Staff actions share the worker's contract lease** through `withStaffContract`. A contract a worker holds is mid-provider-work, so staff get `ErrPaymentPending` and retry instead of racing it.
-- **`ContactEditable` and `UpdateContact` share one predicate, `contactEditable`** (contract funded, or an attempt in flight; [Checkout](checkout.md) lists the locking states). `ContactEditable` takes the Enrollment and answers `true` without a query until its terms are accepted: checkout requires them, so no contract can exist yet. After that it runs the predicate as a lock-free pre-check that only shows or hides the edit link. `UpdateContact` is the authoritative check, in one transaction: lock the usable, submitted Enrollment `FOR UPDATE` (the lock checkout and funding take first), run the predicate (`ErrContactLocked` when locked), `touch` the contract so the worker syncs the Stripe Customer, then write the contact.
-- **`ReturnStatus` is keyed only by `session_id`.** It is token-free by design and exposes only a status and the first amount.
+- **Staff actions share the worker's contract lease** through `staffSync`, the one wrapper behind `ReconcileStudent`, `Withdraw` and `RequestReinstatement`: find the contract, refuse early, run the action under the lease, record the sync (`markSynced`), return the refreshed summary. A contract a worker holds is mid-provider-work, so staff get `ErrPaymentPending` and retry instead of racing it.
+- **`ContactEditable` and `UpdateContact` share one predicate, `contactEditable`** (contract funded, or an attempt in flight; [Checkout](checkout.md) lists the locking states). `ContactEditable` takes the Enrollment and answers `true` without a query until its terms are accepted: checkout requires them, so no contract can exist yet. After that it runs the predicate as a lock-free pre-check that only shows or hides the edit link. `UpdateContact` is the authoritative check, in one transaction: lock the usable, submitted Enrollment `FOR UPDATE` (the lock checkout and funding take first), run the predicate (`ErrContactLocked` when locked), then write the contact. Nothing is sent to Stripe: an unfunded contract has no Customer yet, and the next Checkout attempt snapshots the new email.
+- **`ReturnStatus` is keyed only by `session_id`, `CancelStatus` only by the attempt reference.** Both are token-free by design and expose only a status, the first amount and, for a decline, its reason group and the link token ([Checkout](checkout.md#return-status)).
 - **Billing-safe cancellation delegates to `billing.Service.CancelEnrollment`.** It requires a staff identity, then in one transaction locks the Enrollment, its Contract and, for an unfunded contract, the active Checkout attempt. An `open` attempt with a Session is claimed `expiring`; after commit Stripe expires it and the loop starts over (an unresolved or paid Session answers `ErrCancelBlocked`). Any other active attempt answers `ErrCancelBlocked`, so no paid enrollment or held PIN is lost. With no active attempt it calls `links.CancelEnrollmentTx`, which decides from the enrollment's status: `InProgress` and `AwaitingPayment` are canceled, an `Expired` submission only loses its PIN, and any other enrollment is returned unchanged. `CancelEnrollment` itself never checks the enrollment's status.
 
 ## Source
 
-- `internal/billing/billing.go`: `Service`, `New`, `providerBudget`, `persistBudget`, `ErrPaymentPending`, `ErrContactLocked`, `ErrCancelBlocked`, `ErrUnknownPlan`, `errStaffRequired`, `forUpdate`, `persistCtx`, `firstRow`, `require`, `deref`, `contractFor`, `withStaffContract`, `InvoiceURL`, `PortalURL`, `ReconcileStudent`
+- `internal/billing/billing.go`: `Service`, `New`, `providerBudget`, `persistBudget`, `ErrPaymentPending`, `ErrContactLocked`, `ErrCancelBlocked`, `ErrUnknownPlan`, `errStaffRequired`, `forUpdate`, `persistCtx`, `firstRow`, `require`, `deref`, `contractFor`, `staffSync`, `InvoiceURL`, `PortalURL`, `ReconcileStudent`
 - `internal/billing/cancel.go`: `CancelEnrollment`
 - `internal/billing/checkout.go`: `StartCheckout`, `CheckoutResult`, `outcomeUnknown`, `syncAttempt`, `fund`
-- `internal/billing/contact.go`: `TouchContract`, `UpdateContact`, `ContactEditable`, `contactEditable`, `touch`, `inFlightAttemptStates`
-- `internal/billing/summary.go`: `Summary`, `SummaryPayment`, `ForEnrollment`, `ForStudent`, `ReturnStatus`, `addReason`, `dashboardURL`
+- `internal/billing/contact.go`: `TouchContract`, `UpdateContact`, `ContactEditable`, `contactEditable`, `inFlightAttemptStates`
+- `internal/billing/summary.go`: `Summary`, `SummaryPayment`, `ForEnrollment`, `ForStudent`, `ReturnStatus`, `CancelStatus`, `addReason`, `dashboardURL`
 - `internal/billing/overview.go`: `Overview`
 - `internal/billing/withdraw.go`: `Withdraw`, `withdraw`, `refundPayments`
 - `internal/billing/webhook.go`: `Webhook`, `webhookEvents`

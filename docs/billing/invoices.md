@@ -82,7 +82,7 @@ flowchart TD
 `scheduleInvoices` calls `ensureDefaultPaymentMethod` once, and only when at least one later installment is pending. It makes the first payment's card the Customer's invoice default:
 
 1. Customer already has `invoice_settings.default_payment_method`: pass; never overwritten (also what makes crash recovery safe). Clears the contract review.
-2. The first Payment's PaymentIntent (earliest `payment_time`) has no payment method: fail.
+2. The first Payment's PaymentIntent (earliest `payment_time`), retrieved with `payment_method` expanded, has no payment method: fail.
 3. The PaymentMethod is not a `card` or is attached to another Customer: fail.
 4. Otherwise set it as the Customer default (key `tuition:<contract>:default_pm`), clear the review, pass.
 

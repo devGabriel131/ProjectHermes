@@ -87,12 +87,12 @@ func RecordError(r *http.Request, stage string, err error) {
 	state.failureStage = stage
 }
 
-// WithOperation labels immutable startup/background contexts for database summaries.
+// WithOperation labels immutable startup/background contexts for database and Stripe summaries.
 func WithOperation(ctx context.Context, name string) context.Context {
 	return context.WithValue(ctx, operationContextKey{}, name)
 }
 
-// labelFromContext names what a database call belongs to: its request's route, else its
+// labelFromContext names what a database or Stripe call belongs to: its request's route, else its
 // background operation.
 func labelFromContext(ctx context.Context) string {
 	if state, ok := ctx.Value(requestContextKey{}).(*requestState); ok {

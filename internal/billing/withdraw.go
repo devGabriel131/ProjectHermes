@@ -22,28 +22,19 @@ func (s *Service) Withdraw(ctx context.Context, studentID uint64, staff string) 
 	if strings.TrimSpace(staff) == "" {
 		return nil, errStaffRequired
 	}
-	ctx, cancel := context.WithTimeout(ctx, providerBudget)
-	defer cancel()
-	c, err := s.contractFor(ctx, studentID)
-	if err != nil {
-		return nil, err
-	}
-	if c.FundedAt == nil {
-		return nil, ErrUnavailable
-	}
-	err = s.withStaffContract(ctx, c.ID, func(l lease) error {
-		if err := s.withdraw(ctx, l, staff); err != nil {
-			return err
-		}
-		if err := s.reconcileContract(ctx, l); err != nil {
-			return err
-		}
-		return s.markSynced(ctx, l)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return s.ForStudent(ctx, studentID)
+	return s.staffSync(ctx, studentID,
+		func(_ context.Context, c Contract) error {
+			if c.FundedAt == nil {
+				return ErrUnavailable
+			}
+			return nil
+		},
+		func(ctx context.Context, l lease) error {
+			if err := s.withdraw(ctx, l, staff); err != nil {
+				return err
+			}
+			return s.reconcileContract(ctx, l)
+		})
 }
 
 // withdraw persists the withdrawal in one transaction. A contract already withdrawn is left

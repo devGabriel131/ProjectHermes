@@ -10,18 +10,15 @@ import (
 	"projecthermes/internal/students"
 )
 
-// touch marks the contract due for sync now.
-func touch(db *gorm.DB, enrollmentID uint64) error {
-	return db.Model(&Contract{}).Where("enrollment_id = ? AND stripe_customer_id IS NOT NULL", enrollmentID).Update("next_sync_at", time.Now().UTC()).Error
-}
-
-// TouchContract marks the contract behind enrollmentID due now and wakes the
-// billing worker so contact updates sync promptly. Nil is a no-op for staff-added students.
+// TouchContract marks the funded contract behind enrollmentID due now and wakes the billing worker, so a
+// staff edit of the student's name or email reaches the Stripe Customer promptly. Nil is a no-op for
+// staff-added students.
 func (s *Service) TouchContract(ctx context.Context, enrollmentID *uint64) {
 	if enrollmentID == nil {
 		return
 	}
-	_ = touch(s.db.WithContext(ctx), *enrollmentID)
+	_ = s.db.WithContext(ctx).Model(&Contract{}).Where("enrollment_id = ? AND stripe_customer_id IS NOT NULL", *enrollmentID).
+		Update("next_sync_at", time.Now().UTC()).Error
 	s.wakeWorker()
 }
 
@@ -67,15 +64,11 @@ func (s *Service) UpdateContact(ctx context.Context, enrollmentID uint64, detail
 		if !editable {
 			return ErrContactLocked
 		}
-		if err := touch(tx, enrollmentID); err != nil {
-			return err
-		}
 		return tx.Model(&links.Enrollment{}).Where("id = ?", enrollmentID).Updates(contact).Error
 	})
 	if err != nil {
 		return err
 	}
 	s.changed()
-	s.wakeWorker()
 	return nil
 }

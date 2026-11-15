@@ -88,7 +88,7 @@ Consequences:
 | `WriteTimeout` | 10 s; event streams replace it per write ([Live updates](../live-updates.md)) | `newServer` |
 | `IdleTimeout` | 60 s | `newServer` |
 | Drain on shutdown | 10 s | `serve` argument in `run` |
-| Slow-query flush ticker | 30 s while serving | `serve` |
+| Summary flush ticker (slow queries, pool waits, Stripe calls) | 30 s while serving | `serve` |
 | Expired-session cleanup | every 5 min, each delete bounded at 5 s | `auth.Manager.Run` |
 
 ## Shutdown
@@ -121,13 +121,13 @@ sequenceDiagram
   S-->>D: serve returns
   D->>W: cancelWorker, then worker.Wait
   D->>D: sqlDB.Close
-  D->>D: stop signal handling, final slow.Flush
+  D->>D: stop signal handling, final stripeTimer.Flush and slow.Flush
 ```
 
 Details:
 
 - `Shutdown` closes the listeners and starts the `feed.Close` hook at its beginning; the drain then waits for active connections up to 10 s. If the deadline passes, `server.Close()` is joined into the error and `shutdown_failed` is logged; the process exits 1.
-- The deferred calls unwind last-in first: worker cancel and `Wait`, the catalog and migration contexts, `sqlDB.Close`, `stop`, then the final `slow.Flush`.
+- The deferred calls unwind last-in first: worker cancel and `Wait`, the catalog context, the final `stripeTimer.Flush`, the migration context, `sqlDB.Close`, `stop`, then the final `slow.Flush`.
 - A clean shutdown exits 0. A signal during startup cancels the budgeted contexts, so the step in progress fails under its own stage (`database_connect`, `database_migrate` or `billing_catalog`) and the process exits 1.
 - Worker steps run under leases and resume from stored state. A webhook stored during the drain is only an event record that the next worker picks up ([Worker](../billing/worker.md)).
 

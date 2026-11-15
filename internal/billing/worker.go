@@ -12,7 +12,6 @@ import (
 	"github.com/stripe/stripe-go/v87"
 	"gorm.io/gorm"
 
-	"projecthermes/internal/links"
 	"projecthermes/internal/logging"
 	"projecthermes/internal/students"
 )
@@ -306,9 +305,9 @@ func (s *Service) withContract(ctx context.Context, id uint64, fn func(lease) er
 
 // release gives the lease back; a failed release only delays the contract until it expires.
 func (s *Service) release(ctx context.Context, l lease) {
-	ctx, cancel := persistCtx(ctx)
+	saveCtx, cancel := persistCtx(ctx)
 	defer cancel()
-	err := s.db.WithContext(ctx).Model(&Contract{}).Where("id = ? AND lease_token = ?", l.id, l.token).
+	err := s.db.WithContext(saveCtx).Model(&Contract{}).Where("id = ? AND lease_token = ?", l.id, l.token).
 		Updates(map[string]any{"lease_token": nil, "lease_expires_at": nil}).Error
 	if err != nil {
 		s.logFailure(ctx, "lease_release", "", err)
@@ -460,11 +459,11 @@ func (s *Service) reconcileContract(ctx context.Context, l lease) error {
 	if err := require(firstRow(db, &c, "id = ?", l.id)); err != nil {
 		return err
 	}
-	if err := s.syncCustomerContact(ctx, l, c); err != nil {
-		return err
-	}
 	if c.FundedAt == nil {
 		return nil
+	}
+	if err := s.syncCustomerContact(ctx, l, c); err != nil {
+		return err
 	}
 	withdrawn := c.WithdrawnAt != nil
 	if !withdrawn {
@@ -513,36 +512,28 @@ func (s *Service) reconcileContract(ctx context.Context, l lease) error {
 	return s.evaluateReactivation(ctx, l)
 }
 
-// contactOf returns the details a contract bills against: the Enrollment's until payment is confirmed, the Student's after.
-func contactOf(db *gorm.DB, c Contract) (students.Details, error) {
-	if c.FundedAt == nil {
-		var enrollment links.Enrollment
-		err := require(firstRow(db, &enrollment, "id = ?", c.EnrollmentID))
-		return enrollment.Details, err
-	}
-	var student students.Student
-	err := require(firstRow(db, &student, "enrollment_id = ?", c.EnrollmentID))
-	return student.Details, err
-}
-
-// syncCustomerContact updates Stripe's customer name and email when they differ from the last synced stamp.
+// syncCustomerContact pushes the Student's name and email, with the Stripe locale, to the Customer when
+// they differ from the last synced stamp. Funding records the Customer and leaves the stamp empty, so
+// the first sync after funding always pushes.
 func (s *Service) syncCustomerContact(ctx context.Context, l lease, c Contract) error {
 	if c.StripeCustomerID == nil {
 		return nil
 	}
-	contact, err := contactOf(s.db.WithContext(ctx), c)
-	if err != nil {
+	var student students.Student
+	if err := require(firstRow(s.db.WithContext(ctx), &student, "enrollment_id = ?", c.EnrollmentID)); err != nil {
 		return err
 	}
+	contact := student.Details
 	if contact.Name == c.SyncedCustomerName && contact.Email == c.SyncedCustomerEmail {
 		return nil
 	}
 	if err := s.renew(ctx, l); err != nil {
 		return err
 	}
-	_, err = s.client.V1Customers.Update(ctx, *c.StripeCustomerID, &stripe.CustomerUpdateParams{
-		Name:  stripe.String(contact.Name),
-		Email: stripe.String(contact.Email),
+	_, err := s.client.V1Customers.Update(ctx, *c.StripeCustomerID, &stripe.CustomerUpdateParams{
+		Name:             stripe.String(contact.Name),
+		Email:            stripe.String(contact.Email),
+		PreferredLocales: stripe.StringSlice([]string{stripeLocale}),
 	})
 	if err != nil {
 		return err
@@ -556,8 +547,8 @@ func (s *Service) syncCustomerContact(ctx context.Context, l lease, c Contract) 
 }
 
 // markSynced records a finished contract sync and schedules the next one. The worker calls it
-// after every reconcile; RequestReinstatement and ReconcileStudent call it under their staff
-// lease so the next scheduled sync accounts for what the action created.
+// after every reconcile; staff actions call it through staffSync so the next scheduled sync
+// accounts for what the action created.
 func (s *Service) markSynced(ctx context.Context, l lease) error {
 	ctx, cancel := persistCtx(ctx)
 	defer cancel()
@@ -590,10 +581,10 @@ func (s *Service) nextSync(ctx context.Context, id uint64, now time.Time) (time.
 }
 
 // nextSyncAt picks the earliest of: the daily audit; a quarter-hour recheck while a Checkout
-// is in flight, tuition is overdue, an open fee (no DueAt, amount remaining) awaits payment,
-// or a payment still lacks fee/net data; the nearest unsettled installment date; a failed
-// installment's next retry; and its not-yet-handled 14-day deadline. A withdrawn contract
-// rechecks only while a cancel or refund is pending or a payment lacks fee/net data.
+// is in flight, tuition is overdue or an open fee (no DueAt, amount remaining) awaits payment;
+// the nearest unsettled installment date; a failed installment's next retry; and its
+// not-yet-handled 14-day deadline. A withdrawn contract rechecks only while a cancel or refund
+// is pending.
 func nextSyncAt(now time.Time, c Contract, obligations []Obligation, pays []Payment, inFlight bool) time.Time {
 	next := now.Add(auditEvery)
 	soonest := func(t time.Time) {
@@ -615,7 +606,7 @@ func nextSyncAt(now time.Time, c Contract, obligations []Obligation, pays []Paym
 			}
 		}
 		for _, p := range pays {
-			if p.refundableCents() > 0 || p.BalanceTransactionID == nil {
+			if p.refundableCents() > 0 {
 				soonest(soon)
 			}
 		}
@@ -637,11 +628,6 @@ func nextSyncAt(now time.Time, c Contract, obligations []Obligation, pays []Paym
 			if deadline := o.DueAt.Add(deadlineWindow); deadline.After(now) {
 				soonest(deadline)
 			}
-		}
-	}
-	for _, p := range pays {
-		if p.BalanceTransactionID == nil {
-			soonest(soon)
 		}
 	}
 	return next

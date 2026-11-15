@@ -81,7 +81,7 @@ sequenceDiagram
     participant W as Worker
     St->>B: POST billing reinstatement
     B->>B: reinstatable refuses ErrNotSuspended or ErrNeedsReview
-    B->>B: withStaffContract lease, ErrPaymentPending when busy
+    B->>B: staffSync lease, ErrPaymentPending when busy
     B->>S: reconcileContract refreshes overdue invoices first
     B->>B: requestFee inserts the fee row
     B->>S: scheduleOne creates draft, item, finalizes, sends
@@ -135,6 +135,6 @@ Then, in one transaction: `closed_at = now`, `close_reason = reinstated`, `stude
 - `internal/billing/withdraw.go`: `withdraw`
 - `internal/billing/models.go`: `Suspension`, `Obligation`
 - `internal/billing/stripe.go`: `reinstatementFeeCents`
-- `internal/billing/billing.go`: `ErrNotSuspended`, `ErrNeedsReview`, `ErrPaymentPending`, `ErrUnavailable`, `errStaffRequired`, `providerBudget`, `withStaffContract`
+- `internal/billing/billing.go`: `ErrNotSuspended`, `ErrNeedsReview`, `ErrPaymentPending`, `ErrUnavailable`, `errStaffRequired`, `providerBudget`, `staffSync`
 - `internal/billing/worker.go`: `reconcileContract`, `leasedStudent`
 - `internal/management/students.go`: `billingRefusals`

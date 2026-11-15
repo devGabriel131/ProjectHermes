@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
-	"reflect"
 	"strings"
 	"time"
 
@@ -41,7 +40,6 @@ type CheckoutResult struct {
 type checkoutStep struct {
 	done     *CheckoutResult  // set when no provider call remains
 	expire   *CheckoutAttempt // another plan's open attempt, claimed as "expiring"
-	changed  bool             // the contract's visible quote changed
 	contract Contract
 	first    Obligation
 	attempt  CheckoutAttempt // new "creating" attempt
@@ -65,9 +63,6 @@ func (s *Service) StartCheckout(ctx context.Context, enrollmentID uint64, planID
 		if err != nil {
 			return CheckoutResult{}, err
 		}
-		if step.changed {
-			s.changed()
-		}
 		if step.expire != nil {
 			expired, err := s.expireAttempt(callCtx, step.expire)
 			if err != nil {
@@ -81,6 +76,8 @@ func (s *Service) StartCheckout(ctx context.Context, enrollmentID uint64, planID
 		if step.done != nil {
 			return *step.done, nil
 		}
+		// Every inserted attempt changes the quote or the newest attempt DeclinedEnrollments reads.
+		s.changed()
 		return s.createSession(callCtx, step.contract, step.first, step.attempt)
 	}
 }
@@ -89,19 +86,19 @@ func (s *Service) StartCheckout(ctx context.Context, enrollmentID uint64, planID
 // It persists the new attempt's identity before any Checkout call is made.
 func (s *Service) beginCheckout(ctx context.Context, enrollmentID uint64, plan payments.Plan) (step checkoutStep, err error) {
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// The worker's first look at this attempt if its request dies; creatingGrace keeps it off a live request.
+		syncGrace := time.Now().UTC().Add(time.Minute)
 		var enrollment links.Enrollment
 		if err := require(firstRow(tx.Clauses(forUpdate).Scopes(links.Usable), &enrollment,
 			"id = ? AND submitted_at IS NOT NULL AND terms_accepted_at IS NOT NULL", enrollmentID)); err != nil {
 			return err
 		}
 		var contract Contract
-		var columns []string // contract columns this start changed, written once below
 		exists, err := firstRow(tx.Clauses(forUpdate), &contract, "enrollment_id = ?", enrollmentID)
 		if err != nil {
 			return err
 		}
 		if !exists {
-			syncGrace := time.Now().UTC().Add(1 * time.Minute)
 			contract = Contract{
 				EnrollmentID:     enrollmentID,
 				Reference:        rand.Text(),
@@ -117,7 +114,6 @@ func (s *Service) beginCheckout(ctx context.Context, enrollmentID uint64, plan p
 			if err := s.createObligations(tx, contract.ID, plan); err != nil {
 				return err
 			}
-			step.changed = true
 		} else if contract.FundedAt != nil {
 			if contract.PlanID != plan.ID {
 				return ErrPlanLocked
@@ -145,6 +141,7 @@ func (s *Service) beginCheckout(ctx context.Context, enrollmentID uint64, plan p
 				}
 				return nil
 			}
+			updates := map[string]any{"next_sync_at": syncGrace}
 			if contract.PlanID != plan.ID {
 				// Every earlier attempt is terminal, so no Session can still collect the old quote.
 				// Unfunded contracts have no provider invoices, so the old obligations are plain rows.
@@ -153,11 +150,15 @@ func (s *Service) beginCheckout(ctx context.Context, enrollmentID uint64, plan p
 				}
 				contract.PlanID, contract.PlanName = plan.ID, plan.Name
 				contract.InstallmentCount, contract.TotalCents = len(plan.Amounts), plan.TotalCents()
-				columns = append(columns, "plan_id", "plan_name", "installment_count", "total_cents")
+				updates["plan_id"], updates["plan_name"] = plan.ID, plan.Name
+				updates["installment_count"], updates["total_cents"] = contract.InstallmentCount, contract.TotalCents
 				if err := s.createObligations(tx, contract.ID, plan); err != nil {
 					return err
 				}
-				step.changed = true
+			}
+			// A map writes only these columns, never the lease or review columns other workflows own.
+			if err := tx.Model(&Contract{}).Where("id = ?", contract.ID).Updates(updates).Error; err != nil {
+				return err
 			}
 		}
 
@@ -166,43 +167,18 @@ func (s *Service) beginCheckout(ctx context.Context, enrollmentID uint64, plan p
 			return err
 		}
 
-		if contract.StripeCustomerID == nil {
-			// ponytail: the Enrollment and Contract locks stay held across this once-per-enrollment
-			// Stripe call so concurrent starts share one Customer; the stable key makes a retry
-			// safe, move it after commit if lock waits ever matter.
-			params := &stripe.CustomerCreateParams{
-				Name:             stripe.String(enrollment.Name),
-				Email:            stripe.String(enrollment.Email),
-				PreferredLocales: []*string{stripe.String(stripeLocale)},
-				Metadata:         map[string]string{"tuition_contract": contract.Reference},
-			}
-			params.SetIdempotencyKey(fmt.Sprintf("tuition:%s:customer", contract.Reference))
-			customer, err := s.client.V1Customers.Create(ctx, params)
-			if err != nil {
-				return fmt.Errorf("billing: create stripe customer: %w", err)
-			}
-			contract.StripeCustomerID = &customer.ID
-			contract.SyncedCustomerName, contract.SyncedCustomerEmail = enrollment.Name, enrollment.Email
-			columns = append(columns, "stripe_customer_id", "synced_customer_name", "synced_customer_email")
-		}
-
 		attempt := CheckoutAttempt{
 			ContractID:        contract.ID,
 			Reference:         rand.Text(),
 			PlanID:            plan.ID,
 			FirstAmountCents:  first.AmountCents,
 			StripePriceID:     first.StripePriceID,
+			CustomerEmail:     enrollment.Email,
 			CreationStartedAt: time.Now().UTC(),
 			State:             "creating",
 		}
 		if err := tx.Create(&attempt).Error; err != nil {
 			return err
-		}
-		if len(columns) > 0 {
-			// Select, never Save: Save would also rewrite the lease, sync and review columns other workflows own.
-			if err := tx.Select(columns).Updates(&contract).Error; err != nil {
-				return err
-			}
 		}
 		step.contract, step.first, step.attempt = contract, first, attempt
 		return nil
@@ -264,19 +240,27 @@ func (s *Service) createSession(ctx context.Context, contract Contract, first Ob
 			s.setAttempt(saveCtx, attempt.ID, attempt.State, "failed", nil))
 	}
 
-	if !sessionMatches(contract, attempt, session) || session.URL == "" {
+	if !sessionMatches(attempt, session) || session.URL == "" {
 		// The URL is never exposed, so nobody can pay this Session; keep its ID for staff and webhooks.
 		return CheckoutResult{}, errors.Join(errCheckoutMismatch,
 			s.setAttempt(saveCtx, attempt.ID, attempt.State, "failed", map[string]any{"stripe_session_id": session.ID}))
 	}
 
-	if err := s.setAttempt(saveCtx, attempt.ID, attempt.State, "open", map[string]any{
-		"stripe_session_id": session.ID,
-		"checkout_url":      session.URL,
-	}); err != nil {
+	if err := s.openAttempt(saveCtx, attempt, session); err != nil {
 		return CheckoutResult{}, err
 	}
 	return CheckoutResult{URL: session.URL}, nil
+}
+
+// openAttempt records the created Session on its attempt. It commits with synchronous_commit off: a write
+// lost to a PostgreSQL crash leaves the attempt "creating" or "uncertain" (committed durably before the
+// Stripe call), and resumeCreate or the Session's webhook re-binds it by client_reference_id.
+func (s *Service) openAttempt(ctx context.Context, a CheckoutAttempt, session *stripe.CheckoutSession) error {
+	return s.db.WithContext(ctx).Exec(`
+WITH async AS (SELECT set_config('synchronous_commit', 'off', true))
+UPDATE billing_checkout_attempts SET state = 'open', stripe_session_id = ?, checkout_url = ?, updated_at = now()
+  FROM async
+ WHERE id = ? AND state = ?`, session.ID, session.URL, a.ID, a.State).Error
 }
 
 // sessionParams builds the hosted Checkout request from persisted attempt values only.
@@ -290,7 +274,8 @@ func (s *Service) sessionParams(contract Contract, first Obligation, attempt Che
 	params := &stripe.CheckoutSessionCreateParams{
 		Mode:                  stripe.String(string(stripe.CheckoutSessionModePayment)),
 		Currency:              stripe.String("usd"),
-		Customer:              stripe.String(*contract.StripeCustomerID),
+		CustomerCreation:      stripe.String(string(stripe.CheckoutSessionCustomerCreationAlways)),
+		CustomerEmail:         stripe.String(attempt.CustomerEmail),
 		ClientReferenceID:     stripe.String(attempt.Reference),
 		IntegrationIdentifier: stripe.String(integrationIdentifier),
 		Locale:                stripe.String(stripeLocale),
@@ -378,10 +363,11 @@ func (s *Service) retrieveSession(ctx context.Context, id string) (*stripe.Check
 }
 
 // sessionMatches reports whether session is exactly the Checkout quoted for the attempt.
-func sessionMatches(c Contract, a CheckoutAttempt, session *stripe.CheckoutSession) bool {
+func sessionMatches(a CheckoutAttempt, session *stripe.CheckoutSession) bool {
 	return session.Currency == stripe.CurrencyUSD &&
 		session.Mode == stripe.CheckoutSessionModePayment &&
-		session.Customer != nil && c.StripeCustomerID != nil && session.Customer.ID == *c.StripeCustomerID &&
+		session.ClientReferenceID == a.Reference &&
+		session.CustomerCreation == stripe.CheckoutSessionCustomerCreationAlways &&
 		session.AmountTotal == a.FirstAmountCents
 }
 
@@ -398,8 +384,8 @@ func (s *Service) syncAttempt(ctx context.Context, l lease, attemptID uint64, se
 		return err
 	}
 	if a.StripeSessionID == nil {
-		// Recovering a Session whose ID was never recorded: only an exact same-Customer match binds.
-		if !sessionMatches(c, a, session) {
+		// Recovering a Session whose ID was never recorded: only an exact match of the attempt's reference and quote binds.
+		if !sessionMatches(a, session) {
 			return s.mark(ctx, l, reviewConfigurationMismatch, true)
 		}
 		err := s.leased(ctx, l, func(tx *gorm.DB, _ *Contract) error {
@@ -457,9 +443,10 @@ const (
 )
 
 // resumeCreate settles an attempt whose Session ID was never recorded (browser gone, timeout,
-// crash). A Session already created for it is adopted by client_reference_id; otherwise the
-// create is replayed under the same idempotency key while Stripe still honors it. Past that
-// window the consistent list proves no Session exists, so the attempt fails and frees the contract.
+// crash). It lists Sessions created since the attempt started: one already created for it is
+// adopted by client_reference_id; otherwise the create is replayed under the same idempotency
+// key while Stripe still honors it. Past that window the consistent list proves no Session
+// exists, so the attempt fails and frees the contract.
 func (s *Service) resumeCreate(ctx context.Context, l lease, a CheckoutAttempt) error {
 	if a.State == "creating" && time.Since(a.CreationStartedAt) < creatingGrace {
 		// Fresh attempt actively in-flight from web request; let the request finish.
@@ -470,12 +457,12 @@ func (s *Service) resumeCreate(ctx context.Context, l lease, a CheckoutAttempt) 
 	if err := require(firstRow(db, &c, "id = ?", l.id)); err != nil {
 		return err
 	}
-	if c.StripeCustomerID == nil {
-		// Unreachable: the Customer is saved in the same transaction as the attempt.
-		return s.moveAttempt(ctx, l, a.ID, "failed")
-	}
 	var found []string
-	sessions := s.client.V1CheckoutSessions.List(ctx, &stripe.CheckoutSessionListParams{Customer: c.StripeCustomerID})
+	// ponytail: lists every Session created since the attempt; at this volume a day is a few hundred rows.
+	// 5 min absorbs clock skew between this server and Stripe; replays create later, never earlier.
+	sessions := s.client.V1CheckoutSessions.List(ctx, &stripe.CheckoutSessionListParams{
+		CreatedRange: &stripe.RangeQueryParams{GreaterThanOrEqual: a.CreationStartedAt.Add(-5 * time.Minute).Unix()},
+	})
 	for session, err := range sessions.All(ctx) {
 		if err != nil {
 			return err
@@ -541,8 +528,9 @@ func (s *Service) recordDecline(ctx context.Context, l lease, a CheckoutAttempt,
 
 // fund records the first payment once the Session is paid and its generated invoice confirms
 // it. Every provider read happens before the single funding transaction, and FundedAt is anchored
-// to the invoice's paid_at, never a local clock. Funding leaves next_sync_at NULL, so the contract
-// sync that follows (in the same worker pass, or the caller's reconcileContract) schedules the later invoices.
+// to the invoice's paid_at, never a local clock. Funding records the Customer Checkout created and
+// leaves next_sync_at NULL, so the contract sync that follows (in the same worker pass, or the
+// caller's reconcileContract) schedules the later invoices.
 func (s *Service) fund(ctx context.Context, l lease, c Contract, a CheckoutAttempt, session *stripe.CheckoutSession) error {
 	if session.PaymentIntent == nil || session.Invoice == nil || session.Invoice.ID == "" {
 		// Invoice linkage can lag a paid Session: stay processing so no other Checkout or quote change slips in.
@@ -580,6 +568,9 @@ func (s *Service) fund(ctx context.Context, l lease, c Contract, a CheckoutAttem
 	}
 	if initial.AmountPaid != a.FirstAmountCents {
 		return errors.Join(s.moveAttempt(ctx, l, a.ID, "processing"), s.mark(ctx, l, reviewInvoiceMismatch, true))
+	}
+	if session.Customer == nil || session.Customer.ID == "" {
+		return errors.Join(s.moveAttempt(ctx, l, a.ID, "processing"), s.mark(ctx, l, reviewConfigurationMismatch, true))
 	}
 	pay, err := s.paymentFrom(ctx, c.ID, intentID, fundedAt)
 	if err != nil {
@@ -632,7 +623,9 @@ func (s *Service) fund(ctx context.Context, l lease, c Contract, a CheckoutAttem
 			return err
 		}
 		funded = true
-		return tx.Model(&Contract{}).Where("id = ?", cur.ID).Updates(map[string]any{"funded_at": fundedAt, "next_sync_at": nil}).Error
+		return tx.Model(&Contract{}).Where("id = ?", cur.ID).Updates(map[string]any{
+			"funded_at": fundedAt, "next_sync_at": nil, "stripe_customer_id": session.Customer.ID,
+		}).Error
 	})
 	if err != nil {
 		return err
@@ -668,10 +661,10 @@ func paidAt(ip *stripe.InvoicePayment) time.Time {
 // ---- payments
 
 // paymentFrom reads a succeeded PaymentIntent as the Payment row to store: gross received,
-// refunded cents, dispute/fraud state and any balance-transaction fee/net Stripe has settled.
+// refunded cents and dispute/fraud state.
 func (s *Service) paymentFrom(ctx context.Context, contractID uint64, intentID string, at time.Time) (Payment, error) {
 	params := &stripe.PaymentIntentRetrieveParams{}
-	params.AddExpand("latest_charge.balance_transaction")
+	params.AddExpand("latest_charge")
 	pi, err := s.client.V1PaymentIntents.Retrieve(ctx, intentID, params)
 	if err != nil {
 		return Payment{}, err
@@ -684,11 +677,7 @@ func (s *Service) paymentFrom(ctx context.Context, contractID uint64, intentID s
 	if ch == nil || ch.ID == "" {
 		return p, nil
 	}
-	p.StripeChargeID = &ch.ID
 	p.GrossRefundedCents = ch.AmountRefunded
-	if bt := ch.BalanceTransaction; bt != nil && bt.ID != "" {
-		p.BalanceTransactionID, p.FeeCents, p.NetCents = &bt.ID, &bt.Fee, &bt.Net
-	}
 	p.DisputeOrFraudReviewState, err = s.reviewState(ctx, ch)
 	return p, err
 }
@@ -729,16 +718,6 @@ func (s *Service) reviewState(ctx context.Context, ch *stripe.Charge) (*string, 
 	return &state, nil
 }
 
-type paymentFacts struct {
-	charge, balance, review *string
-	fee, net                *int64
-	refunded                int64
-}
-
-func (p Payment) facts() paymentFacts {
-	return paymentFacts{p.StripeChargeID, p.BalanceTransactionID, p.DisputeOrFraudReviewState, p.FeeCents, p.NetCents, p.GrossRefundedCents}
-}
-
 // savePayment inserts a PaymentIntent once and afterwards only refreshes mutable Stripe facts.
 func savePayment(tx *gorm.DB, p Payment) (bool, error) {
 	var old Payment
@@ -749,11 +728,11 @@ func savePayment(tx *gorm.DB, p Payment) (bool, error) {
 	if !found {
 		return true, tx.Create(&p).Error
 	}
-	if reflect.DeepEqual(old.facts(), p.facts()) {
+	if deref(old.DisputeOrFraudReviewState) == deref(p.DisputeOrFraudReviewState) && old.GrossRefundedCents == p.GrossRefundedCents {
 		return false, nil
 	}
 	return true, tx.Model(&Payment{}).Where("id = ?", p.ID).
-		Select("stripe_charge_id", "gross_refunded_cents", "dispute_or_fraud_review_state", "balance_transaction_id", "fee_cents", "net_cents").
+		Select("gross_refunded_cents", "dispute_or_fraud_review_state").
 		Updates(p).Error
 }
 

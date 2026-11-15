@@ -3,14 +3,12 @@
 package billing_test
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,6 +33,9 @@ func mustCreate(t *testing.T, db *gorm.DB, value any) {
 	}
 }
 
+// customerUpdate is one contact update the worker sent for a Customer.
+type customerUpdate struct{ ID, Name, Email, Locale string }
+
 type workerMockServer struct {
 	mux           *http.ServeMux
 	initialAmount int64 // fixed at construction
@@ -51,6 +52,8 @@ type workerMockServer struct {
 	payCalls              []string          // idempotency key of each invoice pay, in call order
 	payPays               bool              // an invoice pay succeeds instead of being declined
 	refunds               []string          // "<payment intent> <cents> <idempotency key>" of each refund created, in call order
+	customerUpdates       []customerUpdate  // contact updates received, in call order
+	customerUpdateError   bool              // a contact update fails with a 500
 }
 
 // registerInvoice adds a one-line invoice of the customer, as Stripe holds it.
@@ -99,14 +102,15 @@ func newWorkerMockServer(paidAt time.Time, initialAmount int64) *workerMockServe
 	mux.HandleFunc("GET /v1/checkout/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		resp := map[string]any{
-			"id":             id,
-			"object":         "checkout.session",
-			"currency":       "usd",
-			"mode":           "payment",
-			"payment_status": "paid",
-			"status":         "complete",
-			"amount_total":   wms.initialAmount,
-			"customer":       "cus_worker_test",
+			"id":                id,
+			"object":            "checkout.session",
+			"currency":          "usd",
+			"mode":              "payment",
+			"payment_status":    "paid",
+			"status":            "complete",
+			"amount_total":      wms.initialAmount,
+			"customer":          "cus_worker_test",
+			"customer_creation": "always",
 			"invoice": map[string]any{
 				"id": "in_initial_paid",
 			},
@@ -232,6 +236,7 @@ func newWorkerMockServer(paidAt time.Time, initialAmount int64) *workerMockServe
 			"currency":        "usd",
 			"payment_method": map[string]any{
 				"id":       "pm_card_test",
+				"type":     "card",
 				"customer": "cus_worker_test",
 			},
 			"latest_charge": map[string]any{
@@ -256,8 +261,22 @@ func newWorkerMockServer(paidAt time.Time, initialAmount int64) *workerMockServe
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	// 6. POST /v1/customers/{id}
+	// 6. POST /v1/customers/{id}: contact updates (the ones carrying a name) are recorded
 	mux.HandleFunc("POST /v1/customers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.Form.Has("name") {
+			wms.mu.Lock()
+			fail := wms.customerUpdateError
+			if !fail {
+				wms.customerUpdates = append(wms.customerUpdates,
+					customerUpdate{r.PathValue("id"), r.FormValue("name"), r.FormValue("email"), r.FormValue("preferred_locales[0]")})
+			}
+			wms.mu.Unlock()
+			if fail {
+				http.Error(w, `{"error":{"message":"customer update error"}}`, http.StatusInternalServerError)
+				return
+			}
+		}
 		resp := map[string]any{
 			"id":       r.PathValue("id"),
 			"object":   "customer",
@@ -494,7 +513,6 @@ func seedThreePlanCheckout(t *testing.T) (*gorm.DB, links.Enrollment, billing.Co
 		ExpiresAt:        now.Add(7 * 24 * time.Hour),
 	}
 	mustCreate(t, db, &enrollment)
-	customerID := "cus_worker_test"
 	contract := billing.Contract{
 		EnrollmentID:     enrollment.ID,
 		Reference:        rand.Text(),
@@ -502,7 +520,6 @@ func seedThreePlanCheckout(t *testing.T) (*gorm.DB, links.Enrollment, billing.Co
 		PlanName:         "Plan de 3 Pagos Mensuales",
 		InstallmentCount: 3,
 		TotalCents:       62500,
-		StripeCustomerID: &customerID,
 	}
 	mustCreate(t, db, &contract)
 	for i, amount := range []int64{20834, 20833, 20833} {
@@ -579,6 +596,9 @@ func TestFundingSchedulesLaterInvoicesOnce(t *testing.T) {
 	if !updatedContract.FundedAt.Equal(paidAt) {
 		t.Fatalf("expected FundedAt %v, got %v", paidAt, *updatedContract.FundedAt)
 	}
+	if updatedContract.StripeCustomerID == nil || *updatedContract.StripeCustomerID != "cus_worker_test" {
+		t.Fatalf("expected funding to record the Customer Checkout created, got %v", updatedContract.StripeCustomerID)
+	}
 
 	// Verify attempt is now terminal "paid"
 	var updatedAttempt billing.CheckoutAttempt
@@ -627,20 +647,15 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 	db, _, contract, attempt := seedThreePlanCheckout(t)
 	svc := billingtest.New(t, db, mock.mux)
 
-	postWebhook := func(evtID, evtType, resourceID string) {
+	deliver := func(evtID, evtType, resourceID string) {
 		payload := makeStripeEventJSON(evtID, evtType, resourceID, false, stripe.APIVersion)
-		sig := signWebhookPayload(t, payload, secret, time.Now())
-		req := httptest.NewRequest(http.MethodPost, "/webhooks/stripe", bytes.NewReader(payload))
-		req.Header.Set("Stripe-Signature", sig)
-		rec := httptest.NewRecorder()
-		svc.Webhook(rec, req)
-		if rec.Code != http.StatusOK {
+		if rec := postWebhook(svc, payload, signWebhookPayload(payload, secret, time.Now())); rec.Code != http.StatusOK {
 			t.Fatalf("webhook %s failed (%d): %s", evtType, rec.Code, rec.Body.String())
 		}
 	}
 
 	// 1. Initial checkout payment arrives via webhook
-	postWebhook("evt_checkout_done", "checkout.session.completed", *attempt.StripeSessionID)
+	deliver("evt_checkout_done", "checkout.session.completed", *attempt.StripeSessionID)
 	svc.DrainForTest(t.Context())
 
 	var c billing.Contract
@@ -684,7 +699,7 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 	// 2. Stripe finalizes invoice 2 -> webhook invoice.finalized
 	mock.patchInvoice(invID2, map[string]any{"status": "open", "amount_remaining": int64(20833)})
 
-	postWebhook("evt_inv2_finalized", "invoice.finalized", invID2)
+	deliver("evt_inv2_finalized", "invoice.finalized", invID2)
 	svc.DrainForTest(t.Context())
 
 	db.First(&ob2, ob2.ID)
@@ -702,7 +717,7 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 		"status_transitions": map[string]any{"paid_at": paidTime},
 	})
 
-	postWebhook("evt_inv2_paid", "invoice.paid", invID2)
+	deliver("evt_inv2_paid", "invoice.paid", invID2)
 	svc.DrainForTest(t.Context())
 
 	db.First(&ob2, ob2.ID)
@@ -728,7 +743,7 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 	}
 
 	// 4. Test idempotency: replay same invoice.paid webhook
-	postWebhook("evt_inv2_paid_replay", "invoice.paid", invID2)
+	deliver("evt_inv2_paid_replay", "invoice.paid", invID2)
 	svc.DrainForTest(t.Context())
 
 	var paymentCount int64
@@ -741,7 +756,7 @@ func TestRecurringPaymentsWebhooks(t *testing.T) {
 	invID3 := *ob3.StripeInvoiceID
 	mock.patchInvoice(invID3, map[string]any{"status": "open", "attempted": true, "amount_remaining": int64(20833)})
 
-	postWebhook("evt_inv3_failed", "invoice.payment_failed", invID3)
+	deliver("evt_inv3_failed", "invoice.payment_failed", invID3)
 	svc.DrainForTest(t.Context())
 
 	db.First(&ob3, ob3.ID)
@@ -926,11 +941,9 @@ func TestRefundsAndFraudSignalsSurfaceWithoutWebhook(t *testing.T) {
 		StripeCustomerID: &cusID,
 	}
 	mustCreate(t, db, &contract)
-	chID := "ch_mock_1"
 	payment := billing.Payment{
 		ID:                 "pi_worker_test",
 		ContractID:         contract.ID,
-		StripeChargeID:     &chID,
 		GrossReceivedCents: 60000,
 		GrossRefundedCents: 0,
 		PaymentTime:        now,
@@ -1525,108 +1538,59 @@ func TestWithdrawalRefundsAndStopsCollection(t *testing.T) {
 	}
 }
 
+// The Customer Checkout created gets the Student's name and email and the Stripe locale on the first sync
+// after funding, then again only when the Student's contact changes; a failed update is sent by the next sync.
 func TestWorkerSyncsCustomerContact(t *testing.T) {
-	mock := newMockStripeServer()
-	db, svc, enrollmentID, _ := setupTestEnvironment(t, mock)
-	ctx := context.Background()
+	ctx := t.Context()
+	mock := newWorkerMockServer(time.Now(), 20834)
+	db := testdb.Open(t, append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)...)
+	svc := billingtest.New(t, db, mock.mux)
+	student, contract := seedFundedStudent(t, db, "Maria Santos", "maria@example.com")
+	customer := *contract.StripeCustomerID
 
-	// Start checkout creates the customer in Stripe and stamps synced columns
-	res, err := svc.StartCheckout(ctx, enrollmentID, "three")
-	if err != nil {
-		t.Fatalf("StartCheckout: %v", err)
-	}
-	if res.URL == "" {
-		t.Fatalf("expected checkout URL, got %+v", res)
-	}
-
-	var c billing.Contract
-	if err := db.Where("enrollment_id = ?", enrollmentID).Take(&c).Error; err != nil {
-		t.Fatalf("take contract: %v", err)
-	}
-	if c.StripeCustomerID == nil || *c.StripeCustomerID == "" {
-		t.Fatal("expected StripeCustomerID to be set on contract")
-	}
-	if c.SyncedCustomerName != "Maria Santos" || c.SyncedCustomerEmail != "maria@example.com" {
-		t.Fatalf("initial stamps wrong: %s, %s", c.SyncedCustomerName, c.SyncedCustomerEmail)
-	}
-
-	// 1. Unchanged contact => drain produces 0 customer updates
-	svc.TouchContract(ctx, &enrollmentID)
-	svc.DrainForTest(ctx)
-	mock.with(func() {
-		if len(mock.customerUpdates) != 0 {
-			t.Fatalf("expected 0 customer updates, got %d", len(mock.customerUpdates))
+	// sync marks the contract due, runs one worker pass, then checks every contact update sent so far and the stored stamp.
+	var want []customerUpdate
+	sync := func(step, stampName, stampEmail string) {
+		t.Helper()
+		svc.TouchContract(ctx, student.EnrollmentID)
+		svc.DrainForTest(ctx)
+		var c billing.Contract
+		if err := db.Take(&c, contract.ID).Error; err != nil {
+			t.Fatal(err)
 		}
-	})
-
-	// 2. Customer changes email on the Enrollment before funding
-	// Contract is unfunded, but customer syncs durable to Stripe from the Enrollment
-	if err := db.Model(&links.Enrollment{}).Where("id = ?", enrollmentID).Update("email", "maria.updated@example.com").Error; err != nil {
-		t.Fatalf("update enrollment: %v", err)
+		mock.mu.Lock()
+		got := slices.Clone(mock.customerUpdates)
+		mock.mu.Unlock()
+		if !slices.Equal(got, want) || c.SyncedCustomerName != stampName || c.SyncedCustomerEmail != stampEmail {
+			t.Fatalf("%s: updates %+v, stamp %q %q; want %+v, stamp %q %q",
+				step, got, c.SyncedCustomerName, c.SyncedCustomerEmail, want, stampName, stampEmail)
+		}
 	}
-	svc.TouchContract(ctx, &enrollmentID)
-	// One worker drain records exactly one customer update with new email
-	svc.DrainForTest(ctx)
-	var updates []customerUpdate
-	mock.with(func() {
-		updates = append([]customerUpdate(nil), mock.customerUpdates...)
-	})
-	if len(updates) != 1 {
-		t.Fatalf("expected 1 customer update, got %d", len(updates))
+	setStudent := func(column, value string) {
+		t.Helper()
+		if err := db.Model(&students.Student{}).Where("id = ?", student.ID).Update(column, value).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
-	wantUpdate := customerUpdate{ID: *c.StripeCustomerID, Name: "Maria Santos", Email: "maria.updated@example.com"}
-	if updates[0] != wantUpdate {
-		t.Fatalf("customer update = %+v, want %+v", updates[0], wantUpdate)
+	failUpdates := func(fail bool) {
+		mock.mu.Lock()
+		mock.customerUpdateError = fail
+		mock.mu.Unlock()
 	}
 
-	// DB contract stamp equals the Enrollment's contact
-	if err := db.Where("id = ?", c.ID).Take(&c).Error; err != nil {
-		t.Fatal(err)
-	}
-	if c.SyncedCustomerEmail != "maria.updated@example.com" {
-		t.Fatalf("stamp not updated in DB: %s", c.SyncedCustomerEmail)
-	}
+	// Funding leaves the stamp empty, so the first sync pushes name, email and locale.
+	want = append(want, customerUpdate{customer, "Maria Santos", "maria@example.com", "es-419"})
+	sync("first sync after funding", "Maria Santos", "maria@example.com")
+	sync("unchanged contact", "Maria Santos", "maria@example.com")
 
-	// 3. Mock fails update => contract stamp stays old and next drain succeeds
-	if err := db.Model(&links.Enrollment{}).Where("id = ?", enrollmentID).Update("name", "Maria Rivera").Error; err != nil {
-		t.Fatalf("update enrollment name: %v", err)
-	}
-	svc.TouchContract(ctx, &enrollmentID)
-	mock.with(func() {
-		mock.customerUpdateError = true
-	})
-	svc.DrainForTest(ctx)
+	setStudent("email", "maria.updated@example.com")
+	want = append(want, customerUpdate{customer, "Maria Santos", "maria.updated@example.com", "es-419"})
+	sync("staff changed the email", "Maria Santos", "maria.updated@example.com")
 
-	// Stamp in DB still has old name because update failed
-	if err := db.Where("id = ?", c.ID).Take(&c).Error; err != nil {
-		t.Fatal(err)
-	}
-	if c.SyncedCustomerName != "Maria Santos" {
-		t.Fatalf("stamp should not be updated on failure: %s", c.SyncedCustomerName)
-	}
-
-	// Reset mock error and bump next_sync_at to now for next pass
-	mock.with(func() {
-		mock.customerUpdateError = false
-	})
-	svc.TouchContract(ctx, &enrollmentID)
-	svc.DrainForTest(ctx)
-
-	// Next drain succeeded
-	mock.with(func() {
-		updates = append([]customerUpdate(nil), mock.customerUpdates...)
-	})
-	if len(updates) != 2 {
-		t.Fatalf("expected 2 total customer updates, got %d", len(updates))
-	}
-	wantSecond := customerUpdate{ID: *c.StripeCustomerID, Name: "Maria Rivera", Email: "maria.updated@example.com"}
-	if updates[1] != wantSecond {
-		t.Fatalf("second update = %+v, want %+v", updates[1], wantSecond)
-	}
-	if err := db.Where("id = ?", c.ID).Take(&c).Error; err != nil {
-		t.Fatal(err)
-	}
-	if c.SyncedCustomerName != "Maria Rivera" {
-		t.Fatalf("stamp not updated after retry: %s", c.SyncedCustomerName)
-	}
+	setStudent("name", "Maria Rivera")
+	failUpdates(true)
+	sync("failed update keeps the stamp", "Maria Santos", "maria.updated@example.com")
+	failUpdates(false)
+	want = append(want, customerUpdate{customer, "Maria Rivera", "maria.updated@example.com", "es-419"})
+	sync("next sync sends the failed update", "Maria Rivera", "maria.updated@example.com")
 }

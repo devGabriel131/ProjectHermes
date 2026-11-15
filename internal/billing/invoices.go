@@ -553,18 +553,14 @@ func (s *Service) ensureDefaultPaymentMethod(ctx context.Context, l lease, c Con
 	if err := require(firstRow(s.db.WithContext(ctx).Order("payment_time ASC"), &first, "contract_id = ?", c.ID)); err != nil {
 		return false, err
 	}
-	pi, err := s.client.V1PaymentIntents.Retrieve(ctx, first.ID, nil)
+	expand := &stripe.PaymentIntentRetrieveParams{}
+	expand.AddExpand("payment_method")
+	pi, err := s.client.V1PaymentIntents.Retrieve(ctx, first.ID, expand)
 	if err != nil {
 		return false, err
 	}
-	if pi.PaymentMethod == nil || pi.PaymentMethod.ID == "" {
-		return false, s.mark(ctx, l, reviewUnsupportedPaymentMethod, true)
-	}
-	pm, err := s.client.V1PaymentMethods.Retrieve(ctx, pi.PaymentMethod.ID, nil)
-	if err != nil {
-		return false, err
-	}
-	if pm.Type != stripe.PaymentMethodTypeCard || pm.Customer == nil || pm.Customer.ID != *c.StripeCustomerID {
+	pm := pi.PaymentMethod
+	if pm == nil || pm.ID == "" || pm.Type != stripe.PaymentMethodTypeCard || pm.Customer == nil || pm.Customer.ID != *c.StripeCustomerID {
 		return false, s.mark(ctx, l, reviewUnsupportedPaymentMethod, true)
 	}
 	if err := s.renew(ctx, l); err != nil {

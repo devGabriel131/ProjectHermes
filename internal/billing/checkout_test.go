@@ -3,14 +3,13 @@
 package billing_test
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,8 +24,6 @@ import (
 	"projecthermes/internal/testdb"
 )
 
-type customerUpdate struct{ ID, Name, Email string }
-
 type mockStripeServer struct {
 	mux         *http.ServeMux
 	sessionReqs int64
@@ -37,64 +34,31 @@ type mockStripeServer struct {
 	createSessionError        bool
 	createSessionLoseResponse bool // Stripe creates the Session, but the response never arrives
 	receivedCurrency          string
-	receivedCustomer          string
+	receivedCustomerCreation  string
+	receivedCustomerEmail     string
 	receivedPMC               string
 	receivedCancelURL         string
 	receivedAllowed           []string
-	customersCreated          map[string]string         // contractRef -> customerID
+	listedCreatedGTE          string                    // created[gte] of the latest Session list
+	listedCustomer            string                    // customer filter of the latest Session list
 	sessionsCreated           map[string]string         // attemptRef -> sessionID
 	sessions                  map[string]map[string]any // sessionID -> stored Session
-	customerUpdateError       bool
-	customerUpdates           []customerUpdate // guarded by mu
 }
 
 func newMockStripeServer() *mockStripeServer {
 	m := &mockStripeServer{
-		customersCreated: make(map[string]string),
-		sessionsCreated:  make(map[string]string),
-		sessions:         make(map[string]map[string]any),
+		sessionsCreated: make(map[string]string),
+		sessions:        make(map[string]map[string]any),
 	}
 	mux := http.NewServeMux()
-
-	mux.HandleFunc("POST /v1/customers", func(w http.ResponseWriter, r *http.Request) {
-		idemp := r.Header.Get("Idempotency-Key")
-		m.mu.Lock()
-		defer m.mu.Unlock()
-
-		cusID := "cus_mock_" + rand.Text()[:8]
-		if idemp != "" && m.customersCreated[idemp] != "" {
-			cusID = m.customersCreated[idemp]
-		} else if idemp != "" {
-			m.customersCreated[idemp] = cusID
-		}
-
-		resp := map[string]any{
-			"id":       cusID,
-			"object":   "customer",
-			"livemode": false,
-		}
-		_ = json.NewEncoder(w).Encode(resp)
-	})
-
-	mux.HandleFunc("POST /v1/customers/{id}", func(w http.ResponseWriter, r *http.Request) {
-		m.mu.Lock()
-		if m.customerUpdateError {
-			m.mu.Unlock()
-			http.Error(w, `{"error":{"message":"customer update error"}}`, http.StatusInternalServerError)
-			return
-		}
-		_ = r.ParseForm()
-		m.customerUpdates = append(m.customerUpdates, customerUpdate{r.PathValue("id"), r.FormValue("name"), r.FormValue("email")})
-		m.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": r.PathValue("id"), "object": "customer", "livemode": false})
-	})
 
 	mux.HandleFunc("POST /v1/checkout/sessions", func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt64(&m.sessionReqs, 1)
 		m.mu.Lock()
 		_ = r.ParseForm()
 		m.receivedCurrency = r.FormValue("currency")
-		m.receivedCustomer = r.FormValue("customer")
+		m.receivedCustomerCreation = r.FormValue("customer_creation")
+		m.receivedCustomerEmail = r.FormValue("customer_email")
 		m.receivedPMC = r.FormValue("payment_method_configuration")
 		m.receivedCancelURL = r.FormValue("cancel_url")
 		m.receivedAllowed = m.receivedAllowed[:0]
@@ -134,8 +98,9 @@ func newMockStripeServer() *mockStripeServer {
 			"url":                 "https://checkout.stripe.com/pay/" + sessID,
 			"currency":            "usd",
 			"mode":                "payment",
-			"customer":            m.receivedCustomer,
+			"customer_creation":   r.FormValue("customer_creation"),
 			"client_reference_id": r.FormValue("client_reference_id"),
+			"created":             time.Now().Unix(),
 			"livemode":            false,
 			"status":              status,
 			"payment_status":      "unpaid",
@@ -186,13 +151,17 @@ func newMockStripeServer() *mockStripeServer {
 	})
 
 	mux.HandleFunc("GET /v1/checkout/sessions", func(w http.ResponseWriter, r *http.Request) {
-		customer, intent := r.URL.Query().Get("customer"), r.URL.Query().Get("payment_intent")
+		q := r.URL.Query()
+		intent := q.Get("payment_intent")
+		since, _ := strconv.ParseInt(q.Get("created[gte]"), 10, 64)
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		m.listedCreatedGTE, m.listedCustomer = q.Get("created[gte]"), q.Get("customer")
 		data := []map[string]any{}
 		for _, sess := range m.sessions {
 			pi, _ := sess["payment_intent"].(map[string]any)
-			if (customer == "" || sess["customer"] == customer) && (intent == "" || pi["id"] == intent) {
+			created, _ := sess["created"].(int64)
+			if created >= since && (intent == "" || pi["id"] == intent) {
 				data = append(data, sess)
 			}
 		}
@@ -304,7 +273,7 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 		}
 	})
 
-	// 2. Concurrent starts produce exactly one contract, one customer, and one open attempt
+	// 2. Concurrent starts produce exactly one contract and one open attempt; Checkout, not the app, creates the Customer
 	t.Run("concurrent_starts", func(t *testing.T) {
 		const concurrency = 5
 		var wg sync.WaitGroup
@@ -355,6 +324,9 @@ func TestCheckoutConcurrencyAndRecovery(t *testing.T) {
 		}
 		if mock.receivedPMC != "" || !slices.Equal(mock.receivedAllowed, []string{"card"}) {
 			t.Errorf("installment Checkout must allow only card and skip the payment method configuration, got pmc %q, allowed %v", mock.receivedPMC, mock.receivedAllowed)
+		}
+		if mock.receivedCustomerCreation != "always" || mock.receivedCustomerEmail != "maria@example.com" {
+			t.Errorf("the Session must ask Checkout for a Customer with the attempt's email, got customer_creation %q, customer_email %q", mock.receivedCustomerCreation, mock.receivedCustomerEmail)
 		}
 		mock.mu.Unlock()
 	})
@@ -684,6 +656,9 @@ func TestCheckoutCreateResumes(t *testing.T) {
 			if want := mock.sessionsCreated["tuition:"+a.Reference+":checkout"]; *a.StripeSessionID != want {
 				t.Fatalf("expected adopted Session %q, got %q", want, *a.StripeSessionID)
 			}
+			if mock.listedCreatedGTE == "" || mock.listedCustomer != "" {
+				t.Fatalf("expected the adopting list to filter by created[gte] and no customer, got created[gte] %q, customer %q", mock.listedCreatedGTE, mock.listedCustomer)
+			}
 		})
 		if got := atomic.LoadInt64(&mock.sessionReqs); got != before {
 			t.Fatalf("expected no new Session create requests, got %d", got-before)
@@ -731,6 +706,38 @@ func TestCheckoutCreateResumes(t *testing.T) {
 	})
 }
 
+// A re-attempt whose create ends uncertain must be due for the worker within about a minute, not left on
+// the contract's previous schedule (up to a day out).
+func TestReattemptIsScheduled(t *testing.T) {
+	ctx := context.Background()
+	mock := newMockStripeServer()
+	db, svc, enrollmentID, _ := setupTestEnvironment(t, mock)
+
+	if _, err := svc.StartCheckout(ctx, enrollmentID, "three"); err != nil {
+		t.Fatalf("StartCheckout: %v", err)
+	}
+	a := latestAttempt(t, db)
+	if err := db.Model(&billing.CheckoutAttempt{}).Where("id = ?", a.ID).Update("state", "expired").Error; err != nil {
+		t.Fatalf("expire attempt: %v", err)
+	}
+	if err := db.Model(&billing.Contract{}).Where("id = ?", a.ContractID).Update("next_sync_at", time.Now().UTC().Add(24*time.Hour)).Error; err != nil {
+		t.Fatalf("push next sync out: %v", err)
+	}
+
+	mock.with(func() { mock.createSessionError = true })
+	res, err := svc.StartCheckout(ctx, enrollmentID, "three")
+	if err != nil || !res.Pending {
+		t.Fatalf("expected pending without error, got %+v, %v", res, err)
+	}
+	var c billing.Contract
+	if err := db.First(&c, a.ContractID).Error; err != nil {
+		t.Fatalf("load contract: %v", err)
+	}
+	if limit := time.Now().UTC().Add(time.Minute + 5*time.Second); c.NextSyncAt == nil || c.NextSyncAt.After(limit) {
+		t.Fatalf("next_sync_at = %v, want no later than %v", c.NextSyncAt, limit)
+	}
+}
+
 // A card decline leaves Checkout's Session open and sends only payment_intent.payment_failed. The app
 // must record it on the attempt and show it until a newer try supersedes it.
 func TestCheckoutDeclineIsRecorded(t *testing.T) {
@@ -756,10 +763,7 @@ func TestCheckoutDeclineIsRecorded(t *testing.T) {
 	})
 
 	payload := makeStripeEventJSON("evt_pi_failed", "payment_intent.payment_failed", "pi_declined", false, "2026-09-30.endive")
-	req := httptest.NewRequest(http.MethodPost, "/webhooks/stripe", bytes.NewReader(payload))
-	req.Header.Set("Stripe-Signature", signWebhookPayload(t, payload, billingtest.Config().WebhookSecret, time.Now()))
-	rec := httptest.NewRecorder()
-	svc.Webhook(rec, req)
+	rec := postWebhook(svc, payload, signWebhookPayload(payload, billingtest.Config().WebhookSecret, time.Now()))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("webhook status = %d: %s", rec.Code, rec.Body.String())
 	}

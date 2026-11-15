@@ -3,6 +3,7 @@ package logging
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 )
@@ -64,6 +65,35 @@ func TestDBLoggerFlushBoundsAndResets(t *testing.T) {
 	db.Flush()
 	if out.Len() != before {
 		t.Fatal("second Flush repeated previous summaries")
+	}
+}
+
+func TestDBLoggerFlushReportsPoolWaitGrowth(t *testing.T) {
+	var out bytes.Buffer
+	db := NewDBLogger(New(&out))
+	stats := sql.DBStats{WaitCount: 3, WaitDuration: 30 * time.Millisecond}
+	db.WatchPool(func() sql.DBStats { return stats })
+	db.Flush()
+	stats.WaitCount, stats.WaitDuration = 5, 50*time.Millisecond
+	db.Flush()
+	db.Flush() // no new waits: silent
+
+	events := decodeEvents(t, out.Bytes())
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2", len(events))
+	}
+	for i, want := range []map[string]any{
+		{"message": "database_pool_wait", "level": "warn", "count": float64(3), "total_wait_ms": float64(30)},
+		{"message": "database_pool_wait", "level": "warn", "count": float64(2), "total_wait_ms": float64(20)},
+	} {
+		if len(events[i]) != len(want)+1 { // + time
+			t.Errorf("event %d = %v, want only %v", i, events[i], want)
+		}
+		for key, value := range want {
+			if events[i][key] != value {
+				t.Errorf("event %d %s = %#v, want %#v", i, key, events[i][key], value)
+			}
+		}
 	}
 }
 

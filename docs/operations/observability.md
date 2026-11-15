@@ -106,6 +106,8 @@ Every event that reports an error builds it with `logging.ErrorAttrs`. It expose
 | `http_server_error` | error | `kind`: `panic`, `accept`, `response_header` or `other` | net/http wrote to its `ErrorLog` |
 | `request_failed` | warn or error | see above | A request failed |
 | `database_slow_summary` | warn | `operation`, `count`, `worst_duration_ms`, `threshold_ms` | A flush found slow queries for a label |
+| `database_pool_wait` | warn | `count`, `total_wait_ms` | A flush found queries that waited for a pooled connection since the previous flush |
+| `stripe_call_summary` | info | `operation`, `count`, `avg_duration_ms`, `worst_duration_ms` | A flush found Stripe HTTP attempts for a label |
 | `orm_warning` | warn | none | GORM called the logger's `Warn`; the message is discarded |
 | `session_cleanup_failed` | error | error attrs | The 5-minute expired-session delete failed (not logged once shutdown has cancelled the cleanup) |
 | `stripe_webhook_rejected` | warn | error attrs | Signature or payload verification failed; answered 400. Logged at most once a minute so unsigned POSTs cannot flood the log |
@@ -133,6 +135,8 @@ Every event that reports an error builds it with `logging.ErrorAttrs`. It expose
 
 `logging.DBLogger` is GORM's logger. It never logs SQL, parameters or errors: `Trace` ignores the SQL callback and counts only successful queries slower than 200 ms (`threshold_ms`), per label. `Flush` swaps the counters out and emits at most one `database_slow_summary` per label, sorted by label, so a slow period costs a handful of lines instead of one per query.
 
+GORM starts a statement's clock before it obtains a pooled connection, so a statement's time includes its pool wait, and an autocommit write's time includes its own WAL flush. `BEGIN` and `COMMIT` are not traced: a slow transaction commit never appears, only the transaction's statements (and their row-lock waits) do.
+
 A query's label is its request's route pattern (or `unmatched`), else the background operation set with `logging.WithOperation`, else `other`:
 
 | Label | Source |
@@ -143,8 +147,16 @@ A query's label is its request's route pattern (or `unmatched`), else the backgr
 | `billing_worker` | Everything the billing worker does, including detached persists |
 | `session_cleanup` | The expired-session delete |
 | `other` | A context with neither label |
+| `startup_catalog` | The Stripe price list at startup (Stripe calls only) |
 
 Flush points are three distinct moments: right after the startup migration, every 30 s while serving, and at process exit. Session reads and writes through the SCS store use the SQL pool directly rather than GORM, so they are not counted.
+
+## Pool waits and Stripe calls
+
+Both ride on the same flushes and labels, and split a request's time into the database's, Stripe's and the app's own.
+
+- **Pool waits.** `DBLogger.WatchPool(sqlDB.Stats)` makes every flush read the pool's cumulative `WaitCount` and `WaitDuration`. When the count grew, one `database_pool_wait` carries the growth since the previous flush. The pool holds 10 connections (`main.go`), and the count includes the session store's queries.
+- **Stripe calls.** `logging.StripeTimer` wraps the Stripe client's HTTP transport and times every attempt, SDK retries and failures included, up to the response headers. `Flush` (the 30 s ticker and process exit) emits one `stripe_call_summary` per label. For `POST /customer/{token}/payments`, the request's latency minus `avg_duration_ms` is the app's own share.
 
 ## Privacy rules
 
@@ -167,7 +179,8 @@ Flush points are three distinct moments: right after the startup migration, ever
 
 - `internal/logging/logging.go`: `New`, `ErrorAttrs`, `classifyError`, `requestLevel`, `ServerErrorLog`, `serverErrorWriter`
 - `internal/logging/http.go`: `Requests`, `Routes`, `RecordError`, `WithOperation`, `labelFromContext`, `requestID`, `validRequestID`, `requestMethod`, `statusWriter`
-- `internal/logging/database.go`: `DBLogger`, `slowQueryThreshold`, `Trace`, `Flush`, `database_slow_summary`, `orm_warning`
+- `internal/logging/database.go`: `DBLogger`, `slowQueryThreshold`, `Trace`, `Flush`, `WatchPool`, `database_slow_summary`, `database_pool_wait`, `orm_warning`
+- `internal/logging/stripe.go`: `StripeTimer`, `NewStripeTimer`, `RoundTrip`, `Flush`, `stripe_call_summary`
 - `main.go`: `startup_started`, `startup_failed`, `server_listening`, `shutdown_requested`, `shutdown_completed`, `shutdown_failed`, `server_failed`, `RAILWAY_SERVICE_NAME`
 - `internal/auth/http.go`: `session_cleanup_failed`, `deleteExpiredSessions`, `staff_login_failed`, `staff_login_throttled`
 - `internal/billing/webhook.go`: `stripe_webhook_rejected`, `stripe_webhook_store_failed`

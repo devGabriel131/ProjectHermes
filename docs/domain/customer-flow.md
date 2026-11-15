@@ -66,7 +66,7 @@ sequenceDiagram
     H-->>Browser: three plans with schedule from Plan.Schedule(now)
     Browser->>H: POST /customer/{token}/payments
     H->>B: StartCheckout
-    B->>S: Customer and Checkout Session
+    B->>S: Checkout Session
     H-->>Browser: 303 to checkout.stripe.com
     Browser->>S: pays
     S-->>Browser: redirect to /payments/return?session_id
@@ -120,7 +120,7 @@ Implementation notes that keep this order observable:
 | POST unchanged | Redirect to `/agreement`; no write, no refresh, no provider sync |
 | POST changed | `UpdateContact`, then redirect to `/agreement`. Submission time, expiry and accepted terms never change. |
 
-`ContactEditable` is a lock-free pre-check, also used to show or hide "Editar información del estudiante" on the agreement. Before the terms are accepted it answers editable without a query: checkout requires accepted terms, so no contract can exist yet. The authority is `UpdateContact`, one transaction: it locks the usable, submitted Enrollment row, runs the same contact-lock query, then marks the contract due and writes. It returns `ErrContactLocked` (redirect to `/payments`) when the contract is funded or an attempt is `processing`, `uncertain` or `expiring`. Attempts in `creating` or `open` still allow edits. An unusable enrollment returns `ErrUnavailable` (404). A change marks the contract due for sync, which has effect only once a Stripe customer exists, and publishes a live event.
+`ContactEditable` is a lock-free pre-check, also used to show or hide "Editar información del estudiante" on the agreement. Before the terms are accepted it answers editable without a query: checkout requires accepted terms, so no contract can exist yet. The authority is `UpdateContact`, one transaction: it locks the usable, submitted Enrollment row, runs the same contact-lock query, then writes. It returns `ErrContactLocked` (redirect to `/payments`) when the contract is funded or an attempt is `processing`, `uncertain` or `expiring`. Attempts in `creating` or `open` still allow edits. An unusable enrollment returns `ErrUnavailable` (404). A change publishes a live event and sends nothing to Stripe: no Customer exists before funding, and the next Checkout attempt prefills the new email.
 
 ## Payments page
 

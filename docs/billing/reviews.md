@@ -11,7 +11,7 @@ A review is a bounded reason string the worker stores when it cannot prove that 
 
 Both hold values from the same six `review*` constants in `billing.go`. They are not two vocabularies: `summarize` merges the contract's reason and every obligation's into one deduplicated list, `Summary.ReviewReasons`, which staff see as "Needs review:" with the codes in the student's billing block ([Staff students](../management/students.md)). The dashboard figure `ContractsInReview` counts contracts with a reason at either level, funded or not ([Dashboard](../management/dashboard.md)).
 
-Do not confuse reasons with related values: payment-level states `dispute_open`, `dispute_lost` and `fraud_warning` (`billing_payments.dispute_or_fraud_review_state`) are inputs to the contract reason `payment_review`; an `uncertain` Checkout attempt is an attempt state ([Checkout](checkout.md)); a Payment without `balance_transaction_id` only schedules 15-minute rechecks ([Worker](worker.md)).
+Do not confuse reasons with related values: payment-level states `dispute_open`, `dispute_lost` and `fraud_warning` (`billing_payments.dispute_or_fraud_review_state`) are inputs to the contract reason `payment_review`; an `uncertain` Checkout attempt is an attempt state ([Checkout](checkout.md)).
 
 ## Single contract slot
 
@@ -32,7 +32,7 @@ Obligations use `reviewObligation`, which writes unconditionally, and `reviewFor
 | Reason | Level | Set by | Cleared by |
 |---|---|---|---|
 | `unsupported_payment_method` | Contract | `ensureDefaultPaymentMethod`: the Customer has no default payment method and the first payment's method is missing, is not a card, or belongs to another Customer. No later invoice is created meanwhile | The same function passing on a later pass: a default method exists, or the first card was set as default. The pass is any that reaches the gate: a `customer.updated` event, the next sync, staff Reconcile |
-| `configuration_mismatch` | Contract | `syncAttempt`: a Checkout Session recovered for an attempt that never recorded its Session ID does not exactly match (USD, payment mode, same Customer, quoted amount) | The funding transaction (`fund`) |
+| `configuration_mismatch` | Contract | `syncAttempt`: a Checkout Session recovered for an attempt that never recorded its Session ID does not exactly match (USD, payment mode, the attempt's `client_reference_id`, `customer_creation=always`, quoted amount); `fund`: a paid Session carries no Customer, so funding is blocked and the attempt stays `processing` | The funding transaction (`fund`) |
 | `invoice_mismatch` | Contract | `fund`: the Checkout invoice, or its payment, does not match the quote. Funding is blocked and the attempt stays `processing` | The funding transaction, once funding succeeds |
 | `unresolved_provider_create` | Contract | `resumeCreate`: more than one Checkout Session carries the attempt's `client_reference_id` | Never |
 | `payment_review` | Contract | `store`: any Payment has a dispute or fraud state, or, on a contract that is not withdrawn, refunded cents above zero | Recomputed on every `store`. Refunded amounts never decrease and any fraud warning stays, so on a contract that is not withdrawn only disputes that end won, warning-closed or prevented clear it. On a withdrawn contract refunds no longer count, so the withdrawal's own refunds never set it and earlier ones stop holding it ([Withdrawal](withdrawal.md)) |

@@ -127,6 +127,7 @@ func run(log *slog.Logger, args []string) error {
 	defer sqlDB.Close()
 	sqlDB.SetMaxOpenConns(10)
 	sqlDB.SetMaxIdleConns(10)
+	slow.WatchPool(sqlDB.Stats)
 
 	ctx, cancel := context.WithTimeout(signalContext, 10*time.Second)
 	defer cancel()
@@ -172,8 +173,10 @@ func run(log *slog.Logger, args []string) error {
 		}
 		payments.InstallmentSpacing = spacing
 	}
-	stripeClient := billing.NewStripeClient(stripeAPIKey)
-	catalogCtx, cancelCatalog := context.WithTimeout(signalContext, 15*time.Second)
+	stripeTimer := logging.NewStripeTimer(log, http.DefaultTransport)
+	defer stripeTimer.Flush()
+	stripeClient := billing.NewStripeClient(stripeAPIKey, stripeTimer)
+	catalogCtx, cancelCatalog := context.WithTimeout(logging.WithOperation(signalContext, "startup_catalog"), 15*time.Second)
 	defer cancelCatalog()
 	catalog, err := billing.LoadCatalog(catalogCtx, stripeClient, billingCfg.Live)
 	if err != nil {
@@ -213,7 +216,7 @@ func run(log *slog.Logger, args []string) error {
 		return startupError{"listen", err}
 	}
 	log.Info("server_listening", "addr", listener.Addr().String())
-	return serve(signalContext, server, listener, log, slow, 10*time.Second)
+	return serve(signalContext, server, listener, log, func() { slow.Flush(); stripeTimer.Flush() }, 10*time.Second)
 }
 
 // sitePolicy is the Content-Security-Policy of every response. Pages load local assets, the one
@@ -274,7 +277,7 @@ func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.M
 	return server, nil
 }
 
-func serve(ctx context.Context, server *http.Server, listener net.Listener, log *slog.Logger, slow *logging.DBLogger, drain time.Duration) error {
+func serve(ctx context.Context, server *http.Server, listener net.Listener, log *slog.Logger, flush func(), drain time.Duration) error {
 	result := make(chan error, 1)
 	go func() { result <- server.Serve(listener) }()
 	ticker := time.NewTicker(30 * time.Second)
@@ -290,7 +293,7 @@ func serve(ctx context.Context, server *http.Server, listener net.Listener, log 
 				append(logging.ErrorAttrs(err), slog.String("stage", "serve"))...)
 			return err
 		case <-ticker.C:
-			slow.Flush()
+			flush()
 		case <-ctx.Done():
 			started := time.Now()
 			log.Info("shutdown_requested", "drain_timeout_ms", drain.Milliseconds())

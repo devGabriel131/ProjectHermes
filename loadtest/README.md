@@ -36,6 +36,7 @@ The summary JSON goes to `OUT` (default `/tmp/k6/out/<script>.json`).
 - Latency is budgeted per step (p95<500, p99<1000; checkout, which calls Stripe, p95<1500, p99<3000) as well as globally. The summary table lists each step's
   requests, failures and percentiles, plus `http_req_waiting` (server time), `http_req_connecting` and `http_req_tls_handshaking`.
   `http_req_duration` excludes connecting and TLS, so a slow start shows in those rows or in `http_req_waiting`, not in the duration.
+  `step_checkout` is POST /payments (server time plus network, connect and TLS excluded) and `step_payments` is the GET baseline.
   Unless `CHECKOUT=0`, the global `http_req_duration` threshold is dropped (it would include the Stripe call); the per-step ones stay.
 - Each iteration gets its own cookie jar (`newSession` in `lib.js`). `http.cookieJar().clear()` does not remove the path-scoped `enrollment_session` cookie, so clearing would resume the previous customer.
 
@@ -44,7 +45,7 @@ The summary JSON goes to `OUT` (default `/tmp/k6/out/<script>.json`).
 Run from the repository root. `run.fish` writes `/tmp/k6/out/<script>.{json,log,html}` and serves the dashboard at <http://127.0.0.1:5665> during the run.
 
 ```fish
-token=(loadtest/link.fish seed "k6 capacity")
+set token (loadtest/link.fish seed "k6 capacity")
 loadtest/run.fish capacity.js BASE_URL=http://127.0.0.1:3000 TOKEN=$token                       # arrivals over 60 s
 loadtest/run.fish capacity.js BASE_URL=http://127.0.0.1:3000 TOKEN=$token WINDOW=0              # all at once
 loadtest/link.fish verify $token                                                                # what the database holds
@@ -66,7 +67,7 @@ rotating the sandbox cards by customer index and retrying failures one at a time
 The first run pulls the Playwright image (about 2 GB). Pay against sessions a deployed app created: Stripe sends its webhooks to the app's `PUBLIC_BASE_URL`, so a local app never hears the payment.
 
 ```fish
-token=(loadtest/link.fish seed "k6 payments")
+set token (loadtest/link.fish seed "k6 payments")
 loadtest/run.fish capacity.js BASE_URL=https://<app> TOKEN=$token ATTEMPTS=100 WINDOW=60   # 100 customers, one link
 loadtest/pay.fish                                                                          # PAID / FAILED per customer
 loadtest/link.fish verify $token                                                           # paid, students, checkout states

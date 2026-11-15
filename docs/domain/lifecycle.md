@@ -50,7 +50,7 @@ sequenceDiagram
     App->>PostgreSQL: Store.AcceptTerms snapshots the start date
     Customer->>App: POST /customer/{token}/payments
     App->>PostgreSQL: StartCheckout writes contract, obligations, attempt
-    App->>Stripe: create Customer and Checkout Session
+    App->>Stripe: create Checkout Session, which creates the Customer
     App-->>Customer: 303 to checkout.stripe.com
     Customer->>Stripe: pays the first installment
     Stripe->>App: POST /webhooks/stripe

@@ -24,7 +24,7 @@ The deadline control works through `http.ResponseController`, which reaches the 
 |---|---|
 | links store | `CreateLink`, `RenameLink`, `StartEnrollment` (new enrollment), `AcceptTerms`, draft and submit saves (`SaveDraft`, `Submit`), `CancelLink`, and `billing.Service.CancelEnrollment` (via `CancelEnrollmentTx` + `changed`) |
 | students store | `UpdateField` when the value actually changed (a normalized no-op notifies nobody) |
-| billing | `StartCheckout` attempt changes, `UpdateContact`, `requestFee`, `evaluateDeadlines`, `evaluateReactivation`, and worker writes that change stored state (`fund`, `moveAttempt`, `store`, `mark`, `reviewObligation`) |
+| billing | `StartCheckout` (every new attempt), `UpdateContact`, `requestFee`, `evaluateDeadlines`, `evaluateReactivation`, and worker writes that change stored state (`fund`, `moveAttempt`, `store`, `mark`, `reviewObligation`) |
 | settings store | **Never.** `settings.New(db)` takes no callback, so saving the link lifetime or program start date publishes no event. |
 
 `Changed` takes one mutex and does a non-blocking send into each stream's one-slot channel. A stream with an event already pending absorbs further wake-ups, so a slow or stalled stream can never block a write path. The script then folds the messages of each second into one refresh ([Client](#client)).

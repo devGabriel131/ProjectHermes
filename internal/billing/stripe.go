@@ -127,10 +127,12 @@ func priceKey(planID string, i int) string {
 }
 
 // NewStripeClient creates a client configured with 5-second timeouts, at most 2 retries,
-// and silent logging so raw SDK payloads never leak into application logs.
-func NewStripeClient(apiKey string) *stripe.Client {
+// and silent logging so raw SDK payloads never leak into application logs. Every attempt
+// goes through transport; nil means http.DefaultTransport.
+func NewStripeClient(apiKey string, transport http.RoundTripper) *stripe.Client {
 	httpClient := &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout:   5 * time.Second,
+		Transport: transport,
 	}
 	maxRetries := int64(2)
 	backends := stripe.NewBackendsWithConfig(&stripe.BackendConfig{

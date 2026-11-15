@@ -882,8 +882,6 @@ func testCustomerBiller(t *testing.T, db *gorm.DB) *billing.Service {
 	return billingtest.New(t, db, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.URL.Path == "/v1/customers":
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "cus_cust_test", "object": "customer"})
 		case r.URL.Path == "/v1/checkout/sessions":
 			_ = r.ParseForm()
 			price := r.FormValue("line_items[0][price]")
@@ -896,15 +894,16 @@ func testCustomerBiller(t *testing.T, db *gorm.DB) *billing.Service {
 			}
 			sessID := "cs_cust_test_" + rand.Text()[:8]
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id":             sessID,
-				"object":         "checkout.session",
-				"url":            "https://checkout.stripe.com/pay/" + sessID,
-				"currency":       "usd",
-				"mode":           "payment",
-				"customer":       "cus_cust_test",
-				"status":         "open",
-				"payment_status": "unpaid",
-				"amount_total":   amountTotal,
+				"id":                  sessID,
+				"object":              "checkout.session",
+				"url":                 "https://checkout.stripe.com/pay/" + sessID,
+				"currency":            "usd",
+				"mode":                "payment",
+				"client_reference_id": r.FormValue("client_reference_id"),
+				"customer_creation":   "always",
+				"status":              "open",
+				"payment_status":      "unpaid",
+				"amount_total":        amountTotal,
 			})
 		case strings.HasSuffix(r.URL.Path, "/expire"):
 			_ = json.NewEncoder(w).Encode(map[string]any{

@@ -80,6 +80,7 @@ type CheckoutAttempt struct {
 	PlanID            string    `gorm:"not null"`
 	FirstAmountCents  int64     `gorm:"not null;check:attempt_first_amount_cents,first_amount_cents > 0"`
 	StripePriceID     string    `gorm:"not null"`
+	CustomerEmail     string    `gorm:"not null;default:''"` // email Checkout prefills and gives the Customer it creates; persisted so create replays stay byte-identical
 	CreationStartedAt time.Time `gorm:"not null"`
 	StripeSessionID   *string   `gorm:"uniqueIndex"`
 	CheckoutURL       *string
@@ -89,19 +90,15 @@ type CheckoutAttempt struct {
 	UpdatedAt         time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 }
 
-// Payment records a confirmed Stripe PaymentIntent and balance transaction details.
+// Payment records a confirmed Stripe PaymentIntent.
 type Payment struct {
 	ID                        string    `gorm:"primaryKey"`
 	ContractID                uint64    `gorm:"not null;index"`
 	Contract                  *Contract `gorm:"foreignKey:ContractID;constraint:OnUpdate:RESTRICT,OnDelete:RESTRICT"`
-	StripeChargeID            *string   `gorm:"uniqueIndex"`
 	GrossReceivedCents        int64     `gorm:"not null;check:payment_gross_received,gross_received_cents >= 0"`
 	GrossRefundedCents        int64     `gorm:"not null;default:0;check:payment_gross_refunded,gross_refunded_cents >= 0"`
 	PaymentTime               time.Time `gorm:"not null"`
 	DisputeOrFraudReviewState *string
-	BalanceTransactionID      *string
-	FeeCents                  *int64
-	NetCents                  *int64
 	CreatedAt                 time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt                 time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 }

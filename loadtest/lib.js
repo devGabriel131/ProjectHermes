@@ -313,14 +313,14 @@ export function summarize(script, data) {
   ];
   const reasons = REASONS.filter((r) => val(`fail_${r}`, 'count')).map((r) => `${r}=${val(`fail_${r}`, 'count')}`);
   if (reasons.length) lines.push(`failures     ${reasons.join(' ')}`);
-  lines.push(`${'latency ms'.padEnd(26)}${'n'.padStart(6)}${'fail'.padStart(6)}${'p95'.padStart(9)}${'p99'.padStart(9)}${'max'.padStart(9)}`);
+  lines.push(`${'latency ms'.padEnd(26)}${'n'.padStart(6)}${'fail'.padStart(6)}${'p50'.padStart(9)}${'p95'.padStart(9)}${'p99'.padStart(9)}${'max'.padStart(9)}`);
   const steps = STEP_NAMES.map((n) => `step_${n}`).filter((m) => data.metrics[m]);
   for (const name of ['http_req_duration', 'http_req_waiting', 'http_req_connecting', 'http_req_tls_handshaking', 'journey_duration', ...steps]) {
     if (!val(name, 'max')) continue;
     const ok = `${name}_ok`;
     const n = steps.includes(name) ? val(ok, 'passes') + val(ok, 'fails') : '';
     const fails = steps.includes(name) ? val(ok, 'fails') : '';
-    lines.push(`${name.padEnd(26)}${String(n).padStart(6)}${String(fails).padStart(6)}${num(val(name, 'p(95)')).padStart(9)}${num(val(name, 'p(99)')).padStart(9)}${num(val(name, 'max')).padStart(9)}`);
+    lines.push(`${name.padEnd(26)}${String(n).padStart(6)}${String(fails).padStart(6)}${num(val(name, 'med')).padStart(9)}${num(val(name, 'p(95)')).padStart(9)}${num(val(name, 'p(99)')).padStart(9)}${num(val(name, 'max')).padStart(9)}`);
   }
   const verdicts = [];
   for (const [name, m] of Object.entries(data.metrics)) {

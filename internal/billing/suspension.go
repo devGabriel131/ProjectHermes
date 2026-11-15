@@ -46,29 +46,18 @@ func (s *Service) RequestReinstatement(ctx context.Context, studentID uint64, st
 	if strings.TrimSpace(staff) == "" {
 		return nil, errStaffRequired
 	}
-	ctx, cancel := context.WithTimeout(ctx, providerBudget)
-	defer cancel()
-	c, err := s.contractFor(ctx, studentID)
-	if err != nil {
-		return nil, err
-	}
-	// Refuse early, before any provider work; the decision is repeated after the refresh.
-	if _, _, _, err := s.reinstatable(ctx, c.ID); err != nil {
-		return nil, err
-	}
-	err = s.withStaffContract(ctx, c.ID, func(l lease) error {
-		if err := s.reconcileContract(ctx, l); err != nil {
+	return s.staffSync(ctx, studentID,
+		// Refuse early, before any provider work; the decision is repeated after the refresh.
+		func(ctx context.Context, c Contract) error {
+			_, _, _, err := s.reinstatable(ctx, c.ID)
 			return err
-		}
-		if err := s.requestFee(ctx, l, staff); err != nil {
-			return err
-		}
-		return s.markSynced(ctx, l)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return s.ForStudent(ctx, studentID)
+		},
+		func(ctx context.Context, l lease) error {
+			if err := s.reconcileContract(ctx, l); err != nil {
+				return err
+			}
+			return s.requestFee(ctx, l, staff)
+		})
 }
 
 // requestFee reuses the episode's fee obligation or inserts it, runs the persisted invoice

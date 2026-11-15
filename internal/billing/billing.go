@@ -131,14 +131,34 @@ func (s *Service) contractFor(ctx context.Context, studentID uint64) (Contract, 
 	return c, err
 }
 
-// withStaffContract runs fn under the contract's workflow lease. A contract a worker holds is
-// mid-provider-work, so staff get ErrPaymentPending to retry instead of racing it.
-func (s *Service) withStaffContract(ctx context.Context, id uint64, fn func(lease) error) error {
-	err := s.withContract(ctx, id, fn)
-	if errors.Is(err, errContractBusy) {
-		return ErrPaymentPending
+// staffSync runs one staff action on the student's contract: check refuses before any lease or provider
+// work, act runs under the workflow lease, the sync is recorded, and the refreshed summary is returned.
+// A contract the worker holds is mid-provider-work, so staff get ErrPaymentPending to retry.
+func (s *Service) staffSync(ctx context.Context, studentID uint64, check func(context.Context, Contract) error, act func(context.Context, lease) error) (*Summary, error) {
+	ctx, cancel := context.WithTimeout(ctx, providerBudget)
+	defer cancel()
+	c, err := s.contractFor(ctx, studentID)
+	if err != nil {
+		return nil, err
 	}
-	return err
+	if check != nil {
+		if err := check(ctx, c); err != nil {
+			return nil, err
+		}
+	}
+	err = s.withContract(ctx, c.ID, func(l lease) error {
+		if err := act(ctx, l); err != nil {
+			return err
+		}
+		return s.markSynced(ctx, l)
+	})
+	if errors.Is(err, errContractBusy) {
+		return nil, ErrPaymentPending
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.ForStudent(ctx, studentID)
 }
 
 // InvoiceURL returns the current hosted URL of one of the student's invoices. Links expire,
@@ -198,20 +218,5 @@ func (s *Service) PortalURL(ctx context.Context, studentID uint64) (string, erro
 // arm invoices (a past-due invoice is finalized at once, so Stripe then collects), replay a Checkout
 // create, pay a failed installment again when its retry is due, and evaluate deadlines and reactivation.
 func (s *Service) ReconcileStudent(ctx context.Context, studentID uint64) (*Summary, error) {
-	ctx, cancel := context.WithTimeout(ctx, providerBudget)
-	defer cancel()
-	c, err := s.contractFor(ctx, studentID)
-	if err != nil {
-		return nil, err
-	}
-	err = s.withStaffContract(ctx, c.ID, func(l lease) error {
-		if err := s.reconcileContract(ctx, l); err != nil {
-			return err
-		}
-		return s.markSynced(ctx, l)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return s.ForStudent(ctx, studentID)
+	return s.staffSync(ctx, studentID, nil, s.reconcileContract)
 }
