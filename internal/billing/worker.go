@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/stripe/stripe-go/v87"
@@ -18,6 +19,7 @@ import (
 
 const (
 	workerTick      = 5 * time.Second
+	workerLoops     = 4
 	eventBatch      = 25
 	contractBatch   = 10
 	retryMin        = 5 * time.Second
@@ -50,9 +52,19 @@ type lease struct {
 
 // ---- worker loop and queues
 
-// Run drains due webhook events, then due contracts, every workerTick or as soon as a webhook is stored, until ctx ends.
+// Run drains due webhook events, then due contracts, on workerLoops concurrent loops until ctx ends.
+// Claims skip rows another loop holds, so no event or contract is worked twice at once.
 func (s *Service) Run(ctx context.Context) {
 	ctx = logging.WithOperation(ctx, "billing_worker")
+	var loops sync.WaitGroup
+	for range workerLoops {
+		loops.Go(func() { s.loop(ctx) })
+	}
+	loops.Wait()
+}
+
+// loop drains every workerTick or as soon as a webhook is stored; one wake reaches one idle loop.
+func (s *Service) loop(ctx context.Context) {
 	ticker := time.NewTicker(workerTick)
 	defer ticker.Stop()
 	for {
@@ -102,17 +114,33 @@ func (s *Service) drainEvents(ctx context.Context) {
 	}
 }
 
+// claimContract leases the most overdue contract, skipping contracts another worker holds.
+func (s *Service) claimContract(ctx context.Context) (c Contract, l lease, found bool, err error) {
+	l.token = rand.Text()
+	res := s.db.WithContext(ctx).Raw(`
+UPDATE billing_contracts SET lease_token = ?, lease_expires_at = `+leaseSQL+`, updated_at = now()
+ WHERE id = (SELECT id FROM billing_contracts WHERE `+contractsDue+` ORDER BY next_sync_at ASC NULLS FIRST LIMIT 1 FOR UPDATE SKIP LOCKED)
+RETURNING *`, l.token).Scan(&c)
+	l.id = c.ID
+	return c, l, res.RowsAffected == 1, res.Error
+}
+
+// drainContracts syncs up to contractBatch due contracts, each claimed just before it runs, so
+// concurrent loops never sync the same contract and no lease ages while earlier contracts sync.
 func (s *Service) drainContracts(ctx context.Context) {
-	var due []Contract
-	if err := s.db.WithContext(ctx).Where(contractsDue).Order("next_sync_at ASC NULLS FIRST").Limit(contractBatch).Find(&due).Error; err != nil {
-		s.logFailure(ctx, "contract_claim", "", err)
-		return
-	}
-	for _, c := range due {
+	for range contractBatch {
 		if ctx.Err() != nil {
 			return
 		}
-		s.syncContract(ctx, c)
+		c, l, found, err := s.claimContract(ctx)
+		if err != nil {
+			s.logFailure(ctx, "contract_claim", "", err)
+			return
+		}
+		if !found {
+			return
+		}
+		s.syncContract(ctx, c, l)
 	}
 }
 
@@ -396,26 +424,24 @@ func (s *Service) mark(ctx context.Context, l lease, reason string, set bool) er
 
 // ---- contract reconciliation
 
-// syncContract reconciles one due contract under its workflow lease.
-func (s *Service) syncContract(ctx context.Context, c Contract) {
-	err := s.withContract(ctx, c.ID, func(l lease) error {
-		err := s.reconcileContract(ctx, l)
-		if err == nil {
-			err = s.markSynced(ctx, l)
-		}
-		if err != nil && ctx.Err() == nil { // retry later; token-guarded so a lost lease writes nothing
-			saveCtx, cancel := persistCtx(ctx)
-			defer cancel()
-			if res := s.db.WithContext(saveCtx).Model(&Contract{}).Where("id = ? AND lease_token = ?", l.id, l.token).
-				Update("next_sync_at", time.Now().UTC().Add(contractRetry)); res.Error != nil {
-				s.logFailure(ctx, "contract_retry", c.Reference, res.Error)
-			}
-		}
-		return err
-	})
-	if err != nil && !errors.Is(err, errContractBusy) && ctx.Err() == nil {
-		s.logFailure(ctx, "contract_sync", c.Reference, err)
+// syncContract reconciles one claimed contract, then gives its lease back.
+func (s *Service) syncContract(ctx context.Context, c Contract, l lease) {
+	defer s.release(ctx, l)
+	err := s.reconcileContract(ctx, l)
+	if err == nil {
+		err = s.markSynced(ctx, l)
 	}
+	if err == nil || ctx.Err() != nil {
+		return
+	}
+	// Retry later; token-guarded so a lost lease writes nothing.
+	saveCtx, cancel := persistCtx(ctx)
+	defer cancel()
+	if res := s.db.WithContext(saveCtx).Model(&Contract{}).Where("id = ? AND lease_token = ?", l.id, l.token).
+		Update("next_sync_at", time.Now().UTC().Add(contractRetry)); res.Error != nil {
+		s.logFailure(ctx, "contract_retry", c.Reference, res.Error)
+	}
+	s.logFailure(ctx, "contract_sync", c.Reference, err)
 }
 
 // reconcileContract refreshes everything Stripe owns for one contract: in-flight Checkout

@@ -6,17 +6,17 @@ The worker never applies an event body. A stored event holds only `id`, `event_t
 
 ## Tick
 
-`Service.Run` drains once at start, then again on every 5 s tick or as soon as it is woken. A pass handles at most `eventBatch` events, each claimed just before it runs, followed by one bounded batch of contracts; it does not loop until the queues are empty.
+`Service.Run` starts `workerLoops` (4) identical loops. Each drains once at start, then again on every 5 s tick or as soon as it is woken. A pass handles at most `eventBatch` events, each claimed just before it runs, followed by up to `contractBatch` contracts, each also claimed just before it runs; it does not loop until the queues are empty. Claims skip rows another loop holds, so concurrent loops never work the same event or contract. Several loops keep the first sync after funding ahead of a short installment spacing: a backlog of due contracts would delay `scheduleInvoices` past the installment's `due_at`, and `arm` would then finalize the invoice late ([Invoices](invoices.md)).
 
 ```mermaid
 sequenceDiagram
     participant WH as Webhook handler
-    participant W as Run loop
+    participant W as Run loop (workerLoops copies)
     participant DB as PostgreSQL
     participant S as Stripe
     WH->>DB: INSERT billing_webhook_events ON CONFLICT DO NOTHING
     WH-->>W: wake channel, capacity 1
-    Note over W: first drain at start, then each 5 s tick or wake
+    Note over W: first drain at start, then each 5 s tick or wake, per loop
     loop at most 25 events, until none is due or shutting down
         W->>DB: claimEvent, one UPDATE of the oldest due event chosen FOR UPDATE SKIP LOCKED, lease_token and lease_expires_at now+60 s
         W->>S: handleEvent retrieves the referenced object
@@ -24,21 +24,21 @@ sequenceDiagram
         W->>DB: sync the attempt, invoice, payment or invoices
         W->>DB: finish, token guarded, processed_at or retry_at
     end
-    W->>DB: drainContracts, plain SELECT of due contracts, LIMIT 10
-    loop each due contract unless shutting down
-        W->>DB: syncContract, withContract lease by compare-and-set
+    loop up to 10 contracts, until none is due or shutting down
+        W->>DB: claimContract, one UPDATE of the most overdue due contract chosen FOR UPDATE SKIP LOCKED, lease_token and lease_expires_at now+60 s
         W->>S: reconcileContract, see pipeline below
         W->>DB: markSynced writes next_sync_at, lease released
     end
 ```
 
-Wake sources: a stored webhook (`Webhook`) and a staff field edit (`TouchContract`). A wake also resets the ticker. The channel holds one signal, so a burst of webhooks produces one extra pass.
+Wake sources: a stored webhook (`Webhook`) and a staff field edit (`TouchContract`). One wake reaches one idle loop and resets that loop's ticker; the other loops keep their own tick. The channel holds one signal, so a burst of webhooks produces one extra pass.
 
 | Constant | Value | Meaning |
 |---|---|---|
 | `workerTick` | 5 s | Pass interval |
+| `workerLoops` | 4 | Concurrent loops |
 | `eventBatch` | 25 | Most events handled per pass |
-| `contractBatch` | 10 | Contracts synced per pass |
+| `contractBatch` | 10 | Most contracts synced per pass |
 | `leaseSQL` | 60 s | Lease length for events and contracts |
 | `retryMin` / `retryMax` | 5 s / 15 min | Event backoff start and cap |
 | `contractRetry` | 1 min | Fixed delay after a failed contract sync |
@@ -50,13 +50,13 @@ Wake sources: a stored webhook (`Webhook`) and a staff field edit (`TouchContrac
 
 | | Webhook events | Contracts |
 |---|---|---|
-| Claim | `claimEvent`: one `UPDATE ... RETURNING` of the oldest due row (`processed_at IS NULL`, retry time due, lease expired), chosen by a subquery with `FOR UPDATE SKIP LOCKED` and served by the partial index `idx_pending_events` (`created_at WHERE processed_at IS NULL`) | Plain `SELECT` of due rows (`next_sync_at` null or due, lease expired), `next_sync_at ASC NULLS FIRST`, no row lock |
-| Lease taken | By the claim itself, with a fresh random `lease_token`, right before the event runs | Per contract by `withContract`: `UPDATE ... WHERE lease_expires_at IS NULL OR lease_expires_at <= now()`; zero rows means `errContractBusy` |
+| Claim | `claimEvent`: one `UPDATE ... RETURNING` of the oldest due row (`processed_at IS NULL`, retry time due, lease expired), chosen by a subquery with `FOR UPDATE SKIP LOCKED` and served by the partial index `idx_pending_events` (`created_at WHERE processed_at IS NULL`) | `claimContract`: the same shape over the most overdue due row (`next_sync_at` null or due, lease expired), `next_sync_at ASC NULLS FIRST`, `FOR UPDATE SKIP LOCKED` |
+| Lease taken | By the claim itself, with a fresh random `lease_token`, right before the event runs | By the claim itself, right before the contract syncs. Events and staff actions take it with `withContract`: `UPDATE ... WHERE lease_expires_at IS NULL OR lease_expires_at <= now()`; zero rows means `errContractBusy` |
 | Renewed | Never: no event waits behind another while leased | `renew` before every Stripe stage; fails with `errLeaseLost` when expired or the token changed |
 | Fencing | `processEvent` writes its outcome only `WHERE id = ? AND lease_token = ?` | Most writes go through `leased`: a transaction that locks the Enrollment row, then the Contract row, checks token and expiry, and for policy code the Student row (`markSynced`, `contractRetry` and `release` update the contract directly `WHERE id = ? AND lease_token = ?`) |
 | Released | The finishing update clears token and expiry | `release` in a `defer`, on a 5 s detached context |
 
-Only event claims use `SKIP LOCKED`. The contract lease is a compare-and-set, so a second claimer simply gets zero rows. Lock order is Enrollment, then Contract, then Student, the same order checkout and contact edits take.
+Both worker claims use `SKIP LOCKED`. A contract claimed one at a time cannot be synced twice at once, and a loop never reads a stale batch of contracts another loop just finished. The `withContract` lease is a compare-and-set, so a second claimer simply gets zero rows. Lock order is Enrollment, then Contract, then Student, the same order checkout and contact edits take.
 
 Staff actions share the contract lease. `ReconcileStudent`, `RequestReinstatement` and `Withdraw` go through `staffSync`, which turns `errContractBusy` into `ErrPaymentPending` (management answers 409 "A payment is still pending. Try again shortly."). Staff find the contract through the Student row, which exists only after funding, so in production they sync funded contracts; the pipeline they run is the worker's own.
 
@@ -66,7 +66,7 @@ Staff actions share the contract lease. `ReconcileStudent`, `RequestReinstatemen
 |---|---|---|
 | Success | `processed_at = now()`, lease cleared | `last_synced_at = now`, `next_sync_at = nextSyncAt(...)` |
 | Error | `retry_count + 1`, `retry_at = now + backoff` (5 s doubling: 5 s, 10 s, 20 s ... capped at 15 min), logged | `next_sync_at = now + 1 min`, only if the worker's token still holds the lease; logged |
-| `errContractBusy` | `retry_at = now + 5 s`, count unchanged, not logged | Nothing written; the contract stays due and the next pass retries |
+| `errContractBusy` | `retry_at = now + 5 s`, count unchanged, not logged | Worker: unreachable, the claim skips held contracts. Staff: `ErrPaymentPending` |
 | Shutdown (`ctx` cancelled) | Handed back unchanged: lease cleared, no count, no log | Nothing written |
 
 Retries never stop and there is no dead-letter queue. Processed events are never deleted; nothing in the app removes `billing_webhook_events` rows. A missing local row or an initial Stripe 404 during session or payment-intent lookup counts as success (`ignoreMissing`), so unrelated objects never retry; other 404s deeper in handlers retry with backoff.
@@ -93,7 +93,7 @@ An event whose Payment row does not exist yet is dropped as processed: the invoi
 
 ```mermaid
 flowchart TD
-    A["1. withContract: take the lease"] --> B["2. Active attempts: resumeCreate or syncAttempt"]
+    A["1. Lease: claimContract (worker) or withContract (events, staff)"] --> B["2. Active attempts: resumeCreate or syncAttempt"]
     B -->|"Session paid, contract unfunded"| F["fund: one transaction, dates obligations, records the Customer, links.Enroll"]
     F --> D
     B --> D{"3. funded_at set?"}
@@ -132,7 +132,7 @@ Staff Reconcile is therefore not charge-free: it can create and arm invoices (a 
 
 `reconcileContract` (step 5) owns invoice scheduling; the only other caller of `scheduleInvoices` is the `customer.updated` route. Funding leaves `next_sync_at = NULL`, so a contract funded by an event is synced by `drainContracts` in the same pass (`NULLS FIRST`), and one funded inside `reconcileContract` (worker sync or staff action) reaches step 5 in that same call. Consequences:
 
-- With more than `contractBatch` (10) contracts funded in one pass, the rest are scheduled on the next pass, one tick (5 s) later.
+- With more due contracts than the loops drain in one pass (`workerLoops` × `contractBatch`, 40), the rest are scheduled on the next pass of any loop, at most one tick (5 s) later.
 - A failed scheduling step fails the contract sync, which retries after `contractRetry` (1 min), not on the event backoff.
 - A replayed paid Session of a funded contract does nothing; the contract's own syncs resume any unfinished scheduling.
 
@@ -155,7 +155,7 @@ Other writers move the schedule: `beginCheckout` sets it one minute ahead for ev
 
 ## Graceful stop
 
-The worker context derives from the process signal context, so the worker stops at the signal, in parallel with the HTTP drain; only the wait for it happens after `serve` returns (order: [Startup and shutdown](../operations/startup-shutdown.md)). `drainEvents` and `drainContracts` check the context between items; an in-flight event is handed back untouched. Writes that follow a Stripe result use `persistCtx` (`persistBudget`, 5 s, detached from cancellation), so an outcome already obtained is still recorded. Failures during shutdown are not logged.
+The worker context derives from the process signal context, so the worker stops at the signal, in parallel with the HTTP drain; only the wait for it happens after `serve` returns (order: [Startup and shutdown](../operations/startup-shutdown.md)). `Run` returns once every loop has exited. `drainEvents` and `drainContracts` check the context between items; an in-flight event is handed back untouched. Writes that follow a Stripe result use `persistCtx` (`persistBudget`, 5 s, detached from cancellation), so an outcome already obtained is still recorded. Failures during shutdown are not logged.
 
 ## Deliberate choices
 
@@ -164,7 +164,7 @@ The worker context derives from the process signal context, so the worker stops 
 | Each event claimed just before it runs, outcome guarded by `lease_token` | No lease ages behind earlier events, so nothing renews it; a handler slower than 60 s can be reclaimed, and its stale finish writes nothing |
 | Funding schedules no invoices | `reconcileContract` stays the single scheduling owner ([Funding and scheduling](#funding-and-scheduling)) |
 | `errContractBusy` retries after 5 s without raising the count | Staff or another caller holding the lease must not inflate the backoff |
-| Contracts use a plain select plus compare-and-set, not `SKIP LOCKED` | The lease update is the fence; a lost race costs one idle update |
+| Contracts claimed one at a time with `SKIP LOCKED`, like events | Concurrent loops never re-sync a contract another loop just released; a batch read up front would repeat the Stripe calls |
 | Contract retry is a fixed minute | No retry counter column exists (`ponytail` note on `contractRetry`) |
 | Every sync re-reads all of the contract's invoices | At most six per contract; narrowing is deferred (`ponytail` note on `reconcileContract`) |
 | `persistCtx` in `leased`, `release` and the event finish | Records Stripe outcomes after a shutdown or request timeout |
@@ -174,7 +174,7 @@ The worker context derives from the process signal context, so the worker stops 
 
 ## Source
 
-- `internal/billing/worker.go`: `Run`, `drain`, `claimEvent`, `drainEvents`, `drainContracts`, `processEvent`, `backoff`, `logFailure`, `handleEvent`, `syncSession`, `paymentIntentOf`, `withContract`, `release`, `renew`, `leased`, `leasedStudent`, `markContract`, `mark`, `syncContract`, `reconcileContract`, `syncCustomerContact`, `markSynced`, `nextSyncAt`, `workerTick`, `eventBatch`, `contractBatch`, `retryMin`, `retryMax`, `contractRetry`, `activeSyncEvery`, `auditEvery`, `leaseSQL`, `eventsDue`, `errContractBusy`, `errLeaseLost`, `ignoreMissing`
+- `internal/billing/worker.go`: `Run`, `loop`, `drain`, `claimEvent`, `drainEvents`, `claimContract`, `drainContracts`, `processEvent`, `backoff`, `logFailure`, `handleEvent`, `syncSession`, `paymentIntentOf`, `withContract`, `release`, `renew`, `leased`, `leasedStudent`, `markContract`, `mark`, `syncContract`, `reconcileContract`, `syncCustomerContact`, `markSynced`, `nextSyncAt`, `workerTick`, `workerLoops`, `eventBatch`, `contractBatch`, `retryMin`, `retryMax`, `contractRetry`, `activeSyncEvery`, `auditEvery`, `leaseSQL`, `eventsDue`, `contractsDue`, `errContractBusy`, `errLeaseLost`, `ignoreMissing`
 - `internal/billing/checkout.go`: `syncAttempt`, `recordDecline`, `resumeCreate`, `creatingGrace`, `moveAttempt`, `fund`, `savePayment`, `syncPayment`
 - `internal/billing/invoices.go`: `scheduleInvoices`, `syncInvoice`, `holdInvoice`, `store`, `invoiceStateOf`, `cancelPending`, `cancelObligations`
 - `internal/billing/withdraw.go`: `Withdraw`, `refundPayments`
