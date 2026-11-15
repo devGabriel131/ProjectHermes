@@ -38,12 +38,12 @@
     <p class="student-request-error" role="alert" hidden></p>
     <section class="management-panel" aria-labelledby="student-table-heading">
       <h2 id="student-table-heading" class="visually-hidden">Student records</h2>
-      {{/* One GET form holds every filter: a change swaps just the records, so focus stays on the control,
-        live refreshes include it, and it still submits without JavaScript. hx-history="false" keeps
-        student records out of htmx's history snapshots. */}}
+      {{/* One GET form holds every filter: a change, or a pause in typing a name, swaps just the records, so focus
+        stays on the control, live refreshes include it, and it still submits without JavaScript. hx-history="false"
+        keeps student records out of htmx's history snapshots. */}}
       <form id="student-filter" class="student-filter" action="/management/students" method="get" autocomplete="off"
-        aria-label="Filter students" hx-get="/management/students" hx-trigger="change" hx-target="#student-records"
-        hx-sync="this:replace" hx-history="false">
+        aria-label="Filter students" hx-get="/management/students" hx-target="#student-records"
+        hx-trigger="change, submit, input from:#student-search delay:300ms" hx-sync="this:replace" hx-history="false">
         <div class="student-filter-status" role="radiogroup" aria-label="Status">
           <label><input type="radio" name="status" value=""{{if not .Status}} checked{{end}}>All</label>
           <label><input type="radio" name="status" value="active"{{if eq .Status "active"}} checked{{end}}>Active</label>
@@ -51,6 +51,9 @@
           <label><input type="radio" name="status" value="withdrawn"{{if eq .Status "withdrawn"}} checked{{end}}>Withdrawn</label>
         </div>
         <div class="student-filter-selects">
+          <label>Search
+            <input id="student-search" type="search" name="name" value="{{.Name}}" placeholder="Student name">
+          </label>
           <label>Cohort
             <select name="cohort">
               <option value="">All cohorts</option>
@@ -88,7 +91,7 @@
     <tbody>{{range .Students}}{{template "student-row" .}}{{end}}</tbody>
   </table>
 </div>
-{{else if or .Status .Cohort .Group}}
+{{else if or .Status .Cohort .Group .Name}}
 <div class="student-empty">
   <h3>No matching students</h3>
   <p>No students match these filters. <a href="/management/students">Show all students</a></p>

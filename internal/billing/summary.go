@@ -60,11 +60,12 @@ type Summary struct {
 }
 
 // ReturnStatus holds customer-facing status returned from Stripe-hosted checkout.
-// Contains only payment status, amount, and the decline reason group; never leaks student identity, contact, or history.
+// Contains only payment status, amount, the decline reason group and the shared link token; never leaks student identity, contact, or history.
 type ReturnStatus struct {
 	Status      string
 	AmountCents int64
 	Decline     string // reason group when Status is declined: funds, card_details, authentication or generic
+	LinkToken   string // set when Status is declined: the enrollment link, so the page can lead back to the payment options
 }
 
 // ForEnrollment returns the summary for enrollmentID, or nil before checkout creates its contract.
@@ -217,8 +218,8 @@ func (s *Service) CancelStatus(ctx context.Context, attemptRef string) (ReturnSt
 	return s.attemptOutcome(ctx, "reference = ?", attemptRef, true)
 }
 
-// attemptOutcome loads one attempt and exposes only status, amount and the decline reason group,
-// never student identity, contact, or payment history.
+// attemptOutcome loads one attempt and exposes only status, amount, the decline reason group and
+// the link token behind a decline, never student identity, contact, or payment history.
 func (s *Service) attemptOutcome(ctx context.Context, query, value string, cancelled bool) (ReturnStatus, error) {
 	if value == "" {
 		return ReturnStatus{}, ErrUnavailable
@@ -240,10 +241,24 @@ func (s *Service) attemptOutcome(ctx context.Context, query, value string, cance
 		// This guard stops a decline followed by a successful retry from showing "declined".
 	case a.declined():
 		r.Status, r.Decline = "declined", declineReason(*a.DeclineCode)
+		if r.LinkToken, err = s.linkToken(ctx, a.ContractID); err != nil {
+			return ReturnStatus{}, err
+		}
 	case slices.Contains(idleAttemptStates, a.State):
 		r.Status = "not_completed"
 	}
 	return r, nil
+}
+
+// linkToken returns the enrollment link a contract's enrollment came through. The token opens only the
+// welcome gate, so handing it to the holder of an attempt reference leaks no customer data.
+func (s *Service) linkToken(ctx context.Context, contractID uint64) (token string, err error) {
+	err = s.db.WithContext(ctx).Raw(`
+		SELECT l.token FROM billing_contracts c
+		JOIN enrollments e ON e.id = c.enrollment_id
+		JOIN links l ON l.id = e.link_id
+		WHERE c.id = ?`, contractID).Scan(&token).Error
+	return token, err
 }
 
 // idleAttemptStates are where nothing is paying: the Session waits for a try (open) or the attempt

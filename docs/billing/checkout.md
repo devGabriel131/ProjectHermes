@@ -171,7 +171,7 @@ sequenceDiagram
 
 ## Return status
 
-`ReturnStatus(sessionID)` (the `success_url` return) and `CancelStatus(attemptRef)` (the `cancel_url` back link) in `summary.go` read one attempt, by `stripe_session_id` or by `reference`. Both share `attemptOutcome` and return only a status, the attempt's first amount in cents and, for `declined`, a reason group. Neither funds and neither exposes identity.
+`ReturnStatus(sessionID)` (the `success_url` return) and `CancelStatus(attemptRef)` (the `cancel_url` back link) in `summary.go` read one attempt, by `stripe_session_id` or by `reference`. Both share `attemptOutcome` and return only a status, the attempt's first amount in cents and, for `declined`, a reason group and the enrollment link's token (`linkToken`, so the page can lead back to the payment options; the token opens only the welcome gate). Neither funds and neither exposes identity.
 
 | Attempt state | `ReturnStatus` | `CancelStatus` |
 |---|---|---|
@@ -188,7 +188,7 @@ A card decline on hosted Checkout leaves the Session `open`: Stripe shows the er
 
 A stored code only counts while nothing is paying (`idleAttemptStates`: `open`, `failed`, `expired`), so a later try in `processing` or `paid` supersedes it. `declineReason` groups the code for customers: `funds` (`insufficient_funds`, `card_velocity_exceeded`), `card_details` (expired card, bad CVC, number, ZIP or expiry), `authentication`, and `generic` for everything else, including lost, stolen and fraud codes, as Stripe advises. The group shows in three places:
 
-- the "Pago rechazado" variant of `/payments/return`, reached through the back link;
+- the "Pago rechazado" variant of `/payments/return`, reached through the back link, with a button back to `/customer/{token}/payments`;
 - a callout on `/customer/{token}/payments` (`Summary.Decline`, set only while the unfunded contract's newest attempt is declined);
 - the "Payment declined" badge on `Awaiting payment` rows of the staff links list (`DeclinedEnrollments`).
 
@@ -207,7 +207,7 @@ A stored code only counts while nothing is paying (`idleAttemptStates`: `open`, 
 - `internal/billing/billing.go`: `ErrUnavailable`, `ErrPlanLocked`, `ErrUnknownPlan`, `providerBudget`, `persistBudget`, `persistCtx`
 - `internal/billing/withdraw.go`: `Withdraw`
 - `internal/billing/contact.go`: `inFlightAttemptStates`, `UpdateContact`, `ContactEditable`
-- `internal/billing/summary.go`: `ReturnStatus`, `CancelStatus`, `attemptOutcome`, `declined`, `declineReason`, `idleAttemptStates`, `DeclinedEnrollments`
+- `internal/billing/summary.go`: `ReturnStatus`, `CancelStatus`, `attemptOutcome`, `linkToken`, `declined`, `declineReason`, `idleAttemptStates`, `DeclinedEnrollments`
 - `internal/billing/stripe.go`: `stripeLocale`, `NewStripeClient`, `priceKey`
 - `internal/billing/models.go`: `CheckoutAttempt`, `CustomerEmail`, `idx_active_checkout_attempt`
 - `internal/billing/checkout_test.go`: `TestCheckoutConcurrencyAndRecovery`, `TestCheckoutCreateResumes`, `TestReattemptIsScheduled`, `TestCheckoutDeclineIsRecorded`

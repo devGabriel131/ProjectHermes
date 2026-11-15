@@ -81,6 +81,7 @@ type Filter struct {
 	Status string // "", "active", "suspended" or "withdrawn"; any other value keeps every student
 	Cohort string // a YYYY-MM month, or NoCohort
 	Group  string // one of GroupOptions
+	Name   string // a part of the name, ignoring case and Spanish accents
 }
 
 // List returns retained students matching filter, newest first, regardless of source access.
@@ -104,6 +105,11 @@ func (s *Store) List(ctx context.Context, filter Filter) ([]Student, error) {
 	}
 	if filter.Group != "" {
 		query = query.Where(`"group" = ?`, filter.Group)
+	}
+	if filter.Name != "" {
+		// Folding both sides lets "jose" find "José"; strpos reads the text literally, so % and _ need no escaping.
+		query = query.Where(`strpos(lower(translate(name, @accented, @plain)), lower(translate(@name, @accented, @plain))) > 0`,
+			map[string]any{"name": filter.Name, "accented": "ÁÉÍÓÚÜÑáéíóúüñ", "plain": "AEIOUUNaeiouun"})
 	}
 	var records []Student
 	if err := query.Find(&records).Error; err != nil {

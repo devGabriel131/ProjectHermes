@@ -67,7 +67,7 @@ stateDiagram-v2
 3. **Attribute** every missed deadline; open a new episode with `started_at` = the deadline when none covers it. Installments released in step 2 that truly missed are attributed again here.
 4. **Flip the student**: if an episode was created or an open one corrected, set `is_active` to "no open episode remains".
 
-`cancelFees` then finishes the Stripe side of cancelled fees: a draft invoice is deleted, an open or uncollectible one is voided, remaining goes to 0. A fee that was already paid is left alone and gets the obligation review `payment_review` ([Invoices](invoices.md)). Nothing is refunded or recharged.
+`cancelObligations` then finishes the Stripe side of cancelled fees ([Invoices](invoices.md#cancellation)). A fee that was already paid is left alone and gets the obligation review `payment_review` in the same sync, because fee invoices are read after the correction. Nothing is refunded or recharged.
 
 ## Reinstatement
 
@@ -108,7 +108,7 @@ sequenceDiagram
 
 ### Reactivation
 
-`evaluateReactivation` is step 9 of every sync, so it runs on the sync after `invoice.paid`. It reinstates exactly once, when all hold:
+`evaluateReactivation` is step 10 of every sync, so it runs on the sync after `invoice.paid`. It reinstates exactly once, when all hold:
 
 1. An open episode has `reinstatement_requested_at` set (staff asked).
 2. That episode's fee is `collect`, remaining 0 and `first_settled_at` set.

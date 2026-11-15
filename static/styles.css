@@ -1110,7 +1110,7 @@ button.management-button-danger:enabled:hover {
   font-weight: 500;
 }
 
-.management .student-filter-selects select {
+.management .student-filter-selects :is(select, input) {
   min-height: 2rem;
 }
 
@@ -1583,7 +1583,7 @@ button.management-button-danger:enabled:hover {
 /* Fingers get 44px targets; pointers keep the denser desk layout. Last, so it wins ties. */
 @media (pointer: coarse) {
   .management :is(button, select, input:not([type="radio"], [type="hidden"])),
-  .management .student-filter-selects select,
+  .management .student-filter-selects :is(select, input),
   .management-nav-link,
   .management-back-link {
     min-height: 2.75rem;

@@ -47,7 +47,8 @@
 {{else if eq .Status "declined"}}
 <div id="payment-return-status" data-status="declined" role="status">
   <span class="payment-return-icon">{{template "icon-alert"}}</span>
-  <p><strong>Pago rechazado.</strong> {{template "decline-reason" .Decline}} No se realizó ningún cobro. Para intentarlo con otra tarjeta, vuelve a abrir tu enlace de matrícula.</p>
+  <p><strong>Pago rechazado.</strong> {{template "decline-reason" .Decline}} No se realizó ningún cobro y tu información sigue guardada.</p>
+  <a class="customer-primary" href="/customer/{{.LinkToken}}/payments">Volver a las opciones de pago</a>
 </div>
 {{else}}
 <div id="payment-return-status" data-status="canceled" role="status">

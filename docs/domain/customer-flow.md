@@ -146,7 +146,7 @@ An unfunded contract whose newest attempt ended its latest try in a decline show
 
 ## Payment return
 
-`GET /payments/return` needs no token. It reads one persisted attempt through `ReturnStatus` (Checkout's `success_url`) or `CancelStatus` (its back link) and exposes only status, amount and a decline reason group, never identity, contact or payment history. Visiting it never changes financial state.
+`GET /payments/return` needs no token. It reads one persisted attempt through `ReturnStatus` (Checkout's `success_url`) or `CancelStatus` (its back link) and exposes only status, amount, a decline reason group and, for `declined`, the link token, never identity, contact or payment history. Visiting it never changes financial state.
 
 | Input | Result |
 |---|---|
@@ -156,7 +156,7 @@ An unfunded contract whose newest attempt ended its latest try in a decline show
 | `?attempt=` unknown | 404 |
 | neither | 404 |
 
-`declined` renders "Pago rechazado" with a reason sentence per group (`decline-reason` template: funds, card details, authentication, generic), says nothing was charged and points the customer to reopen the enrollment link.
+`declined` renders "Pago rechazado" with a reason sentence per group (`decline-reason` template: funds, card details, authentication, generic), says nothing was charged and the information is still saved, and offers a "Volver a las opciones de pago" button to `/customer/{token}/payments`. Nothing is deleted on a decline: the enrollment, its details and the previously chosen plan stay, and the plans page preselects that plan. The page then needs the `enrollment_session` cookie, which is host-scoped, so `PUBLIC_BASE_URL` (the host of Checkout's back link) must be the host customers use; on another host the button lands on the welcome page.
 
 While `pending`, the status block polls itself with `hx-trigger="every 1.5s"` at `ReturnPollURL`, which carries the next `polls` count (a negative or malformed count reads as 0). At 80 (`maxReturnPolls`), about two minutes, `ReturnPollURL` is empty: the block stops and asks the customer to refresh. A failed poll swaps in a retry block that keeps polling until the cap. Without JavaScript a `<noscript>` meta refresh reloads every 3 seconds with the same counter. The back link (`?attempt=`) never polls.
 

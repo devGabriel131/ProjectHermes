@@ -166,6 +166,9 @@ func TestPaymentReturnRoute(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(body, "Pago rechazado") || !strings.Contains(body, "fondos") {
 		t.Fatalf("declined attempt: status %d, want 200 with decline reason: %s", rec.Code, body)
 	}
+	if !strings.Contains(body, `href="/customer/`+parent.Token+`/payments"`) || strings.Contains(body, "vuelve a abrir") {
+		t.Fatalf("declined page must link back to the payment options instead of telling the customer to find the link: %s", body)
+	}
 	if strings.Contains(body, "hx-trigger") || strings.Contains(body, "Return Student") {
 		t.Fatalf("declined page must not poll or leak student details: %s", body)
 	}

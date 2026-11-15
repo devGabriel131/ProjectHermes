@@ -38,11 +38,11 @@ type studentPageData struct {
 	Field    *studentFieldView
 	Modal    bool
 	// The roster's filters, "" for all: Status is "active", "suspended" or "withdrawn", Cohort one of
-	// Cohorts, and Group one of Groups.
-	Status, Cohort, Group string
-	Cohorts               []string // every cohort with a student, newest first
-	Groups                []string
-	Billing               *billing.Summary // nil when the student has no billing contract.
+	// Cohorts, Group one of Groups, and Name a part of a student's name.
+	Status, Cohort, Group, Name string
+	Cohorts                     []string // every cohort with a student, newest first
+	Groups                      []string
+	Billing                     *billing.Summary // nil when the student has no billing contract.
 }
 
 // studentDisplay evaluates the field registry once for each rendered student.
@@ -146,8 +146,9 @@ func (s *site) studentList(w http.ResponseWriter, r *http.Request) {
 	data := studentPageData{
 		Staff: s.staff(ctx), Fields: students.StaffFields(), Cohorts: cohorts, Groups: students.GroupOptions(),
 		Status: query.Get("status"), Cohort: query.Get("cohort"), Group: query.Get("group"),
+		Name: strings.TrimSpace(query.Get("name")),
 	}
-	var filter students.Filter
+	filter := students.Filter{Name: data.Name}
 	if slices.Contains([]string{"active", "suspended", "withdrawn"}, data.Status) {
 		filter.Status = data.Status
 	} else {
@@ -179,7 +180,7 @@ func (s *site) studentList(w http.ResponseWriter, r *http.Request) {
 		// follows the shown filters, so a reload or bookmark reopens them.
 		name = "student-records"
 		shown := url.Values{}
-		for key, value := range map[string]string{"status": data.Status, "cohort": data.Cohort, "group": data.Group} {
+		for key, value := range map[string]string{"status": data.Status, "cohort": data.Cohort, "group": data.Group, "name": data.Name} {
 			if value != "" {
 				shown.Set(key, value)
 			}

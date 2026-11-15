@@ -769,7 +769,11 @@ func TestCheckoutDeclineIsRecorded(t *testing.T) {
 	}
 	svc.DrainForTest(ctx)
 
-	declinedStatus := billing.ReturnStatus{Status: "declined", Decline: "funds", AmountCents: 60000}
+	var link links.Link
+	if err := db.First(&link).Error; err != nil {
+		t.Fatalf("load link: %v", err)
+	}
+	declinedStatus := billing.ReturnStatus{Status: "declined", Decline: "funds", AmountCents: 60000, LinkToken: link.Token}
 	pendingStatus := billing.ReturnStatus{Status: "pending", AmountCents: 60000}
 	assertDeclined := func(wantDeclined bool, wantCancel billing.ReturnStatus) {
 		t.Helper()

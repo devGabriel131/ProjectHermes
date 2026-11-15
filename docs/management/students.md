@@ -8,12 +8,12 @@ An enrollment's Student row exists only after payment: `links.Enroll` creates it
 
 `GET /management/students` lists students newest first (`created_at DESC, id DESC`), unpaginated. Columns are the eight staff fields (Name, Email, Phone, Municipality, Date of birth, Gender, PIN, Group), then Cohort (shown as "November 2026" by `CohortLabel`), Enrolled and a Status badge: Withdrawn when `withdrawn_at` is set, else Active or Suspended from `is_active`. The first cell is the link that opens the dialog. Empty states: "No students yet" and, under filters, "No matching students" with a link that clears them.
 
-The filters are one GET form (`#student-filter`): a Status radio group, a Cohort select and a Group select. A change sends `hx-get` and swaps only `#student-records`, so focus stays on the control. Without JavaScript a `<noscript>` Apply button submits the same form. Set filters combine (a student must match every one).
+The filters are one GET form (`#student-filter`): a Status radio group (All, Active, Suspended, Withdrawn), a name Search box (`name`), a Cohort select and a Group select. A change sends `hx-get` and swaps only `#student-records`, so focus stays on the control; typing in Search sends it after a 300 ms pause, and Enter sends it at once. Without JavaScript a `<noscript>` Apply button (or Enter in Search) submits the same form. Set filters combine (a student must match every one).
 
 ```mermaid
 flowchart TD
-    Query["GET /management/students with status, cohort, group"] --> Status{"status is active or suspended?"}
-    Status -->|"yes"| SetActive["filter.Active set"]
+    Query["GET /management/students with status, cohort, group, name"] --> Status{"status is active, suspended or withdrawn?"}
+    Status -->|"yes"| SetStatus["filter.Status set"]
     Status -->|"no"| ClearStatus["status reset to empty"]
     Query --> Cohort{"cohort is in roster.Cohorts?"}
     Cohort -->|"yes"| SetCohort["filter.Cohort set"]
@@ -21,12 +21,14 @@ flowchart TD
     Query --> Group{"group is in GroupOptions?"}
     Group -->|"yes"| SetGroup["filter.Group set"]
     Group -->|"no"| ClearGroup["group reset to empty"]
+    Query --> Name["name trimmed; non-empty sets filter.Name"]
     SetStatus --> List["roster.List with the valid filters"]
     ClearStatus --> List
     SetCohort --> List
     ClearCohort --> List
     SetGroup --> List
     ClearGroup --> List
+    Name --> List
     List --> Htmx{"HX-Request: true?"}
     Htmx -->|"no"| Full["students.html"]
     Htmx -->|"yes"| Rows["student-records + HX-Replace-Url with the non-empty values"]
@@ -34,6 +36,7 @@ flowchart TD
 
 - `status` selects, in `List`: `active` is `is_active`; `suspended` is not active and never withdrawn (`withdrawn_at` NULL); `withdrawn` is `withdrawn_at` set ([Withdrawal](../billing/withdrawal.md)). The three never overlap.
 - `cohort` must be a cohort that has at least one student (`Cohorts`, newest first), not merely a well-formed month; `group` must be one of `GroupOptions` (Básico, Regular). An unknown value is reset, never an error, so a stale bookmark shows everyone.
+- `name` matches any part of the student's name, ignoring case and Spanish accents (`jose` finds José): `List` folds both sides with `translate` and `lower` and compares with `strpos`, so `%` and `_` are literal. Any value is accepted.
 - For HTMX requests `HX-Replace-Url` is `/management/students` plus the encoded non-empty values, so a reload or bookmark reopens the same filters.
 - `#student-records` also re-fetches on `management-changed`, including the filter form (`hx-include`), so rows enter and leave the view as students change. The form has `hx-history="false"` so student rows stay out of htmx history snapshots.
 - There is no test for the filters or `HX-Replace-Url` ([Testing](../testing.md)).
