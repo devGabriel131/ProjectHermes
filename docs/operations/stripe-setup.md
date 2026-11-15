@@ -19,7 +19,7 @@ Do the setup once per mode. Sandbox and live each need their own key, prices, pa
 | 9 | Automatic tax | Off `[EXTERNAL]` | Not set by code. An invoice with tax, a discount, a customer balance debit, another currency or an unexpected line is held for staff review (`invoice_mismatch`) |
 | 10 | Smart Retries | On for one-off invoices with a 2-week window, matching the 14-day suspension rule `[EXTERNAL]` | No |
 | 11 | Customer emails | See [below](#dashboard-only-settings) `[EXTERNAL]` | No |
-| 12 | Locale | Stripe pages, emails and PDFs in `es-419` | Partly: `stripeLocale` is sent on every Checkout Session and portal session, and the worker sets it on the Customer right after funding. The first receipt follows a dashboard setting ([below](#dashboard-only-settings)) |
+| 12 | Locale | Stripe pages, emails and PDFs in `es-419` | Partly: `stripeLocale` is sent on every Checkout Session and portal session, and the worker sets it on the Customer right after funding. Before that the Customer lists the payer's browser language first ([below](#dashboard-only-settings)) |
 
 Startup fails with `startup_failed` at stage `billing_configuration` (rows 1, 2, 5, 6, 7), `billing_catalog` (row 3) or `billing_initialize`; the `user` CLI and `--help` need none of this.
 
@@ -86,14 +86,13 @@ All of these are `[EXTERNAL]`; the app neither reads nor verifies them.
 |---|---|
 | Smart Retries on, 2-week window, for one-off invoices | Settings > Billing > Invoices > Advanced invoicing features |
 | Receipt email for successful payments | Settings > Emails > "Successful payments" |
-| Default email language "Spanish (Latin America)": the language of the first receipt and of Checkout's own invoice | Settings > Emails |
 | Email when a card payment fails | Settings > Billing > Subscriptions and emails (Automatic collection) > "Send emails when card payments fail" |
 | Hosted link for cardholders to authenticate (3D Secure) | Same page > "Send a Stripe-hosted link for cardholders to authenticate when required" |
 | Adaptive Pricing off for Hosted Invoice Pages; automatic tax off | Location not recorded in the repository |
 
 The `stripeLocale` comment records how Stripe renders amounts `[EXTERNAL]`: `es` prints Spain-style `600,00 US$`, `es-419` prints `USD 600.00`, and only `en` prints a bare `$600.00`, in English. Stripe has no Puerto Rico locale, which is why `es-419` is used.
 
-A receipt for a payment with a Customer uses that Customer's `preferred_locales`, otherwise the dashboard's default email language; the Checkout Session's `locale` does not apply to it `[EXTERNAL]`. Checkout creates the Customer without a locale and the worker sets `es-419` on it right after funding ([Worker](../billing/worker.md)), so only the first receipt and Checkout's own invoice depend on the dashboard default. If the dashboard offers only "Spanish", that receipt prints Spain-style amounts. The first invoice is billed to the cardholder's name; later invoices carry the student's name.
+Checkout gives the Customer it creates `preferred_locales` of the payer's browser language followed by the Session's `es-419` (an English browser yields `["en-US","es-419"]`) `[EXTERNAL]`, and the worker replaces them with `["es-419"]` right after funding ([Worker](../billing/worker.md)). Stripe emails follow a Customer's `preferred_locales` `[EXTERNAL]`, so the first receipt and Checkout's own invoice may arrive in the payer's browser language; everything later is `es-419`. The first invoice is billed to the cardholder's name; later invoices carry the student's name.
 
 If webhook delivery is missing or the endpoint is not subscribed to a type, the worker still catches up: attempts in flight and overdue invoices are re-synced every 15 minutes, and every contract at least every 24 hours ([Worker](../billing/worker.md)).
 
