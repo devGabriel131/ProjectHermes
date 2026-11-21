@@ -12,7 +12,7 @@ A `Link` is a reusable, expiring URL staff share with one or more prospective st
 | Session cookie | `StartEnrollment` generates a second 32-byte random token returned once to the browser as the `enrollment_session` cookie (HttpOnly, `SameSite=Lax`, scoped to `/customer/{token}`) and stores only its SHA-256 digest in `enrollments.session_hash` (`session_hash_size` check: 32 bytes). |
 | Per-link cap | `MaxLinkEnrollments` (100) bounds how many `enrollments` rows one `Link` can accumulate, counted by `links.enrollment_count` (enrollments are never deleted, and `StartEnrollment` is the only INSERT). Existing live unpaid sessions still resume when the cap is reached; new starts are refused. |
 | Wrong length | `validToken` / `tokenDigest` reject any link or cookie token whose length is not 43 before querying or hashing. |
-| Unusable link | Unknown, malformed, canceled, expired, or full links (for visitors without a live session) render the same branded 404 (`not-found.html`, "Este enlace ya no es válido"). HTMX requests also get `HX-Refresh: true`. |
+| Unusable link | Unknown, malformed, canceled, expired, or full links (for visitors without a live session) render the same branded 404 (`notFoundPage`, "Este enlace ya no es válido"). HTMX requests also get `HX-Refresh: true`. |
 
 ## Statuses
 
@@ -131,6 +131,7 @@ The draft UPDATE turns `synchronous_commit` off for its own transaction, in the 
 
 - `internal/links/links.go`: `Link`, `Enrollment`, `LinkStatus`, `Status`, `SaveResult`, `LinkEntry`, `EnrollmentEntry`, `LinkGroup`, `MaxLinkEnrollments`, `MaxPinChecks`, `ErrInvalidLinkName`, `Store.CreateLink`, `Store.RenameLink`, `Store.ListGroups`, `Store.LookupSession`, `sessionRow`, `Store.StartEnrollment`, `Store.SaveDraft`, `Store.Submit`, `Store.SpendPinCheck`, `spendPinCheck`, `Store.FormState`, `Store.AcceptTerms`, `Store.CancelLink`, `CancelEnrollmentTx`, `Enroll`, `Usable`, `openEnrollment`, `usableSession`, `sessionDigest`, `tokenDigest`, `validToken`, `tokenBytes`, `formState`
 - `internal/customer/customer.go`: `welcome`, `start`, `resolveSession`, `render`
+- `internal/customer/welcome.templ`: `notFoundPage`
 - `internal/management/management.go`: `RegisterRoutes`
 - `internal/settings/settings.go`: `Settings.LinkLifetime`
 - `internal/students/fields.go`: `FindField`

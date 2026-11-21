@@ -53,7 +53,7 @@ sequenceDiagram
     S-->>L: data: change
     L->>H: htmx.trigger(body, management-changed)
     H->>A: GET the region URL with HX-Request
-    A-->>H: fragment such as linkRows or student-records
+    A-->>H: fragment such as linkRows or studentRecords
     Note over L,S: each new connection also receives one event to catch up
     alt stream CLOSED after a 502 or a sign-out
         L->>H: trigger management-changed once
@@ -149,7 +149,7 @@ The same middleware sends `Strict-Transport-Security: max-age=31536000` (no `inc
 
 - **`includeIndicatorStyles: false`.** Removing it makes htmx inject inline styles that the site CSP blocks.
 - **Clipboard write started inside the click.** Moving it after the response breaks Safari's user-activation rule.
-- **The htmx tag repeated per template.** The `html/template` management pages (`students.html`, `dashboard.html`) and the customer `index.html` each define their own complete HTML documents rather than sharing a global layout template. Pages moved to templ share one layout instead: login, settings and links use `internal/ui`'s staff document, and the rest follow in their Phase C steps.
+- **The htmx tag repeated per template.** The `html/template` management page `dashboard.html` and the customer `index.html` each define their own complete HTML documents rather than sharing a global layout template. Pages moved to templ share one layout instead: login, settings, links and students use `internal/ui`'s staff document; the customer welcome and not-found use `ui.CustomerLanding` and the agreement `ui.CustomerStep`, neither with htmx; the rest follow in their Phase C steps.
 
 ## Source
 
@@ -162,10 +162,11 @@ The same middleware sends `Strict-Transport-Security: max-age=31536000` (no `inc
 - `static/styles.css`: `color-scheme`, `management-workspace`, `management-sidebar`, `prefers-reduced-motion`, `copy-toast`
 - `static/customer.css`: `color-scheme`, `--column`, `prefers-reduced-motion`
 - `internal/management/links.templ`: `copy-toast`, `hx-confirm`
-- `internal/management/templates/students.html`: `student-dialog`, `noscript`
+- `internal/management/students.templ`: `student-dialog`, `noscript`
 - `internal/management/settings.templ`: `settings.js`
 - `internal/customer/templates/index.html`: `htmx-config`, `includeIndicatorStyles`, `hx-trigger`, `customer.js`
 - `internal/customer/templates/payment-return.html`: `noscript`, `hx-trigger`
-- `internal/customer/templates/icons.html`: `focusable`
+- `internal/customer/icons.templ`, `internal/customer/templates/icons.html`: `focusable`
+- `internal/ui/customer.templ`: `CustomerLanding`, `CustomerStep`
 - `internal/ui/staff.templ`: `management-skip-link`, `Staff`, `SignIn`, `htmx-config`
 - `internal/customer/customer.go`: `withHeaders`

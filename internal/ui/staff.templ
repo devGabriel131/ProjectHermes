@@ -25,6 +25,7 @@ templ SignIn(title string) {
 
 // Staff is a signed-in staff document: the rail (brand, navigation, account) beside the page's main.
 // htmx loads htmx with its config; scripts are same-origin script URLs, loaded deferred after it.
+// Students' main also carries management-students, which its styles and students.js select.
 templ Staff(title string, current Nav, username string, htmx bool, scripts ...string) {
 	@staffDocument(title, "management-workspace", htmx, scripts) {
 		<header class="management-sidebar">
@@ -32,7 +33,7 @@ templ Staff(title string, current Nav, username string, htmx bool, scripts ...st
 			@navigation(current)
 			@account(username)
 		</header>
-		<main id="main-content" class="management-links" tabindex="-1">
+		<main id="main-content" class={ "management-links", templ.KV("management-students", current == NavStudents) } tabindex="-1">
 			{ children... }
 		</main>
 	}

@@ -9,7 +9,7 @@ Versions are the ones pinned in `go.mod`.
 | Layer | Choice | Version | Notes |
 |---|---|---|---|
 | Language | Go | `1.27.4` (`go` directive; no `toolchain` line) | `net/http` `ServeMux` with method and path patterns |
-| Views | templ (`tool github.com/a-h/templ/cmd/templ`), MIT | v0.3.1118 | `.templ` files compile to committed `*_templ.go`; run as `go tool templ`. The staff login and settings pages so far; the other pages stay on `html/template` until their Phase C step. See [Local development](operations/local-development.md#templ) |
+| Views | templ (`tool github.com/a-h/templ/cmd/templ`), MIT | v0.3.1118 | `.templ` files compile to committed `*_templ.go`; run as `go tool templ`. The staff login, settings, links and students (list and details) pages and the customer welcome, agreement and not-found pages so far; the other pages stay on `html/template` until their Phase C step. See [Local development](operations/local-development.md#templ) |
 | Database | PostgreSQL through one pgx pool, with GORM on it; goose migrations | `github.com/jackc/pgx/v5` v5.12.0, `gorm.io/gorm` v1.31.2, `gorm.io/driver/postgres` v1.6.3, `github.com/pressly/goose/v3` v3.30.1 | `internal/db` opens the pool and applies the migrations embedded from `internal/db/migrations` ([Data model](data-model.md#migrations)); GORM and the session store reach the pool through `database/sql` |
 | Payments | `github.com/stripe/stripe-go/v87` | v87.0.0 | Used by `internal/billing` only |
 | Staff passwords | `github.com/alexedwards/argon2id` | v1.0.0 | |
@@ -124,7 +124,7 @@ flowchart LR
 | `internal/settings` | The single settings row: link lifetime, program start date ([Agreement](domain/agreement.md)), bootcamp date |
 | `internal/students` | Student record, contact-field registry, municipalities ([Students](domain/students.md)) |
 | `internal/testdb` | One PostgreSQL schema per integration test ([Testing](testing.md)) |
-| `internal/ui` | Shared page layouts, platform: the staff document (`SignIn`, `Staff`: head, with htmx when the page asks, skip link, rail with brand, navigation and account, and `main`) and the `LinkIcon` and `TrashIcon` it shares with pages. Pages pass only their main content |
+| `internal/ui` | Shared page layouts, platform: the staff document (`SignIn`, `Staff`: head, with htmx when the page asks, skip link, rail with brand, navigation and account, and `main`) and the `LinkIcon` and `TrashIcon` it shares with pages; the Spanish customer document (`CustomerLanding`: `main` only, for pages that show their own logo; `CustomerStep`: a top bar with the logo and the page's progress steps above `main`). Pages pass only their main content |
 | `static/` | Embedded scripts, stylesheets, images, favicon (`//go:embed static`) |
 | `compose.yaml`, `.air.toml`, `.env.example` | Local database and dev server ([Local development](operations/local-development.md)) |
 | `user.fish` | Railway wrapper for the `user` CLI ([Railway](operations/railway.md)) |
@@ -237,6 +237,7 @@ The 403 from `CrossOriginProtection` fires for non-safe methods (such as POST) w
 - `go.mod`: `github.com/a-h/templ`, `github.com/air-verse/air`, `github.com/getsentry/sentry-go`, `github.com/nyaruka/phonenumbers/v2`, `github.com/pressly/goose/v3`, `github.com/stripe/stripe-go/v87`, `gorm.io/gorm`, `gorm.io/driver/postgres`
 - `internal/db/migrate.go`: `Migrate`
 - `internal/ui/staff.templ`: `SignIn`, `Staff`, `Nav`
+- `internal/ui/customer.templ`: `CustomerLanding`, `CustomerStep`
 - `internal/auth/http.go`: `Manager.RegisterRoutes`, `Require`, `Staff`
 - `internal/logging/httplog/http.go`: `Requests`, `Routes`, `RecordError`
 - `internal/customer/customer.go`: `RegisterRoutes`, `withHeaders`

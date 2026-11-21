@@ -193,6 +193,8 @@ Anyone holding a link can read the customer's submitted details, edit them while
 - `internal/customer/customer.go`: `RegisterRoutes`, `withHeaders`, `dbTimeout`, `pageData.fill`, `site.render`, `site.resolveSession`, `redirectCustomer`, `site.welcome`, `site.start`, `site.forms`, `site.submit`, `site.draft`, `site.edit`, `parseCustomerForm`, `readContact`, `readSubmission`, `readDateOfBirth`, `site.checkPin`, `fieldMessages`, `pinTakenMessage`, `pinLimitMessage`, `readSessionCookie`, `setSessionCookie`, `sessionCookieName`
 - `internal/customer/payments.go`: `site.payments`, `site.paymentReturn`, `maxReturnPolls`
 - `internal/customer/agreement.go`: `agreement`
+- `internal/customer/welcome.templ`: `welcomePage`, `notFoundPage`
+- `internal/customer/agreement.templ`: `agreementPage`
 - `internal/customer/templates/index.html`: `htmx-config`, `includeIndicatorStyles`, `customer-content`
 - `internal/customer/templates/payments.html`: `payments`
 - `internal/customer/templates/payment-return.html`: `payment-return-status`, `decline-reason`, `noscript`

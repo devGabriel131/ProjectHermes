@@ -271,11 +271,6 @@ func requireAcknowledged(t *testing.T, res *http.Response, body string) {
 	}
 }
 
-func escapedHTML(value string) string {
-	// html/template also escapes plus signs in text and quoted attributes.
-	return strings.ReplaceAll(html.EscapeString(value), "+", "&#43;")
-}
-
 func requireRegistryPrivacy(t *testing.T, body string, details students.Details) {
 	t.Helper()
 	for _, private := range []string{details.Email, details.Municipality} {

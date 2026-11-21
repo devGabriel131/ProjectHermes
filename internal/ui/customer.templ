@@ -1,0 +1,44 @@
+package ui
+
+// CustomerLanding is a customer document whose page shows its own large logo, with no top bar:
+// the welcome and the not-found pages. page names the body's customer-{page} class.
+templ CustomerLanding(title, page string) {
+	@customerDocument(title, page) {
+		<main>
+			{ children... }
+		</main>
+	}
+}
+
+// CustomerStep is a customer document for a step of the enrollment: the top bar holds the logo and the
+// page's progress steps above main.
+templ CustomerStep(title, page string, steps templ.Component) {
+	@customerDocument(title, page) {
+		<header class="customer-top">
+			<img class="customer-mark" src="/static/logo-mark.webp" alt="Masterminds Programa ASVAB" width="320" height="314"/>
+			@steps
+		</header>
+		<main>
+			{ children... }
+		</main>
+	}
+}
+
+// customerDocument is the Spanish HTML document of the customer pages on templ, on customer.css alone.
+templ customerDocument(title, page string) {
+	<!DOCTYPE html>
+	<html lang="es-PR">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+			<meta name="theme-color" content="#eef4f4"/>
+			<title>{ title } | Masterminds</title>
+			<link rel="icon" type="image/vnd.microsoft.icon" href="/favicon.ico" sizes="16x16 32x32 48x48"/>
+			<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&amp;family=Marcellus&amp;display=swap"/>
+			<link rel="stylesheet" href="/static/customer.css"/>
+		</head>
+		<body class={ "customer", "customer-" + page }>
+			{ children... }
+		</body>
+	</html>
+}

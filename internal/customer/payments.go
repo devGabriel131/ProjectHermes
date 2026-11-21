@@ -24,7 +24,7 @@ type planView struct {
 func (s *site) payments(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "payments", FieldErrors: make(map[string]string)}
-	enrollment, ok := s.resolveSession(w, r, "index.html", &data, token)
+	enrollment, ok := s.resolveSession(w, r, s.html("index.html"), &data, token)
 	if !ok {
 		return
 	}
@@ -58,7 +58,7 @@ func (s *site) payments(w http.ResponseWriter, r *http.Request) {
 				result, err := s.billing.StartCheckout(r.Context(), enrollment.ID, data.PaymentPlan)
 				switch {
 				case errors.Is(err, billing.ErrUnavailable):
-					s.render(w, r, "index.html", data, http.StatusNotFound)
+					s.render(w, r, s.html("index.html"), data, http.StatusNotFound)
 					return
 				case errors.Is(err, billing.ErrPlanLocked):
 					status = http.StatusConflict
@@ -101,7 +101,7 @@ func (s *site) payments(w http.ResponseWriter, r *http.Request) {
 			data.Plans = append(data.Plans, planView{Plan: plan, Schedule: plan.Schedule(now)})
 		}
 	}
-	s.render(w, r, "index.html", data, status)
+	s.render(w, r, s.html("index.html"), data, status)
 }
 
 // maxReturnPolls caps the return page's polling: 80 polls at 1.5s is about two minutes.
@@ -114,9 +114,9 @@ const maxReturnPolls = 80
 // polling until maxReturnPolls, and an unknown session reloads the page.
 func (s *site) paymentReturn(w http.ResponseWriter, r *http.Request) {
 	data := pageData{View: "payment-return"}
-	name := "index.html"
+	page := s.html("index.html")
 	if htmx(r) {
-		name = "payment-return-status"
+		page = s.html("payment-return-status")
 	}
 	query := r.URL.Query()
 	lookup, ref := s.billing.ReturnStatus, query.Get("session_id")
@@ -141,5 +141,5 @@ func (s *site) paymentReturn(w http.ResponseWriter, r *http.Request) {
 	default:
 		data.Return = &result
 	}
-	s.render(w, r, name, data, status)
+	s.render(w, r, page, data, status)
 }

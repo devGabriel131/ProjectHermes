@@ -26,9 +26,9 @@ export function newSession(label = '') {
 export const FIELDS = ['name', 'date_of_birth', 'gender', 'email', 'phone', 'municipality'];
 export const PLANS = ['full', 'three', 'six']; // internal/payments/plans.go IDs
 
-// Response markers, from internal/customer/templates.
+// Response markers, from internal/customer's views.
 export const WELCOME = 'Bienvenidos a Masterminds';
-export const NOT_FOUND = 'Este enlace ya no es válido'; // not-found.html
+export const NOT_FOUND = 'Este enlace ya no es válido'; // notFoundPage (welcome.templ)
 export const AGREEMENT = 'Revisa y acepta el acuerdo';
 export const PLAN_SELECTION = 'Elige tu plan de pago';
 export const SAVED = 'Guardado.';
@@ -290,7 +290,7 @@ export function completeStarted(token, idx, { think: pauses = true } = {}) {
 // (that calls Stripe). Returns true only if every step's checks passed.
 export function completeToPayments(token, idx, { think: pauses = true } = {}) {
   const path = `/customer/${token}`;
-  // 1. welcome page + the assets it references (index.html welcome view)
+  // 1. welcome page + the assets it references (welcomePage)
   if (!welcome(path)) return false;
   if (pauses) think(1, 3);
   // 2. start enrollment session -> 303 to /forms + enrollment_session cookie
