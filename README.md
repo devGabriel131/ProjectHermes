@@ -1,4 +1,4 @@
-# ProjectHermes
+# Apollo
 
 Enrollment, agreement, and tuition-payment web application. Staff manage customer links, student records, and billing settings; customers open a reusable link that staff share; each browser gets its own private enrollment session to submit contact information, accept the agreement, and pay tuition through Stripe.
 

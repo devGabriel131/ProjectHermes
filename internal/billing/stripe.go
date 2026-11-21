@@ -14,7 +14,7 @@ import (
 
 	"github.com/stripe/stripe-go/v87"
 
-	"projecthermes/internal/payments"
+	"apollo/internal/payments"
 )
 
 const (

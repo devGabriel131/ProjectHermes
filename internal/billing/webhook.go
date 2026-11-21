@@ -9,7 +9,7 @@ import (
 	"github.com/stripe/stripe-go/v87/webhook"
 	"gorm.io/gorm/clause"
 
-	"projecthermes/internal/logging"
+	"apollo/internal/logging"
 )
 
 // maxWebhookBody bounds the raw payload read before signature verification.

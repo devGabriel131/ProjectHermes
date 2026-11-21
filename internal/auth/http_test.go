@@ -17,8 +17,8 @@ import (
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 
-	"projecthermes/internal/logging"
-	"projecthermes/internal/testdb"
+	"apollo/internal/logging"
+	"apollo/internal/testdb"
 )
 
 func TestSignIn(t *testing.T) {

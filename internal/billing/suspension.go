@@ -10,7 +10,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"projecthermes/internal/students"
+	"apollo/internal/students"
 )
 
 // deadlineWindow is how long a due tuition installment may stay unpaid before the student is suspended.

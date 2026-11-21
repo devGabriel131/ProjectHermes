@@ -11,7 +11,7 @@ Each event is one JSON object per line. The web server writes to stdout; every `
 | `time` | slog's default timestamp |
 | `level` | Lowercase: `info`, `warn` or `error` |
 | `message` | The event name (the catalogue below) |
-| `service` | `RAILWAY_SERVICE_NAME`, default `ProjectHermes` |
+| `service` | `RAILWAY_SERVICE_NAME`, default `Apollo` |
 | `environment` | `RAILWAY_ENVIRONMENT_NAME`, default `local` |
 | `version` | `RAILWAY_GIT_COMMIT_SHA`, default `unknown` |
 | `deployment_id`, `replica_id` | `RAILWAY_DEPLOYMENT_ID`, `RAILWAY_REPLICA_ID`; present only when set |

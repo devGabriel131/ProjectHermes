@@ -1,4 +1,4 @@
-module projecthermes
+module apollo
 
 go 1.27.4
 

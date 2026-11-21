@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"apollo/internal/billing"
+	"apollo/internal/billing/billingtest"
+	"apollo/internal/testdb"
 	"github.com/stripe/stripe-go/v87"
 	"github.com/stripe/stripe-go/v87/webhook"
-	"projecthermes/internal/billing"
-	"projecthermes/internal/billing/billingtest"
-	"projecthermes/internal/testdb"
 )
 
 func signWebhookPayload(payload []byte, secret string, timestamp time.Time) string {

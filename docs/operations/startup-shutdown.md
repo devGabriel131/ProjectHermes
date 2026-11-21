@@ -60,7 +60,7 @@ Facts the diagram compresses:
 
 ### CLI branch
 
-`projecthermes user <command>` takes the same path as the server through `AutoMigrate`, then calls `auth.RunCLI` instead of building the web stack ([Staff authentication](../staff-auth.md) documents the commands).
+`apollo user <command>` takes the same path as the server through `AutoMigrate`, then calls `auth.RunCLI` instead of building the web stack ([Staff authentication](../staff-auth.md) documents the commands).
 
 | Invocation | Behavior |
 |---|---|

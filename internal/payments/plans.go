@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"projecthermes/internal/puertorico"
+	"apollo/internal/puertorico"
 )
 
 // Plan describes an available payment option. Amounts is read-only.

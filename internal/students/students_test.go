@@ -13,10 +13,10 @@ import (
 
 	"gorm.io/gorm"
 
-	"projecthermes/internal/links"
-	"projecthermes/internal/settings"
-	"projecthermes/internal/students"
-	"projecthermes/internal/testdb"
+	"apollo/internal/links"
+	"apollo/internal/settings"
+	"apollo/internal/students"
+	"apollo/internal/testdb"
 )
 
 func TestListRetainsExpiredSourcesAndOrdersNewestFirst(t *testing.T) {

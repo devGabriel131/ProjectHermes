@@ -28,7 +28,7 @@ There is no CSRF-token library. Cross-site writes are refused by the standard li
 flowchart LR
   customer["Browser: customer"]
   staff["Browser: staff"]
-  app["projecthermes\nGo server"]
+  app["apollo\nGo server"]
   pg[("PostgreSQL")]
   stripe["Stripe"]
   railway["Railway\nhosts the deployed app\n[EXTERNAL]"]

@@ -18,10 +18,10 @@ import (
 
 	"gorm.io/gorm"
 
-	"projecthermes/internal/puertorico"
-	"projecthermes/internal/settings"
-	"projecthermes/internal/students"
-	"projecthermes/internal/testdb"
+	"apollo/internal/puertorico"
+	"apollo/internal/settings"
+	"apollo/internal/students"
+	"apollo/internal/testdb"
 )
 
 // staff is the acting account for tests that aren't about the audit trail.

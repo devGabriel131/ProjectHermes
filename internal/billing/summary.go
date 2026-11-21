@@ -5,7 +5,7 @@ import (
 	"slices"
 	"time"
 
-	"projecthermes/internal/students"
+	"apollo/internal/students"
 )
 
 // overdueGrace is how long past its due date an unpaid installment still reads as scheduled, not

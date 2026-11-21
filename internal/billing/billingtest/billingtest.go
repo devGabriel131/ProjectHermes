@@ -9,7 +9,7 @@ import (
 	"github.com/stripe/stripe-go/v87"
 	"gorm.io/gorm"
 
-	"projecthermes/internal/billing"
+	"apollo/internal/billing"
 )
 
 // Config is a valid sandbox configuration.

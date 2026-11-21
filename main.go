@@ -1,4 +1,4 @@
-// Command projecthermes serves the enrollment, agreement and tuition-payment site, and runs the staff account CLI (projecthermes user ...). See docs/architecture.md and docs/operations/startup-shutdown.md.
+// Command apollo serves the enrollment, agreement and tuition-payment site, and runs the staff account CLI (apollo user ...). See docs/architecture.md and docs/operations/startup-shutdown.md.
 package main
 
 import (
@@ -20,16 +20,16 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	"projecthermes/internal/auth"
-	"projecthermes/internal/billing"
-	"projecthermes/internal/customer"
-	"projecthermes/internal/links"
-	"projecthermes/internal/live"
-	"projecthermes/internal/logging"
-	"projecthermes/internal/management"
-	"projecthermes/internal/payments"
-	"projecthermes/internal/settings"
-	"projecthermes/internal/students"
+	"apollo/internal/auth"
+	"apollo/internal/billing"
+	"apollo/internal/customer"
+	"apollo/internal/links"
+	"apollo/internal/live"
+	"apollo/internal/logging"
+	"apollo/internal/management"
+	"apollo/internal/payments"
+	"apollo/internal/settings"
+	"apollo/internal/students"
 )
 
 //go:embed static
@@ -58,7 +58,7 @@ func main() {
 		out = os.Stderr
 	}
 	log := logging.New(out).With(
-		"service", cmp.Or(os.Getenv("RAILWAY_SERVICE_NAME"), "ProjectHermes"),
+		"service", cmp.Or(os.Getenv("RAILWAY_SERVICE_NAME"), "Apollo"),
 		"environment", cmp.Or(os.Getenv("RAILWAY_ENVIRONMENT_NAME"), "local"),
 		"version", cmp.Or(os.Getenv("RAILWAY_GIT_COMMIT_SHA"), "unknown"),
 	)

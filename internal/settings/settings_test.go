@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"projecthermes/internal/testdb"
+	"apollo/internal/testdb"
 )
 
 func TestLinkLifetime(t *testing.T) {
