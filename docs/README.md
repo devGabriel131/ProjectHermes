@@ -43,7 +43,7 @@ This directory contains the architecture, domain, billing, management, and opera
 | Operations | [operations/configuration.md](operations/configuration.md) | What environment variables exist and how are they validated? |
 | Operations | [operations/startup-shutdown.md](operations/startup-shutdown.md) | In what order does the system start, migrate, and shut down? |
 | Operations | [operations/observability.md](operations/observability.md) | What structured log events and slow-query metrics are emitted? |
-| Operations | [operations/local-development.md](operations/local-development.md) | How do engineers run Compose, Air, and Stripe CLI locally? |
+| Operations | [operations/local-development.md](operations/local-development.md) | How do engineers run Compose, Air, templ generation, and Stripe CLI locally? |
 | Operations | [operations/railway.md](operations/railway.md) | How is the application deployed and configured on Railway? |
 | Operations | [operations/stripe-setup.md](operations/stripe-setup.md) | What Stripe dashboard configuration and pricing are required? |
 

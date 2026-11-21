@@ -136,5 +136,5 @@ Page structure and fragments are in [Management overview](../management/overview
 - `internal/customer/templates/agreement.html`: `accept_terms`, `program_start_date`
 - `internal/management/management.go`: `RegisterRoutes`
 - `internal/management/templates/index.html`: `program-start-date`
-- `internal/management/templates/settings.html`: `lifetime`
+- `internal/management/settings.templ`: `lifetime`
 - `internal/billing/checkout.go`: `StartCheckout`

@@ -1,0 +1,142 @@
+// Package ui holds the layouts pages share: the document, head and chrome around a page's main content.
+package ui
+
+// Nav names the staff page the navigation marks as current.
+type Nav string
+
+const (
+	NavDashboard   Nav = "dashboard"
+	NavLinks       Nav = "links"
+	NavStudents    Nav = "students"
+	NavAddStudents Nav = "add-students"
+	NavSettings    Nav = "settings"
+	NavTrash       Nav = "trash"
+)
+
+// SignIn is the signed-out staff document: the brand above the page's main.
+templ SignIn(title string) {
+	@staffDocument(title, "management-signin", nil) {
+		@brand()
+		<main id="main-content" class="management-login">
+			{ children... }
+		</main>
+	}
+}
+
+// Staff is a signed-in staff document: the rail (brand, navigation, account) beside the page's main.
+// scripts are same-origin script URLs, loaded deferred.
+templ Staff(title string, current Nav, username string, scripts ...string) {
+	@staffDocument(title, "management-workspace", scripts) {
+		<header class="management-sidebar">
+			@brand()
+			@navigation(current)
+			@account(username)
+		</header>
+		<main id="main-content" class="management-links" tabindex="-1">
+			{ children... }
+		</main>
+	}
+}
+
+// staffDocument is the HTML document of every staff page; the skip link targets the main its caller renders.
+templ staffDocument(title, bodyClass string, scripts []string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			<link rel="icon" type="image/vnd.microsoft.icon" href="/favicon.ico" sizes="16x16 32x32 48x48"/>
+			<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400..700&amp;family=Marcellus&amp;display=swap"/>
+			<link rel="stylesheet" href="/static/styles.css"/>
+			for _, src := range scripts {
+				<script src={ src } defer></script>
+			}
+		</head>
+		<body class={ "management", bodyClass }>
+			<a class="management-skip-link" href="#main-content">Skip to content</a>
+			{ children... }
+		</body>
+	</html>
+}
+
+templ brand() {
+	<div class="management-brand" translate="no">
+		<img src="/static/logo-mark.webp" alt="" width="320" height="314"/>
+		<span>Masterminds</span>
+	</div>
+}
+
+templ account(username string) {
+	<div class="management-account">
+		<span class="management-staff">{ username }</span>
+		<form method="post" action="/management/logout">
+			<button type="submit">Sign out</button>
+		</form>
+	</div>
+}
+
+templ navigation(current Nav) {
+	<nav class="management-menu" aria-label="Management">
+		<a
+			class="management-nav-link"
+			href="/management/dashboard"
+			if current == NavDashboard {
+				aria-current="page"
+			}
+		>
+			<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16M7 20v-7M12 20V5M17 20v-10"></path></svg>
+			Dashboard
+		</a>
+		<a
+			class="management-nav-link"
+			href="/management/"
+			if current == NavLinks {
+				aria-current="page"
+			}
+		>
+			<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+			Customer links
+		</a>
+		<a
+			class="management-nav-link"
+			href="/management/students"
+			if current == NavStudents {
+				aria-current="page"
+			}
+		>
+			<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"></circle><path d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6M21 20v-2a6 6 0 0 0-4-5.65"></path></svg>
+			Students
+		</a>
+		<a
+			class="management-nav-link"
+			href="/management/students/new"
+			if current == NavAddStudents {
+				aria-current="page"
+			}
+		>
+			<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"></circle><path d="M3 20v-2a6 6 0 0 1 12 0v2M19 8v6M16 11h6"></path></svg>
+			Add students
+		</a>
+		<a
+			class="management-nav-link"
+			href="/management/settings"
+			if current == NavSettings {
+				aria-current="page"
+			}
+		>
+			<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h10M18 18h2"></path><circle cx="15" cy="6" r="2"></circle><circle cx="9" cy="12" r="2"></circle><circle cx="16" cy="18" r="2"></circle></svg>
+			Settings
+		</a>
+		<a
+			class="management-nav-link management-nav-trash"
+			href="/management/trash"
+			if current == NavTrash {
+				aria-current="page"
+			}
+		>
+			<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"></path></svg>
+			Trash
+		</a>
+	</nav>
+}

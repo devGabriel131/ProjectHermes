@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/a-h/templ"
 
 	"apollo/internal/billing"
 	"apollo/internal/links"
@@ -121,15 +124,22 @@ func timed(h http.HandlerFunc) http.Handler {
 	})
 }
 
-// render writes the named template with status. Responses are never cached,
-// and vary on HX-Request because htmx gets fragments where browsers get pages.
+// render writes the named html/template with status; pages not yet on templ go through it.
 func (s *site) render(w http.ResponseWriter, r *http.Request, status int, name string, data any) {
+	s.view(w, r, status, templ.ComponentFunc(func(_ context.Context, w io.Writer) error {
+		return s.page.ExecuteTemplate(w, name, data)
+	}))
+}
+
+// view writes v with status. Responses are never cached,
+// and vary on HX-Request because htmx gets fragments where browsers get pages.
+func (s *site) view(w http.ResponseWriter, r *http.Request, status int, v templ.Component) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Vary", "HX-Request")
 	w.WriteHeader(status)
-	if err := s.page.ExecuteTemplate(w, name, data); err != nil {
+	if err := v.Render(r.Context(), w); err != nil {
 		httplog.RecordError(r, "render", err)
 	}
 }
@@ -364,7 +374,7 @@ func (s *site) showSettings(w http.ResponseWriter, r *http.Request, status int, 
 		data.BootcampDate = data.Current.BootcampDate
 	}
 	data.Staff = s.staff(r.Context())
-	s.render(w, r, status, "settings.html", data)
+	s.view(w, r, status, settingsView(data))
 }
 
 func (s *site) settingsPage(w http.ResponseWriter, r *http.Request) {

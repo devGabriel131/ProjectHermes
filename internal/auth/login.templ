@@ -1,0 +1,40 @@
+package auth
+
+import "apollo/internal/ui"
+
+templ loginView(page loginPage) {
+	@ui.SignIn("Sign in") {
+		<h1>Sign in</h1>
+		if page.Error != "" {
+			<p id="login-error" role="alert">{ page.Error }</p>
+		}
+		<form method="post" action="/management/login">
+			<label for="username">Username</label>
+			<input
+				id="username"
+				name="username"
+				type="text"
+				autocomplete="username"
+				autocapitalize="none"
+				spellcheck="false"
+				required
+				value={ page.Username }
+				if page.Error != "" {
+					aria-describedby="login-error"
+				}
+			/>
+			<label for="password">Password</label>
+			<input
+				id="password"
+				name="password"
+				type="password"
+				autocomplete="current-password"
+				required
+				if page.Error != "" {
+					aria-describedby="login-error"
+				}
+			/>
+			<button type="submit">Sign in</button>
+		</form>
+	}
+}

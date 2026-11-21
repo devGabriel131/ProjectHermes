@@ -244,6 +244,7 @@ Only this browser's session row is deleted; other devices stay signed in. A sign
 
 - `internal/auth/auth.go`: `User`, `Session`, `normalizeUsername`, `findUser`, `createUser`, `setPassword`, `revokeSessions`, `removeUser`, `existingUser`
 - `internal/auth/http.go`: `Manager`, `New`, `Run`, `deleteExpiredSessions`, `RegisterRoutes`, `Staff`, `Require`, `authenticated`, `logout`, `login`, `verify`, `render`, `cookieName`, `loginInterval`, `dummyHash`
+- `internal/auth/login.templ`: `loginView`, in the `ui.SignIn` layout
 - `internal/auth/cli.go`: `Usage`, `RunCLI`, `listUsers`, `readNewPassword`, `promptPassword`
 - `internal/auth/http_test.go`: `TestSignIn`, `TestCredentialChangesEndSessions`, `TestSignOutEndsOnlyThisBrowser`, `TestSessionCleanupDeletesOnlyExpired`
 - `main.go`: `main`, `run`, `newServer`
