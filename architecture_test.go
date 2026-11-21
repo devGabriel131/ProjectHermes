@@ -13,7 +13,8 @@
 //     identifiers, and table names built at run time.
 //   - GORM: an argument whose type is a model from models(), or a pointer, slice or array of one, uses that
 //     model's table when the call is made on a *gorm.DB or takes one as a parameter. Not seen: rows scanned
-//     into a non-model struct, association fields, Preload or Joins by name, and Table("name").
+//     into a non-model struct, association fields, Preload or Joins by name. Table("name") with a literal
+//     name is seen; a name built at run time is not.
 //
 // SQL is charged to the package whose source holds it, so a caller reaching another context's table through
 // that context's own helper or scope (links.Usable, links.Enroll) is not a reach; the seams replace those
@@ -36,6 +37,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -94,19 +96,19 @@ type reach struct{ file, decl, table string }
 // crossContextAllowlist holds today's Billing → Students reaches. Phase F moves each behind a Students seam
 // (Standing, Enrollment lock & enroll) and deletes its line; F9 leaves the list empty. Never add to it.
 var crossContextAllowlist = map[reach]bool{
-	{"internal/billing/billing.go", "contractFor", "students"}:             true,
-	{"internal/billing/cancel.go", "CancelEnrollment", "enrollments"}:      true,
-	{"internal/billing/checkout.go", "beginCheckout", "enrollments"}:       true,
-	{"internal/billing/contact.go", "UpdateContact", "enrollments"}:        true,
-	{"internal/billing/summary.go", "ForStudent", "students"}:              true,
-	{"internal/billing/summary.go", "linkToken", "enrollments"}:            true,
-	{"internal/billing/summary.go", "linkToken", "links"}:                  true,
-	{"internal/billing/suspension.go", "evaluateDeadlines", "students"}:    true,
-	{"internal/billing/suspension.go", "evaluateReactivation", "students"}: true,
-	{"internal/billing/withdraw.go", "withdraw", "students"}:               true,
-	{"internal/billing/worker.go", "leased", "enrollments"}:                true,
-	{"internal/billing/worker.go", "leasedStudent", "students"}:            true,
-	{"internal/billing/worker.go", "syncCustomerContact", "students"}:      true,
+	{"internal/billing/billing.go", "contractFor", "students"}:             true, // → Profile
+	{"internal/billing/cancel.go", "CancelEnrollment", "enrollments"}:      true, // → CancelEnrollment
+	{"internal/billing/checkout.go", "beginCheckout", "enrollments"}:       true, // → LockEnrollment
+	{"internal/billing/contact.go", "UpdateContact", "enrollments"}:        true, // → LockEnrollment, UpdateContact
+	{"internal/billing/summary.go", "ForStudent", "students"}:              true, // → Profile
+	{"internal/billing/summary.go", "linkToken", "enrollments"}:            true, // → LinkToken
+	{"internal/billing/summary.go", "linkToken", "links"}:                  true, // → LinkToken
+	{"internal/billing/suspension.go", "evaluateDeadlines", "students"}:    true, // → SetStanding
+	{"internal/billing/suspension.go", "evaluateReactivation", "students"}: true, // → SetStanding
+	{"internal/billing/withdraw.go", "withdraw", "students"}:               true, // → SetStanding
+	{"internal/billing/worker.go", "leased", "enrollments"}:                true, // → LockEnrollment
+	{"internal/billing/worker.go", "leasedStudent", "students"}:            true, // → a Students row lock, third in lock order
+	{"internal/billing/worker.go", "syncCustomerContact", "students"}:      true, // → Profile
 }
 
 func TestContextRootsImportNoAdapters(t *testing.T) {
@@ -218,6 +220,13 @@ func tableUses(n ast.Node, info *types.Info, modelTables map[string]string) []ta
 			for _, arg := range n.Args {
 				if table, ok := modelTables[modelKey(info.TypeOf(arg))]; ok {
 					uses = append(uses, tableUse{arg.Pos(), table})
+				}
+			}
+			if sel, ok := n.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Table" && len(n.Args) > 0 {
+				if lit, ok := n.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					if name, err := strconv.Unquote(lit.Value); err == nil && strings.TrimSpace(name) != "" {
+						uses = append(uses, tableUse{lit.Pos(), strings.Fields(name)[0]})
+					}
 				}
 			}
 		}

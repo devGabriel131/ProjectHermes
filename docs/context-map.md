@@ -36,8 +36,8 @@ flowchart LR
 ## Identity & Access
 
 - **Aggregates and invariants:**
-  - *StaffAccount.* Username is 1–64 characters of `A-Za-z0-9._-`, validated before lowercasing. The password is stored as an Argon2id hash. `auth_version` is random and rotates on `passwd` and `revoke`. A role (`admin` or `teacher`) is planned; today every account has the same access.
-  - *Session.* Holds one principal with its auth version. Lifetime is a fixed 14 days, re-validated on every request and never extended. Student principals arrive with student sign-in.
+  - *StaffAccount.* Username is 1–64 characters of `A-Za-z0-9._-`, validated before lowercasing. The password is stored as an Argon2id hash. `auth_version` is random and rotates on `passwd` and `revoke`. There are no roles today. The target has one staff role, `admin`, because the admins are the teachers; a separate `teacher` role waits until a teacher who must not see billing joins.
+  - *Session.* Holds one principal with its auth version. A principal is a staff account (a `users` row) or a student; students are a principal kind, never `users` rows. Lifetime is a fixed 14 days, re-validated on every request and never extended. Student principals arrive with student sign-in.
   - *StudentLogin* (arrives with the Socrative retirement). One per student. The PIN (4–6 digits) is stored only as an Argon2id hash. `auth_version` rotates when the PIN or email changes.
 - **Glossary:** principal, staff account, role, student login, PIN, session, auth version, sign-in limiter.
 - **Reached through:** the `Require*` middleware and the principal accessors (today `auth.Manager.Require` and `auth.Staff`). No other context reads `users` or `sessions`.
@@ -70,9 +70,10 @@ Arrives in phase E.
 
 - **Aggregates and invariants:**
   - *Attempt, with its Responses.* One sitting: a game, practice set, exam or live session. The deal is fixed when the attempt starts. Responses are appended in `seq` order, only by the attempt's own student. The server sets `correct` and `score`; the browser never reports a score. The attempt finishes once.
+  - *Access.* A suspended student (unpaid tuition) gets no learning access, as today. Learning reads the standing through Roster; Billing sets it through Standing.
   - *WordCard schedule.* One row per student and word. Each answer moves the stage once. One streak day per answered day.
   - *Item*, from the question-bank feature onward. The answer key must be valid for the item's kind. Retired items stay referenced. Until then words and sentences stay embedded files and responses carry `item_key`.
-- **Glossary:** learner, item, deal (with the reason each item was picked), attempt, response, judge, score, knowledge state (new, learning, known), review, streak, leaderboard week, game.
+- **Glossary** (student screens in Spanish, English words inside the games): learner, item, deal (with the reason each item was picked), attempt, response, judge, score, knowledge state (new, learning, known), review, streak, leaderboard week, game.
 - **Reached through:** `learning.Service` (`Results`, `Knowledge`) for staff views. `learning` never imports `billing`.
 
 ## Documents
@@ -81,7 +82,7 @@ Arrives in phase D.
 
 - **Aggregates and invariants:**
   - *EmployerDetails*, per student: schedule, employer, position (from the list, or "Otro" plus free text) and workplace. The last four SSN digits are never stored.
-  - *ISTAttempt.* Measurements are validated. Age and sex are snapshots the server takes from the student record at submit. Grading happens on read.
+  - *ISTAttempt.* Health data: visible to the student and admins only. Measurements are validated. Age and sex are snapshots the server takes from the student record at submit. Grading happens on read.
   - Letters and sheets are rendered on demand and never stored.
 - **Glossary** (Spanish UI): certificado de asistencia, carta de bootcamp, IST / evaluación física, intento, hoja IST, patrono, puesto, horario.
 - **Reached through:** nothing yet; staff views will use `documents.Service`.
@@ -94,10 +95,15 @@ A seam is a narrow interface the consumer declares (or, for calls inside a trans
 |---|---|---|---|---|
 | **Roster** | Learning → Students | learner ID, display name, group, cohort, standing | `learning.Roster`, satisfied by `*students.Service` | Hephaestus reads `students` and `enrollments` directly |
 | **Standing** | Billing → Students | suspended, reinstated, withdrawn | `students.Service.SetStanding` inside Billing's transaction | Billing writes `students.is_active` and `withdrawn_at` |
-| **Enrollment lock & enroll** | Billing → Students | lock the enrollment row, enroll at funding, cancel, contact edit, link token, a student's enrollment and contact | `LockEnrollment`, `Enroll`, `CancelEnrollment`, `UpdateContact`, `LinkToken`, `Profile`, inside Billing's transaction where they write | Billing locks and reads `enrollments`, `links` and `students` rows and calls `links.Enroll` and `links.CancelEnrollmentTx` with its own `*gorm.DB` |
+| **Enrollment lock & enroll** | Billing → Students | lock the enrollment row, enroll at funding, cancel, contact edit, link token | `LockEnrollment`, `Enroll`, `CancelEnrollment`, `UpdateContact`, `LinkToken`, inside Billing's transaction where they write | Billing locks and reads `enrollments`, `links` and `students` rows and calls `links.Enroll` and `links.CancelEnrollmentTx` with its own `*gorm.DB` |
 | **Student facts** | Documents → Students | name, gender, date of birth, group, program start date, bootcamp date; fills a missing date of birth or gender once | `documents.Students`, satisfied by `*students.Service` | Hephaestus keeps its own overrides and reads `settings.bootcamp_date` directly |
-| **Principal** | every context → Identity | the signed-in staff member (username, role) or student ID | context accessors set by `Require*` | `auth.Manager.Require`; `auth.Staff` reaches `internal/management` as a `func(context.Context) string` |
+| **Principal** | every context → Identity | the signed-in staff member (username, and role once it exists) or student ID | context accessors set by `Require*` | `auth.Manager.Require`; `auth.Staff` reaches `internal/management` as a `func(context.Context) string` |
 | **Sign-in candidate** (interim) | Identity → Students | an email and PIN match, plus active standing | `students.Service.SignInCandidate`, until the Socrative retirement moves PINs into `student_logins` | Hephaestus matches credentials against `students` |
+
+**Known gaps in the Enrollment lock & enroll seam.** Billing needs two things the seam does not offer yet:
+
+- **Gap: the Student row lock.** Billing's lease locks the Enrollment, then the Contract, then the Student (`leasedStudent`), and the seam has no Student lock to keep that order. Resolved in F9, beside `SetStanding`.
+- **Gap: the Profile path from a student to its enrollment.** Billing finds a student's contract and contact by reading `students` (`contractFor`, `ForStudent`, `syncCustomerContact`). Resolved in F6, through `students.Service.Profile`.
 
 Billing facts never reach Learning directly: Billing turns money events into a standing through Standing, and Learning reads that standing through Roster.
 
@@ -117,6 +123,7 @@ internal/<context>/<context>web/ thin handlers (parse → call service → rende
 ```
 
 - **The root holds no SQL and no HTTP.** It depends on no `net/http`, templ, pgx, GORM or `<context>db` package, transitively. `TestContextRootsImportNoAdapters` enforces this for every root in `reshapedRoots`.
+- **Roots log through a `*slog.Logger` passed in**, stdlib `log/slog` only, never `internal/logging`: it imports `net/http` and the GORM logger, so the root check would fail. `internal/logging` splits when A2 reshapes it.
 - **The consumer declares the store interface.** One per service, with methods named by use case (`ContractForUpdate`, `AppendResponses`); no `Repository[T]`. It exists to keep the root free of SQL: the root says what it needs, `<context>db` satisfies it, `main.go` wires them. A context with no domain logic in a read (the Program calendar, for example) has its handlers call the adapter directly, with no pass-through service.
 - **No in-memory fakes.** Domain invariants are tested with plain Go tests on domain types. Services and seams are tested against real PostgreSQL through `internal/testdb`, with the real adapter and the real provider service behind every seam. Only external systems are faked, at their HTTP boundary (Stripe through `billingtest`, [Testing](testing.md)).
 - **At most three packages per context**, with no further layers. Subdomains that are pure logic (`documents/ist`, `learning/words`) may sit beside them.
@@ -147,21 +154,7 @@ The `hephaestus_*` tables in the shared production database belong to ProjectHep
 
 - **`TestContextRootsImportNoAdapters`** runs `go list -deps` on each root in `reshapedRoots` and fails on any forbidden dependency, naming the root, the package and where it belongs. No root is reshaped yet, so the list is empty and the test skips with a message saying what it would check. Each reshape step adds its root in one line.
 - **`TestContextsTouchOnlyOwnedTables`** type-checks every production package and charges each table it finds to the package's context (`contextOf`). It fails on a table with no owner, and on a table outside the context's ownership, naming the file, line, declaration, table and owning context. It finds tables in SQL string literals and in GORM calls given a model from `models()`.
-- **The allowlist only shrinks.** `crossContextAllowlist` holds today's Billing → Students reaches, keyed by file, declaration and table; an entry that no longer matches fails the test until it is deleted. Phase F moves each behind a seam and F9 leaves it empty:
-
-| File | Declaration | Table | Seam that replaces it |
-|---|---|---|---|
-| `internal/billing/billing.go` | `contractFor` | `students` | `Profile` |
-| `internal/billing/summary.go` | `ForStudent` | `students` | `Profile` |
-| `internal/billing/summary.go` | `linkToken` | `enrollments`, `links` | `LinkToken` |
-| `internal/billing/cancel.go` | `CancelEnrollment` | `enrollments` | `CancelEnrollment` |
-| `internal/billing/checkout.go` | `beginCheckout` | `enrollments` | `LockEnrollment` |
-| `internal/billing/contact.go` | `UpdateContact` | `enrollments` | `LockEnrollment`, `UpdateContact` |
-| `internal/billing/worker.go` | `leased` | `enrollments` | `LockEnrollment` |
-| `internal/billing/worker.go` | `leasedStudent` | `students` | a Students row lock, third in lock order |
-| `internal/billing/worker.go` | `syncCustomerContact` | `students` | `Profile` |
-| `internal/billing/suspension.go` | `evaluateDeadlines`, `evaluateReactivation` | `students` | `SetStanding` |
-| `internal/billing/withdraw.go` | `withdraw` | `students` | `SetStanding` |
+- **The allowlist only shrinks.** `crossContextAllowlist` holds today's Billing → Students reaches, keyed by file, declaration and table, each commented with the seam that replaces it. An entry that no longer matches fails the test until it is deleted. Phase F moves each reach behind its seam and F9 leaves the list empty.
 
 ## Source
 
