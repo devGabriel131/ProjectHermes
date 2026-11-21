@@ -135,6 +135,6 @@ Page structure and fragments are in [Management overview](../management/overview
 - `internal/customer/customer.go`: `spanishDate`
 - `internal/customer/templates/agreement.html`: `accept_terms`, `program_start_date`
 - `internal/management/management.go`: `RegisterRoutes`
-- `internal/management/templates/index.html`: `program-start-date`
+- `internal/management/links.templ`: `program-start-date`
 - `internal/management/settings.templ`: `lifetime`
 - `internal/billing/checkout.go`: `StartCheckout`
