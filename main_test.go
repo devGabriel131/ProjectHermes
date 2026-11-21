@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"apollo/internal/logging"
+	"apollo/internal/logging/httplog"
 )
 
 func TestServeLifecycle(t *testing.T) {
@@ -40,7 +41,7 @@ func TestServeLifecycle(t *testing.T) {
 			var releaseOnce sync.Once
 			var requestContext context.Context
 			var requestCanceledAt time.Time
-			server := &http.Server{Handler: logging.Requests(log, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := &http.Server{Handler: httplog.Requests(log, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				defer close(handlerDone)
 				requestContext = r.Context()
 				close(started)

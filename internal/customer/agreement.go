@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"apollo/internal/logging"
+	"apollo/internal/logging/httplog"
 	"apollo/internal/settings"
 )
 
@@ -36,7 +36,7 @@ func (s *site) agreement(w http.ResponseWriter, r *http.Request) {
 				redirectCustomer(w, r, data.Path+"/payments")
 				return
 			case err != nil:
-				logging.RecordError(r, "accept", err)
+				httplog.RecordError(r, "accept", err)
 				status = http.StatusInternalServerError
 				data.Error = "No pudimos guardar tu aceptación. Intenta de nuevo."
 			default:
@@ -64,7 +64,7 @@ func (s *site) agreement(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	editable, err := s.billing.ContactEditable(ctx, enrollment)
 	if err != nil {
-		logging.RecordError(r, "load", err)
+		httplog.RecordError(r, "load", err)
 		data.Error = openFailedMessage
 		s.render(w, r, "index.html", data, http.StatusInternalServerError)
 		return
@@ -75,7 +75,7 @@ func (s *site) agreement(w http.ResponseWriter, r *http.Request) {
 	if data.TermsAcceptedAt == nil {
 		current, err := s.settings.Current(ctx)
 		if err != nil {
-			logging.RecordError(r, "load", err)
+			httplog.RecordError(r, "load", err)
 			data.Error = "No pudimos cargar el acuerdo. Intenta de nuevo."
 			status = http.StatusInternalServerError
 		}

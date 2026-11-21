@@ -1,14 +1,15 @@
-// Package logging writes structured JSON events to stdout, correlates requests and summarizes slow database queries, pool waits and Stripe calls. Requests must be the outermost wrapper; Routes and RecordError panic without it. See docs/operations/observability.md.
+// Package logging holds the conventions every package may share: the JSON event format, privacy-safe
+// error fields and their request level, and the labels database and Stripe summaries group calls by. It
+// imports the stdlib only, never net/http or GORM; HTTP instrumentation lives in httplog and the GORM logger
+// in dblog. See docs/operations/observability.md.
 package logging
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"io"
-	"log"
 	"log/slog"
 	"net"
 	"reflect"
@@ -153,7 +154,9 @@ func validSQLState(state string) bool {
 	return true
 }
 
-func requestLevel(stage string, err error) slog.Level {
+// RequestLevel is request_failed's level for a failure at stage: a cancellation, or a render write to a
+// client already gone, is a warning; anything else is an error.
+func RequestLevel(stage string, err error) slog.Level {
 	if errors.Is(err, context.Canceled) {
 		return slog.LevelWarn
 	}
@@ -167,28 +170,31 @@ func requestLevel(stage string, err error) slog.Level {
 	return slog.LevelError
 }
 
-// ServerErrorLog drops stdlib diagnostic bytes, preserving only a fixed prefix class.
-func ServerErrorLog(logger *slog.Logger) *log.Logger {
-	return log.New(serverErrorWriter{logger: logger}, "", 0)
+type operationKey struct{}
+type routeKey struct{}
+
+// WithOperation labels immutable startup/background contexts for database and Stripe summaries.
+func WithOperation(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, operationKey{}, name)
 }
 
-type serverErrorWriter struct {
-	logger *slog.Logger
+// WithRoute labels a request's context with the route pattern *route holds once routing matches; it wins
+// over any operation.
+func WithRoute(ctx context.Context, route *string) context.Context {
+	return context.WithValue(ctx, routeKey{}, route)
 }
 
-func (w serverErrorWriter) Write(p []byte) (int, error) {
-	kind := "other"
-	switch {
-	case bytes.HasPrefix(p, []byte("http: panic serving ")):
-		kind = "panic"
-	case bytes.HasPrefix(p, []byte("http: Accept error: ")):
-		kind = "accept"
-	case bytes.HasPrefix(p, []byte("http: response.WriteHeader on hijacked connection from ")),
-		bytes.HasPrefix(p, []byte("http: superfluous response.WriteHeader call from ")),
-		bytes.HasPrefix(p, []byte("http: invalid Content-Length of ")),
-		bytes.HasPrefix(p, []byte("http: WriteHeader called with both Transfer-Encoding of ")):
-		kind = "response_header"
+// Label names what a database or Stripe call belongs to: its request's route pattern (or "unmatched"),
+// else its background operation, else "other".
+func Label(ctx context.Context) string {
+	if route, ok := ctx.Value(routeKey{}).(*string); ok {
+		if *route != "" {
+			return *route
+		}
+		return "unmatched"
 	}
-	w.logger.Error("http_server_error", slog.String("kind", kind))
-	return len(p), nil
+	if name, ok := ctx.Value(operationKey{}).(string); ok {
+		return name
+	}
+	return "other"
 }

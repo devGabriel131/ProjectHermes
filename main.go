@@ -26,6 +26,8 @@ import (
 	"apollo/internal/links"
 	"apollo/internal/live"
 	"apollo/internal/logging"
+	"apollo/internal/logging/dblog"
+	"apollo/internal/logging/httplog"
 	"apollo/internal/management"
 	"apollo/internal/payments"
 	"apollo/internal/settings"
@@ -102,7 +104,7 @@ func run(log *slog.Logger, args []string) error {
 	if len(args) == 0 {
 		log.Info("startup_started")
 	}
-	slow := logging.NewDBLogger(log)
+	slow := dblog.New(log)
 	defer slow.Flush()
 
 	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -166,7 +168,7 @@ func run(log *slog.Logger, args []string) error {
 		}
 		payments.InstallmentSpacing = spacing
 	}
-	stripeTimer := logging.NewStripeTimer(log, http.DefaultTransport)
+	stripeTimer := httplog.NewStripeTimer(log, http.DefaultTransport)
 	defer stripeTimer.Flush()
 	stripeClient := billing.NewStripeClient(stripeAPIKey, stripeTimer)
 	catalogCtx, cancelCatalog := context.WithTimeout(logging.WithOperation(signalContext, "startup_catalog"), 15*time.Second)
@@ -269,7 +271,7 @@ func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.M
 	if err := management.RegisterRoutes(managementMux, store, roster, config, auth.Staff, biller); err != nil {
 		return nil, startupError{"management_routes", err}
 	}
-	mux.Handle("/management/", authentication.Require(logging.Routes(managementMux)))
+	mux.Handle("/management/", authentication.Require(httplog.Routes(managementMux)))
 	if err := customer.RegisterRoutes(mux, store, roster, config, biller, secureCookies); err != nil {
 		return nil, startupError{"customer_routes", err}
 	}
@@ -277,8 +279,8 @@ func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.M
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           logging.Requests(log, secureHeaders(http.NewCrossOriginProtection().Handler(logging.Routes(mux)))),
-		ErrorLog:          logging.ServerErrorLog(log),
+		Handler:           httplog.Requests(log, secureHeaders(http.NewCrossOriginProtection().Handler(httplog.Routes(mux)))),
+		ErrorLog:          httplog.ServerErrorLog(log),
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,

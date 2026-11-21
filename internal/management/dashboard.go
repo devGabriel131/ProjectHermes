@@ -6,7 +6,7 @@ import (
 
 	"apollo/internal/billing"
 	"apollo/internal/links"
-	"apollo/internal/logging"
+	"apollo/internal/logging/httplog"
 	"apollo/internal/students"
 )
 
@@ -45,7 +45,7 @@ func (s *site) dashboard(w http.ResponseWriter, r *http.Request) {
 		data.Billing, err = s.billing.Overview(ctx, now, dashboardWindow)
 	}
 	if err != nil {
-		logging.RecordError(r, "load", err)
+		httplog.RecordError(r, "load", err)
 		http.Error(w, "Could not load the dashboard. Please try again.", http.StatusInternalServerError)
 		return
 	}

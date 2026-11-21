@@ -5,32 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"reflect"
 	"syscall"
 	"testing"
-)
 
-func decodeEvents(t *testing.T, data []byte) []map[string]any {
-	t.Helper()
-	var events []map[string]any
-	for i, line := range bytes.Split(data, []byte{'\n'}) {
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		var event map[string]any
-		if err := json.Unmarshal(line, &event); err != nil {
-			t.Fatalf("log line %d is not a JSON object: %v", i+1, err)
-		}
-		if event == nil {
-			t.Fatalf("log line %d is not a JSON object", i+1)
-		}
-		events = append(events, event)
-	}
-	return events
-}
+	"apollo/internal/logging/logtest"
+)
 
 func TestNewJSONSemantics(t *testing.T) {
 	t.Parallel()
@@ -46,7 +28,7 @@ func TestNewJSONSemantics(t *testing.T) {
 			t.Parallel()
 			var out bytes.Buffer
 			New(&out).LogAttrs(t.Context(), tc.level, "database_slow_summary", slog.Float64("duration_ms", 12.5))
-			events := decodeEvents(t, out.Bytes())
+			events := logtest.Events(t, out.Bytes())
 			if tc.want == "" {
 				if len(events) != 0 || out.Len() != 0 {
 					t.Fatal("debug output must be filtered")
@@ -131,8 +113,8 @@ func TestErrorAttrsClassificationAndPrivacy(t *testing.T) {
 				t.Fatal("nil error must produce nil attributes")
 			}
 			var out bytes.Buffer
-			New(&out).LogAttrs(t.Context(), requestLevel("save", tc.err), "request_failed", attrs...)
-			events := decodeEvents(t, out.Bytes())
+			New(&out).LogAttrs(t.Context(), RequestLevel("save", tc.err), "request_failed", attrs...)
+			events := logtest.Events(t, out.Bytes())
 			if len(events) != 1 || !bytes.HasSuffix(out.Bytes(), []byte{'\n'}) {
 				t.Fatal("failure must produce one newline-terminated JSON event")
 			}
@@ -191,50 +173,8 @@ func TestRequestLevelBoundaries(t *testing.T) {
 			if err != nil {
 				err = &privateLoggingWrapper{Err: err, Marker: loggingPrivateMarker}
 			}
-			if got := requestLevel(tc.stage, err); got != tc.want {
+			if got := RequestLevel(tc.stage, err); got != tc.want {
 				t.Errorf("level = %s, want %s", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestServerErrorLogPrivacy(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name   string
-		record string
-		kind   string
-	}{
-		{name: "panic", record: "http: panic serving 192.0.2.1:4321: " + loggingPrivateMarker + "\ngoroutine 45 [running]:\nprivateHandler()\n\tprivate.go:42\n", kind: "panic"},
-		{name: "accept", record: "http: Accept error: " + loggingPrivateMarker + " 192.0.2.1:4321; retrying in 5ms\nprivate.go:42", kind: "accept"},
-		{name: "superfluous header", record: "http: superfluous response.WriteHeader call from " + loggingPrivateMarker + " (private.go:42)\nprivate stack", kind: "response_header"},
-		{name: "hijacked header", record: "http: response.WriteHeader on hijacked connection from " + loggingPrivateMarker + " (private.go:42)\nprivate stack", kind: "response_header"},
-		{name: "content length", record: "http: invalid Content-Length of " + loggingPrivateMarker + "\nprivate stack", kind: "response_header"},
-		{name: "transfer encoding", record: "http: WriteHeader called with both Transfer-Encoding of " + loggingPrivateMarker + " and a Content-Length of 99\nprivate stack", kind: "response_header"},
-		{name: "TLS", record: "http: TLS handshake error from 192.0.2.1:4321: " + loggingPrivateMarker + "\nprivate.go:42", kind: "other"},
-		{name: "embedded prefix", record: loggingPrivateMarker + "\nhttp: panic serving 192.0.2.1:4321: panic\nprivate.go:42", kind: "other"},
-		{name: "unknown", record: loggingPrivateMarker + "\nprivate.go:42", kind: "other"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			var out bytes.Buffer
-			serverLog := ServerErrorLog(New(&out))
-			if serverLog.Prefix() != "" || serverLog.Flags() != 0 {
-				t.Fatal("stdlib logger must add no prefix or flags")
-			}
-			serverLog.Print(tc.record)
-			events := decodeEvents(t, out.Bytes())
-			if len(events) != 1 || !bytes.HasSuffix(out.Bytes(), []byte{'\n'}) {
-				t.Fatal("one stdlib record must emit one JSON line")
-			}
-			event := events[0]
-			if len(event) != 4 || event["level"] != "error" || event["message"] != "http_server_error" || event["kind"] != tc.kind {
-				t.Fatalf("unexpected server diagnostic: %v", event)
-			}
-			for _, forbidden := range []string{loggingPrivateMarker, "192.0.2.1", "private.go", "goroutine", "privateHandler", "private stack"} {
-				if bytes.Contains(out.Bytes(), []byte(forbidden)) {
-					t.Errorf("serialized raw diagnostic content %q", forbidden)
-				}
 			}
 		})
 	}

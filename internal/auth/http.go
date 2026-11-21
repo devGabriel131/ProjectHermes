@@ -18,6 +18,7 @@ import (
 	"gorm.io/gorm"
 
 	"apollo/internal/logging"
+	"apollo/internal/logging/httplog"
 )
 
 //go:embed templates/login.html
@@ -76,7 +77,7 @@ func New(db *gorm.DB, secureCookies bool, log *slog.Logger) (*Manager, error) {
 	sessions.Cookie.Persist = true
 	sessions.Cookie.Secure = secureCookies
 	sessions.ErrorFunc = func(w http.ResponseWriter, r *http.Request, err error) {
-		logging.RecordError(r, "session", err)
+		httplog.RecordError(r, "session", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	}
 	return &Manager{
@@ -134,7 +135,7 @@ func (m *Manager) Require(next http.Handler) http.Handler {
 	return m.sessions.LoadAndSave(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		username, err := m.authenticated(r.Context())
 		if err != nil {
-			logging.RecordError(r, "authenticate", err)
+			httplog.RecordError(r, "authenticate", err)
 			http.Error(w, "Could not check your sign-in. Please try again.", http.StatusInternalServerError)
 			return
 		}
@@ -174,7 +175,7 @@ func (m *Manager) authenticated(ctx context.Context) (string, error) {
 // Signed-out requests have nothing to end and are redirected the same way.
 func (m *Manager) logout(w http.ResponseWriter, r *http.Request) {
 	if err := m.sessions.Destroy(r.Context()); err != nil {
-		logging.RecordError(r, "logout", err)
+		httplog.RecordError(r, "logout", err)
 		http.Error(w, "Could not sign out. Please try again.", http.StatusInternalServerError)
 		return
 	}
@@ -208,7 +209,7 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 		err = m.sessions.RenewToken(ctx)
 	}
 	if err != nil {
-		logging.RecordError(r, "login", err)
+		httplog.RecordError(r, "login", err)
 		page.Error = "Could not sign in. Please try again."
 		m.render(w, r, http.StatusInternalServerError, page)
 		return
@@ -250,6 +251,6 @@ func (m *Manager) render(w http.ResponseWriter, r *http.Request, status int, pag
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.WriteHeader(status)
 	if err := m.page.Execute(w, page); err != nil {
-		logging.RecordError(r, "render", err)
+		httplog.RecordError(r, "render", err)
 	}
 }

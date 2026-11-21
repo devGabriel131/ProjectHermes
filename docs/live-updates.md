@@ -14,7 +14,7 @@ How open management pages learn that data they show has changed: one server-sent
 | Write deadline | The server's 10 s `WriteTimeout` is cleared at connect. Each write gets its own 5 s deadline, then the deadline is cleared again. A stalled reader is dropped after 5 s; a healthy stream lives as long as the page. If the response writer cannot clear the deadline, the answer is 500 `Live updates are unavailable.` |
 | Failures | A write or flush error returns silently: it means the page went away. |
 
-The deadline control works through `http.ResponseController`, which reaches the real connection because the scs session writer and `logging.statusWriter` both implement `Unwrap`.
+The deadline control works through `http.ResponseController`, which reaches the real connection because the scs session writer and `httplog.statusWriter` both implement `Unwrap`.
 
 ## Publishing
 
@@ -158,7 +158,7 @@ The feed is an in-process map of channels. A write handled by another process ne
 - `static/management-live.js`: `listenForChanges`, `due`, `EventSource`, `management-changed`
 - `main.go`: `newServer`, `serve`, `RegisterOnShutdown`, `live.New`
 - `internal/auth/http.go`: `Require`
-- `internal/logging/http.go`: `statusWriter`, `Unwrap`
+- `internal/logging/httplog/http.go`: `statusWriter`, `Unwrap`
 - `internal/links/links.go`: `Store.CreateLink`, `Store.StartEnrollment`, `Store.AcceptTerms`, `Store.SaveDraft`, `Store.Submit`, `Store.CancelLink`, `CancelEnrollmentTx`
 - `internal/students/students.go`: `UpdateField`
 - `internal/billing/checkout.go`: `StartCheckout`

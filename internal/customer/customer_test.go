@@ -24,6 +24,7 @@ import (
 	"apollo/internal/billing/billingtest"
 	"apollo/internal/links"
 	"apollo/internal/logging"
+	"apollo/internal/logging/httplog"
 	"apollo/internal/settings"
 	"apollo/internal/students"
 	"apollo/internal/testdb"
@@ -931,7 +932,7 @@ func newMux(t *testing.T, db *gorm.DB) http.Handler {
 	if err := RegisterRoutes(mux, links.New(db, nil), students.New(db, nil), settings.New(db), testCustomerBiller(t, db), false); err != nil {
 		t.Fatal(err)
 	}
-	return logging.Requests(logging.New(io.Discard), mux)
+	return httplog.Requests(logging.New(io.Discard), mux)
 }
 
 // serve runs the customer routes behind a real HTTP server.

@@ -170,7 +170,7 @@ Accepted risk: an outsider who keeps the bucket empty blocks new staff sign-ins;
 
 ## Protected requests
 
-`auth.Require(logging.Routes(managementMux))` is the access boundary. Folder layout is not.
+`auth.Require(httplog.Routes(managementMux))` is the access boundary. Folder layout is not.
 
 ```mermaid
 flowchart TD
