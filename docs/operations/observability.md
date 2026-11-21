@@ -192,7 +192,7 @@ Errors also go to Sentry, through `internal/logging/sentrylog`, with no request 
 **Verifying the live pipeline.** No HTTP route triggers Sentry. On a deployed environment, run the deployed binary over Railway SSH:
 
 ```
-railway ssh --project <id> --environment <env> --service ProjectHermes -- /app/out sentry-check
+railway ssh --project <id> --environment <env> --service Apollo -- /app/out sentry-check
 ```
 
 `sentry-check` needs no database. It logs one `sentry_check` error, which carries only the logger's service, environment and version fields, plus `deployment_id` and `replica_id` where Railway sets them, through the same logger as the server, waits up to 2 s for the SDK to send it, and prints its event ID. The SDK does not report Sentry's answer, so a wrong key or a blocked network still prints the ID: search Sentry for that ID to confirm the event arrived and carries nothing but the fields above. Without `SENTRY_DSN` it prints that Sentry is off and exits 1.
