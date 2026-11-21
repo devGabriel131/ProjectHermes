@@ -1,0 +1,143 @@
+package management
+
+import (
+	"apollo/internal/ui"
+	"cmp"
+	"strconv"
+	"strings"
+)
+
+// addStudentsView is the Add students page: one form for a single student and one for a roster import, each
+// redisplaying its values and refusal, then the import report. Both forms are ordinary posts; the page loads no script.
+templ addStudentsView(data addStudentsData) {
+	@ui.Staff("Add students", ui.NavAddStudents, data.Staff, false) {
+		<div class="management-page-heading">
+			<div>
+				<h1>Add students</h1>
+				<p class="management-page-description">Add students who enrolled outside customer links. They have no billing record and are listed under Existing students.</p>
+			</div>
+		</div>
+		<div class="student-add-panels">
+			<section class="management-panel" aria-labelledby="add-student-heading">
+				<div class="management-panel-heading">
+					<h2 id="add-student-heading">Add one student</h2>
+				</div>
+				<form class="management-settings-form student-add-form" method="post" action="/management/students" autocomplete="off">
+					@addField("name", "Name", "text", data.Entry.Name, data.Errors.NameError)
+					@addField("email", "Email", "email", data.Entry.Email, data.Errors.EmailError)
+					@addField("pin", "PIN", "text", data.Entry.Pin, data.Errors.PinError)
+					<label for="add-group">Group</label>
+					<select id="add-group" name="group" required>
+						@groupOptions(data.Groups, data.AddGroup)
+					</select>
+					if data.AddError != "" {
+						<p role="alert">{ data.AddError }</p>
+					}
+					<button type="submit" class="management-button-primary">Add student</button>
+				</form>
+				<div class="management-settings-footer">
+					<p role="status">
+						if data.Added != nil {
+							Added <a href={ "/management/students/" + strconv.FormatUint(data.Added.ID, 10) }>{ data.Added.Name }</a> to { data.Added.Group }.
+						}
+					</p>
+				</div>
+			</section>
+			<section class="management-panel" aria-labelledby="import-roster-heading">
+				<div class="management-panel-heading">
+					<h2 id="import-roster-heading">Import a roster</h2>
+				</div>
+				<form class="management-settings-form student-add-form" method="post" action="/management/students/import" enctype="multipart/form-data">
+					<label for="roster-group">Group</label>
+					<select id="roster-group" name="group" required aria-describedby="roster-group-scope">
+						@groupOptions(data.Groups, data.ImportGroup)
+					</select>
+					<p id="roster-group-scope">Every student added from this file joins this group.</p>
+					<label for="roster-file">Roster file</label>
+					<input
+						id="roster-file"
+						name="roster"
+						type="file"
+						accept=".xlsx,.csv"
+						required
+						if data.ImportError != "" {
+							aria-describedby="roster-format roster-error"
+							aria-invalid="true"
+						} else {
+							aria-describedby="roster-format"
+						}
+					/>
+					<p id="roster-format">An .xlsx or .csv file whose first row is a header, then one student per row: last name, first name, student ID (the PIN), email. Rows with problems are skipped; download them, fix them, and upload that file.</p>
+					if data.ImportError != "" {
+						<p id="roster-error" role="alert">{ data.ImportError }</p>
+					}
+					<button type="submit" class="management-button-primary">Import</button>
+				</form>
+			</section>
+		</div>
+		if report := data.Imported; report != nil {
+			<section class="management-panel student-import-report" aria-labelledby="import-report-heading">
+				<div class="management-panel-heading">
+					<h2 id="import-report-heading">Import results</h2>
+					<p role="status">{ report.summary(data.ImportGroup) }</p>
+					if len(report.FixFile) > 0 {
+						<p><a href={ xlsxDataURL(report.FixFile) } download="students-to-fix.xlsx">Download rows to fix</a></p>
+					}
+				</div>
+				if len(report.Rejected) > 0 {
+					<div class="student-table-scroll">
+						<table class="student-table" aria-label="Rows not added">
+							<thead>
+								<tr>
+									<th scope="col">Row</th>
+									<th scope="col">Name</th>
+									<th scope="col">Problems</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, row := range report.Rejected {
+									<tr>
+										<td>{ strconv.Itoa(row.Line) }</td>
+										<td>{ cmp.Or(row.Name, "—") }</td>
+										<td>{ strings.Join(row.Problems, " ") }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</section>
+		}
+	}
+}
+
+// addField is one of the single form's text fields, add-{name}, with its refusal when problem is set.
+templ addField(name, label, kind, value, problem string) {
+	<label for={ "add-" + name }>{ label }</label>
+	<input
+		id={ "add-" + name }
+		name={ name }
+		type={ kind }
+		if name == "pin" {
+			inputmode="numeric"
+			maxlength="6"
+		}
+		required
+		value={ value }
+		if problem != "" {
+			aria-invalid="true"
+			aria-describedby={ "add-" + name + "-error" }
+		}
+	/>
+	if problem != "" {
+		<p id={ "add-" + name + "-error" } role="alert">{ problem }</p>
+	}
+}
+
+// groupOptions are a Group select's options, with selected chosen; a value not offered selects nothing.
+templ groupOptions(groups []string, selected string) {
+	<option value="" selected?={ selected == "" }>Select a group</option>
+	for _, group := range groups {
+		<option value={ group } selected?={ group == selected }>{ group }</option>
+	}
+}
