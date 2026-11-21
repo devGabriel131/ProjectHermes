@@ -58,7 +58,7 @@ type rejectedRow struct {
 type rosterReport struct {
 	Added    int
 	Rejected []rejectedRow
-	FixFile  templ.SafeURL // data: URL of the fix workbook; "" when nothing was rejected
+	FixFile  []byte // the fix workbook; nil when nothing was rejected
 }
 
 // summary is the report's status line for an import into group.
@@ -68,6 +68,12 @@ func (r rosterReport) summary(group string) string {
 		line += fmt.Sprintf(" %d %s fixing.", n, plural(n, "row needs", "rows need"))
 	}
 	return line
+}
+
+// xlsxDataURL is the download URL of an .xlsx workbook. SafeURL skips templ's scheme check, which refuses data:;
+// it is safe because the prefix is constant and base64's alphabet cannot leave the href or change its scheme.
+func xlsxDataURL(workbook []byte) templ.SafeURL {
+	return templ.SafeURL("data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64," + base64.StdEncoding.EncodeToString(workbook))
 }
 
 type addStudentsData struct {
@@ -315,9 +321,7 @@ func (s *site) importStudents(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Could not build the rows-to-fix file. Please try again.", http.StatusInternalServerError)
 			return
 		}
-		// SafeURL skips templ's scheme check, which refuses data:. The URL is a constant MIME prefix and a base64
-		// payload, whose alphabet cannot leave the href or change its scheme.
-		report.FixFile = templ.SafeURL("data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64," + base64.StdEncoding.EncodeToString(fixBytes))
+		report.FixFile = fixBytes
 	}
 
 	data.Imported = &report

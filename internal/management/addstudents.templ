@@ -80,8 +80,8 @@ templ addStudentsView(data addStudentsData) {
 				<div class="management-panel-heading">
 					<h2 id="import-report-heading">Import results</h2>
 					<p role="status">{ report.summary(data.ImportGroup) }</p>
-					if report.FixFile != "" {
-						<p><a href={ report.FixFile } download="students-to-fix.xlsx">Download rows to fix</a></p>
+					if len(report.FixFile) > 0 {
+						<p><a href={ xlsxDataURL(report.FixFile) } download="students-to-fix.xlsx">Download rows to fix</a></p>
 					}
 				</div>
 				if len(report.Rejected) > 0 {
