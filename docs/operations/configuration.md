@@ -24,10 +24,11 @@ The application never loads a `.env` file itself; locally, Air injects `.env` (`
 | `RAILWAY_GIT_COMMIT_SHA` | server, `user` CLI (log field `version`) | `unknown` | None | never fails |
 | `RAILWAY_DEPLOYMENT_ID` | server, `user` CLI (log field `deployment_id`) | field omitted when unset | None | never fails |
 | `RAILWAY_REPLICA_ID` | server, `user` CLI (log field `replica_id`) | field omitted when unset | None | never fails |
+| `SENTRY_DSN` | server, `user` CLI, `sentry-check` | unset: Sentry off, no Sentry code runs | Optional; seal it in Railway. Parsed by sentry-go when set ([Observability](observability.md#sentry)) | `sentry_configuration` |
 
 Notes on the table:
 
-- The `user` CLI needs only `DATABASE_URL`. It runs before the Stripe variables are read, so those may be absent ([Startup and shutdown](startup-shutdown.md) shows where the branch splits). The `RAILWAY_*` variables are read for every command except help paths and an unknown first argument, so they label CLI logs too.
+- The `user` CLI needs only `DATABASE_URL`. It runs before the Stripe variables are read, so those may be absent ([Startup and shutdown](startup-shutdown.md) shows where the branch splits). The `RAILWAY_*` variables and `SENTRY_DSN` are read for every command except help paths and an unknown first argument, so they label CLI logs too, and a CLI error event reaches Sentry like a server one. `RAILWAY_ENVIRONMENT_NAME` and `RAILWAY_GIT_COMMIT_SHA` are also the Sentry environment and release.
 - Stripe variables are validated in this order and the first failure is reported: `STRIPE_API_KEY` empty, `STRIPE_MODE`, key prefix, then `PUBLIC_BASE_URL`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID`, `STRIPE_PORTAL_CONFIGURATION_ID`. The API key and `PUBLIC_BASE_URL` are not trimmed; the webhook secret and the two configuration IDs fail when blank after trimming whitespace.
 - Sandbox versus live is also enforced against Stripe itself: every catalog price's `livemode` must equal the configured mode (stage `billing_catalog`), and each webhook event's `livemode` must too ([Webhooks](../billing/webhooks.md)).
 - `PUBLIC_BASE_URL` builds Stripe return URLs and the customer-portal return URL ([Checkout](../billing/checkout.md)). It also sets `Secure` on the staff `management_session` and customer `enrollment_session` cookies exactly when its parsed scheme is `https` (so `HTTPS://` counts). `Config.Validate` allows a non-`https` origin only in sandbox mode for `http` on `localhost`, `127.0.0.1` or `::1`, so only such an origin, wherever the app runs, sends session cookies without `Secure`.
@@ -50,6 +51,7 @@ A startup failure logs `startup_failed` with a `stage` field, then the process e
 
 | `stage` | Raised by | Typical cause |
 |---|---|---|
+| `sentry_configuration` | `sentrylog.New` in `main` | `SENTRY_DSN` set but not a valid DSN; checked before `run`, so no database is touched |
 | `configuration` | `run` | `DATABASE_URL` empty; `INSTALLMENT_SPACING` not a positive duration or set with `STRIPE_MODE=live` |
 | `database_open` | `gorm.Open` | DSN does not parse. No connection is attempted here: `DisableAutomaticPing` is set |
 | `database_pool` | `db.DB()` | GORM holds no `*sql.DB`; not reachable with the PostgreSQL driver in use [INFERENCE] |
@@ -67,7 +69,8 @@ Failures after `listen` succeeds are `server_failed` or `shutdown_failed`, not s
 
 ## Source
 
-- `main.go`: `run`, `startupError`, `INSTALLMENT_SPACING`, `DATABASE_URL`, `PORT`, `RAILWAY_SERVICE_NAME`, `RAILWAY_ENVIRONMENT_NAME`, `RAILWAY_GIT_COMMIT_SHA`, `RAILWAY_DEPLOYMENT_ID`, `RAILWAY_REPLICA_ID`
+- `main.go`: `main`, `run`, `startupError`, `INSTALLMENT_SPACING`, `DATABASE_URL`, `PORT`, `SENTRY_DSN`, `RAILWAY_SERVICE_NAME`, `RAILWAY_ENVIRONMENT_NAME`, `RAILWAY_GIT_COMMIT_SHA`, `RAILWAY_DEPLOYMENT_ID`, `RAILWAY_REPLICA_ID`
+- `internal/logging/sentrylog/sentrylog.go`: `New`
 - `internal/billing/stripe.go`: `Config.Validate`, `Config.SecureOrigin`, `LoadConfigFromEnv`, `LoadCatalog`, `STRIPE_API_KEY`, `STRIPE_MODE`, `PUBLIC_BASE_URL`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID`, `STRIPE_PORTAL_CONFIGURATION_ID`, `INSTALLMENT_RETRY_DELAY`
 - `internal/billing/billing.go`: `New`
 - `internal/testdb/testdb.go`: `Open`, `TEST_DATABASE_URL`

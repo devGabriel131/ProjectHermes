@@ -1,4 +1,4 @@
-// Command apollo serves the enrollment, agreement and tuition-payment site, and runs the staff account CLI (apollo user ...). See docs/architecture.md and docs/operations/startup-shutdown.md.
+// Command apollo serves the enrollment, agreement and tuition-payment site, and runs the staff account CLI (apollo user ...) and the Sentry check (apollo sentry-check). See docs/architecture.md and docs/operations/startup-shutdown.md.
 package main
 
 import (
@@ -7,6 +7,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 	"apollo/internal/logging"
 	"apollo/internal/logging/dblog"
 	"apollo/internal/logging/httplog"
+	"apollo/internal/logging/sentrylog"
 	"apollo/internal/management"
 	"apollo/internal/payments"
 	"apollo/internal/settings"
@@ -49,6 +51,7 @@ func main() {
 				fmt.Print(auth.Usage)
 				return
 			}
+		case "sentry-check":
 		default:
 			fmt.Fprintf(os.Stderr, "unknown command %q; use --help\n", args[0])
 			os.Exit(1)
@@ -59,10 +62,13 @@ func main() {
 	if len(args) > 0 {
 		out = os.Stderr
 	}
-	log := logging.New(out).With(
+	environment := cmp.Or(os.Getenv("RAILWAY_ENVIRONMENT_NAME"), "local")
+	release := os.Getenv("RAILWAY_GIT_COMMIT_SHA")
+	reporter, sentryErr := sentrylog.New(sentrylog.Options{DSN: os.Getenv("SENTRY_DSN"), Environment: environment, Release: release})
+	log := newLogger(out, reporter).With(
 		"service", cmp.Or(os.Getenv("RAILWAY_SERVICE_NAME"), "Apollo"),
-		"environment", cmp.Or(os.Getenv("RAILWAY_ENVIRONMENT_NAME"), "local"),
-		"version", cmp.Or(os.Getenv("RAILWAY_GIT_COMMIT_SHA"), "unknown"),
+		"environment", environment,
+		"version", cmp.Or(release, "unknown"),
 	)
 	if id := os.Getenv("RAILWAY_DEPLOYMENT_ID"); id != "" {
 		log = log.With("deployment_id", id)
@@ -70,15 +76,51 @@ func main() {
 	if id := os.Getenv("RAILWAY_REPLICA_ID"); id != "" {
 		log = log.With("replica_id", id)
 	}
-	err := run(log, args)
+	var err error
+	switch {
+	case sentryErr != nil:
+		err = startupError{"sentry_configuration", sentryErr}
+	case len(args) > 0 && args[0] == "sentry-check":
+		if err = checkSentry(log, reporter); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	default:
+		err = run(log, reporter, args)
+	}
 	var failed startupError
 	if errors.As(err, &failed) {
 		log.LogAttrs(context.Background(), slog.LevelError, "startup_failed",
 			append(logging.ErrorAttrs(failed.err), slog.String("stage", failed.stage))...)
 	}
+	// Last, so startup_failed and the shutdown events reach Sentry too.
+	reporter.Flush(2 * time.Second)
 	if err != nil {
 		os.Exit(1)
 	}
+}
+
+// newLogger writes JSON events to out and, when Sentry is on, also reports error events to it.
+func newLogger(out io.Writer, reporter *sentrylog.Reporter) *slog.Logger {
+	log := logging.New(out)
+	if reporter == nil {
+		return log
+	}
+	return slog.New(slog.NewMultiHandler(log.Handler(), reporter.Handler()))
+}
+
+// checkSentry logs one synthetic sentry_check error, which carries no data, through the normal logger, waits
+// for the SDK to send it, and prints its event ID. The SDK does not report Sentry's answer, so whether the
+// event arrived is confirmed in Sentry by that ID.
+func checkSentry(log *slog.Logger, reporter *sentrylog.Reporter) error {
+	if reporter == nil {
+		return errors.New("SENTRY_DSN is not set, so Sentry is off")
+	}
+	log.ErrorContext(logging.WithOperation(context.Background(), "sentry_check"), "sentry_check")
+	if !reporter.Flush(2 * time.Second) {
+		return fmt.Errorf("sentry_check event %s was still queued after 2s", reporter.LastEventID())
+	}
+	fmt.Printf("sentry_check event %s handed to Sentry; search for this ID in Sentry to confirm it arrived\n", reporter.LastEventID())
+	return nil
 }
 
 // startupError marks a failure that main logs as startup_failed.
@@ -100,7 +142,7 @@ func models() []any {
 	}, billing.Models()...)
 }
 
-func run(log *slog.Logger, args []string) error {
+func run(log *slog.Logger, reporter *sentrylog.Reporter, args []string) error {
 	if len(args) == 0 {
 		log.Info("startup_started")
 	}
@@ -182,7 +224,7 @@ func run(log *slog.Logger, args []string) error {
 	if port := os.Getenv("PORT"); port != "" {
 		addr = ":" + port
 	}
-	app, err := newApp(addr, db, db, feed, stripeClient, billingCfg, catalog, log)
+	app, err := newApp(addr, db, db, feed, stripeClient, billingCfg, catalog, log, reporter)
 	if err != nil {
 		return err
 	}
@@ -233,7 +275,7 @@ type application struct {
 // newApp is the one place run and the wiring tests build billing, staff auth and the routes, so
 // the tests exercise the real composition. Auth and billing use db; newServer's stores use served
 // (run passes db twice; tests may hand over a broken connection).
-func newApp(addr string, db, served *gorm.DB, feed *live.Feed, stripeClient *stripe.Client, cfg billing.Config, catalog billing.Catalog, log *slog.Logger) (application, error) {
+func newApp(addr string, db, served *gorm.DB, feed *live.Feed, stripeClient *stripe.Client, cfg billing.Config, catalog billing.Catalog, log *slog.Logger, reporter *sentrylog.Reporter) (application, error) {
 	biller, err := billing.New(db, stripeClient, cfg, catalog, feed.Changed, log)
 	if err != nil {
 		return application{}, startupError{"billing_initialize", err}
@@ -244,14 +286,14 @@ func newApp(addr string, db, served *gorm.DB, feed *live.Feed, stripeClient *str
 	if err != nil {
 		return application{}, startupError{"auth_initialize", err}
 	}
-	server, err := newServer(addr, served, feed, authentication, biller, secureCookies, log)
+	server, err := newServer(addr, served, feed, authentication, biller, secureCookies, log, reporter)
 	if err != nil {
 		return application{}, err
 	}
 	return application{server: server, biller: biller, authentication: authentication}, nil
 }
 
-func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.Manager, biller *billing.Service, secureCookies bool, log *slog.Logger) (*http.Server, error) {
+func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.Manager, biller *billing.Service, secureCookies bool, log *slog.Logger, reporter *sentrylog.Reporter) (*http.Server, error) {
 	store := links.New(db, feed.Changed)
 	roster := students.New(db, feed.Changed)
 	config := settings.New(db)
@@ -279,7 +321,7 @@ func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.M
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           httplog.Requests(log, secureHeaders(http.NewCrossOriginProtection().Handler(httplog.Routes(mux)))),
+		Handler:           httplog.Requests(log, reporter.Middleware(secureHeaders(http.NewCrossOriginProtection().Handler(httplog.Routes(mux))))),
 		ErrorLog:          httplog.ServerErrorLog(log),
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      10 * time.Second,

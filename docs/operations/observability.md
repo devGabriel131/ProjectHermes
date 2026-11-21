@@ -1,10 +1,10 @@
 # Observability
 
-What the application logs, in what shape, and what it deliberately never logs. Logging spans three packages, listed in [Architecture](../architecture.md#packages): `internal/logging` (the format, error attributes and labels, stdlib only), `internal/logging/httplog` (requests and Stripe calls) and `internal/logging/dblog` (GORM). `httplog.Requests` sits at the outer edge of the middleware chain described there; lifecycle events are explained in [Startup and shutdown](startup-shutdown.md); the billing events are produced by the code in [Worker](../billing/worker.md), [Checkout](../billing/checkout.md), [Webhooks](../billing/webhooks.md) and [Withdrawal](../billing/withdrawal.md).
+What the application logs, in what shape, what it reports to Sentry, and what it deliberately never sends anywhere. Logging spans four packages, listed in [Architecture](../architecture.md#packages): `internal/logging` (the format, error attributes and labels, stdlib only), `internal/logging/httplog` (requests and Stripe calls), `internal/logging/dblog` (GORM) and `internal/logging/sentrylog` (Sentry). `httplog.Requests` sits at the outer edge of the middleware chain described there; lifecycle events are explained in [Startup and shutdown](startup-shutdown.md); the billing events are produced by the code in [Worker](../billing/worker.md), [Checkout](../billing/checkout.md), [Webhooks](../billing/webhooks.md) and [Withdrawal](../billing/withdrawal.md).
 
 ## Output format
 
-Each event is one JSON object per line. The web server writes to stdout; every `user` CLI command writes to stderr so stdout stays clean.
+Each event is one JSON object per line. The web server writes to stdout; every CLI command (`user`, `sentry-check`) writes to stderr so stdout stays clean.
 
 | Key | Value |
 |---|---|
@@ -25,7 +25,7 @@ The variables are listed in [Configuration](configuration.md). There is no acces
 - The ID is taken from the request header `X-Railway-Request-Id` only when exactly one value is present, it is 1 to 128 characters, and every character is `A-Z a-z 0-9 . _ -`.
 - Otherwise the ID is a fresh `rand.Text()` value.
 - A client-supplied `X-Request-ID` is ignored.
-- The ID appears in `request_failed` events and the response header; no other event carries it. Matching it to Railway's own HTTP logs is [EXTERNAL].
+- The ID appears in `request_failed` events and the response header; no other event carries it. With Sentry on, a request's Sentry events carry it as the `request_id` tag. Matching it to Railway's own HTTP logs is [EXTERNAL].
 
 ## `request_failed`
 
@@ -72,7 +72,7 @@ A 4xx is logged only if a handler called `RecordError`. A render failure after t
 
 Current stage values come from the `RecordError` callers: `session`, `authenticate`, `login`, `logout`, `render`, `load`, `lookup`, `list`, `save`, `create`, `start`, `rename`, `cancel`, `accept`, `checkout`, `billing`, `export`, `stream`, and `response`.
 
-A handler panic is not a `request_failed`: `Requests` has no recover, so net/http recovers the panic and reports it through the server error log, which becomes `http_server_error` with `kind` `panic`.
+A handler panic is not a `request_failed`: `Requests` has no recover, so net/http recovers the panic and reports it through the server error log, which becomes `http_server_error` with `kind` `panic`. With Sentry on, `sentrylog`'s middleware reports the panic first ([Sentry](#sentry)).
 
 ## Error attributes
 
@@ -121,6 +121,7 @@ Every event that reports an error builds it with `logging.ErrorAttrs`. It expose
 | `installment_retry` | info | `contract`, `obligation`, `attempt` (the retry number being made), `decline` (Stripe code of the failure, `""` when none is on record), `retried` | A failed installment's retry came due. `retried=false` means the decline needs the payer and no charge was made; see [Invoices](../billing/invoices.md#retrying-a-failed-installment) |
 | `student_withdrawn` | info | `contract` | A staff withdrawal committed; logged once per contract, since a repeat writes nothing. See [Withdrawal](../billing/withdrawal.md) |
 | `withdrawal_refund` | info | `contract`, `amount_cents` | Stripe answered a withdrawal refund request for one payment with success; `amount_cents` is what was asked back. See [Withdrawal](../billing/withdrawal.md#refunds) |
+| `sentry_check` | error | none | `apollo sentry-check` ran with Sentry on ([Sentry](#sentry)) |
 
 `billing_reconcile_failed` stages and `ref` values:
 
@@ -148,6 +149,7 @@ A query's label (`logging.Label`) is its request's route pattern (or `unmatched`
 | `session_cleanup` | The expired-session delete |
 | `other` | A context with neither label |
 | `startup_catalog` | The Stripe price list at startup (Stripe calls only) |
+| `sentry_check` | `apollo sentry-check` (Sentry events only) |
 
 Flush points are three distinct moments: right after the startup migration, every 30 s while serving, and at process exit. Session reads and writes through the SCS store use the SQL pool directly rather than GORM, so they are not counted.
 
@@ -158,6 +160,41 @@ Both ride on the same flushes and labels, and split a request's time into the da
 - **Pool waits.** `Logger.WatchPool(sqlDB.Stats)` makes every flush read the pool's cumulative `WaitCount` and `WaitDuration`. When the count grew, one `database_pool_wait` carries the growth since the previous flush. The pool holds 10 connections (`main.go`), and the count includes the session store's queries.
 - **Stripe calls.** `httplog.StripeTimer` wraps the Stripe client's HTTP transport and times every attempt, SDK retries and failures included, up to the response headers. `Flush` (the 30 s ticker and process exit) emits one `stripe_call_summary` per label. For `POST /customer/{token}/payments`, the request's latency minus `avg_duration_ms` is the app's own share.
 
+## Sentry
+
+Errors also go to Sentry, through `internal/logging/sentrylog`, with nothing the JSON log line would not carry. It is switched on by `SENTRY_DSN` alone ([Configuration](configuration.md)).
+
+**Off without `SENTRY_DSN`.** `sentrylog.New` returns a nil `*Reporter`, and `main` then builds exactly the pre-Sentry logger and middleware chain: no Sentry client, hub or transport exists, nothing is sent, and no Sentry goroutine starts. The SDK's global hub is never used, even when Sentry is on. An invalid DSN fails startup with stage `sentry_configuration`.
+
+**What is reported.**
+
+- Every log event at `error` level, through an extra handler beside the JSON one (`slog.NewMultiHandler` in `main.newLogger`): `startup_failed`, `shutdown_failed`, `server_failed`, `http_server_error`, `request_failed` at `error`, `session_cleanup_failed`, `stripe_webhook_store_failed`, `sentry_check`. Warnings and info events are not. The event's message is the log event name, and its attributes, the logger's own included, are the event's `attributes` context.
+- Handler panics. `Reporter.Middleware` wraps `sentryhttp` with `Repanic: true` just inside `httplog.Requests`, so the panic is reported with its type and stack trace, then net/http still recovers it and logs `http_server_error`, which is reported too: one panic makes two Sentry events.
+
+**Event fields.**
+
+| Field | Value |
+|---|---|
+| transaction | The event's label, `logging.Label`: the route pattern (`POST /customer/{token}/draft/{field}`), `unmatched`, a background operation, or `other`; never a path |
+| fingerprint | Sentry's default grouping plus the transaction, so one failure in two routes is two issues |
+| tag `request_id` | The request ID, for events raised while serving a request |
+| environment | `RAILWAY_ENVIRONMENT_NAME`, default `local` |
+| release | `RAILWAY_GIT_COMMIT_SHA`; unset, the SDK's default (the build's VCS revision) |
+
+**Scrubbing.** `SendDefaultPII` is false and `BeforeSend` (`scrub`) drops, on every event: the request (URL, query string, headers, cookies, body), the user and client IP, the host name, breadcrumbs, every context except `attributes`, and the text of every exception. A panic's message becomes `panic`, since a non-error panic value would arrive there. Exception types and stack traces stay. `sentryhttp` buffers up to 10 KiB of a request body for its request record; `scrub` drops that record, so the body never leaves the process.
+
+**Tracing is off.** `EnableTracing` is false, so `sentryhttp`'s per-request transaction is never sampled or sent.
+
+**Flush.** `main` flushes for at most 2 s as its last step, after `startup_failed` or the shutdown events ([Startup and shutdown](startup-shutdown.md#shutdown)).
+
+**Verifying the live pipeline.** No HTTP route triggers Sentry. On a deployed environment, run the deployed binary over Railway SSH:
+
+```
+railway ssh --project <id> --environment <env> --service ProjectHermes -- /app/out sentry-check
+```
+
+`sentry-check` needs no database. It logs one `sentry_check` error, which carries only the logger's service, environment and version fields, through the same logger as the server, waits up to 2 s for the SDK to send it, and prints its event ID. The SDK does not report Sentry's answer, so a wrong key or a blocked network still prints the ID: search Sentry for that ID to confirm the event arrived and carries nothing but the fields above. Without `SENTRY_DSN` it prints that Sentry is off and exits 1.
+
 ## Privacy rules
 
 - Error text never leaves `ErrorAttrs`: only kind, type and a validated SQLSTATE.
@@ -167,21 +204,25 @@ Both ride on the same flushes and labels, and split a request's time into the da
 - `http_server_error` keeps only a fixed class; the standard library's diagnostic text, which can include remote addresses, is dropped.
 - Stripe webhook body, signature and secret are never logged, and the Stripe SDK's own logger is set to null.
 - Billing events carry only opaque references the app generated (`contract`, `obligation`, `attempt`), Stripe event ids and amounts; no names, emails, phone numbers, PINs, tokens or staff usernames appear in any event above (the withdrawing staff name goes only to Stripe refund metadata).
-- `main_logging_integration_test.go` drives real failures through `newServer` and fails if a query string, header, credential, cookie, token, contact value or SQL text reaches the event ([Testing](../testing.md)).
+- `main_logging_integration_test.go` drives real failures through `newServer` and fails if a query string, header, credential, cookie, token, contact value, client IP or SQL text reaches the log event or the Sentry events, which it captures through the SDK's `Transport` interface ([Testing](../testing.md)).
+- Sentry gets the same fields as the log, after the scrubbing above ([Sentry](#sentry)).
 
 ## Deliberate choices
 
 - **Three slow-query flush points.** Exit, post-migration and the 30 s ticker are different moments: without the first two, a short-lived CLI run or a startup that failed would lose its counts.
 - **No `recover` in `Requests`.** The event is emitted only after the stack returns normally, so a panic cannot leave a half-built event; net/http's own recovery and `http_server_error` cover it.
 - **Aggregated slow queries.** Per-query lines would let one slow spell flood the log.
+- **Sentry off means absent.** A nil `*sentrylog.Reporter` leaves the logger and the middleware chain as they were, so an environment without `SENTRY_DSN` runs no Sentry code at all.
+- **A panic reaches Sentry twice.** The `sentryhttp` event has the stack trace and route; `http_server_error` is reported because every error event is. Filtering it would make the Sentry handler special-case one event name.
 
 ## Source
 
 - `internal/logging/logging.go`: `New`, `ErrorAttrs`, `classifyError`, `RequestLevel`, `WithOperation`, `WithRoute`, `Label`
-- `internal/logging/httplog/http.go`: `Requests`, `Routes`, `RecordError`, `requestID`, `validRequestID`, `requestMethod`, `statusWriter`, `ServerErrorLog`, `serverErrorWriter`
+- `internal/logging/httplog/http.go`: `Requests`, `Routes`, `RecordError`, `RequestID`, `requestID`, `validRequestID`, `requestMethod`, `statusWriter`, `ServerErrorLog`, `serverErrorWriter`
 - `internal/logging/dblog/database.go`: `Logger`, `slowQueryThreshold`, `Trace`, `Flush`, `WatchPool`, `database_slow_summary`, `database_pool_wait`, `orm_warning`
 - `internal/logging/httplog/stripe.go`: `StripeTimer`, `NewStripeTimer`, `RoundTrip`, `Flush`, `stripe_call_summary`
-- `main.go`: `startup_started`, `startup_failed`, `server_listening`, `shutdown_requested`, `shutdown_completed`, `shutdown_failed`, `server_failed`, `RAILWAY_SERVICE_NAME`
+- `internal/logging/sentrylog/sentrylog.go`: `New`, `Options`, `Reporter`, `Handler`, `Middleware`, `Flush`, `LastEventID`, `scrub`, `flatten`
+- `main.go`: `startup_started`, `startup_failed`, `server_listening`, `shutdown_requested`, `shutdown_completed`, `shutdown_failed`, `server_failed`, `sentry_check`, `newLogger`, `checkSentry`, `RAILWAY_SERVICE_NAME`, `SENTRY_DSN`
 - `internal/auth/http.go`: `session_cleanup_failed`, `deleteExpiredSessions`, `staff_login_failed`, `staff_login_throttled`
 - `internal/billing/webhook.go`: `stripe_webhook_rejected`, `stripe_webhook_store_failed`
 - `internal/billing/checkout.go`: `checkout_create_uncertain`, `checkout_expire_unresolved`

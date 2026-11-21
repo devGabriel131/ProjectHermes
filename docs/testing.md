@@ -99,7 +99,7 @@ Helpers: `newTestServer` builds the handler over a fresh database with `billingt
 
 ### Request logging through the real server
 
-`main_logging_integration_test.go` drives failures through `serverHandler`, logging into a buffer, and checks the one `request_failed` event each emits: the forwarded request ID, method, route pattern, stage, status 500, error kind and type, SQLSTATE, and no other field. No event may carry the private query or header, credentials, cookies or their digests, link and session tokens, contact values or SQL text.
+`main_logging_integration_test.go` drives failures through `serverHandler`, logging into a buffer through `newLogger` with Sentry on, and checks the one `request_failed` event each emits: the forwarded request ID, method, route pattern, stage, status 500, error kind and type, SQLSTATE, and no other field. It also checks the Sentry events, captured by `sentryCapture`, a `sentry.Transport` given to the real client: exactly one `request_failed` per failure, named by its route pattern and tagged with the request ID. No log or Sentry event may carry the private query or header, credentials, cookies or their digests, link and session tokens, contact values, the client IP or SQL text.
 
 | Test | Failure | Event |
 |---|---|---|
@@ -108,6 +108,8 @@ Helpers: `newTestServer` builds the handler over a fresh database with `billingt
 | `TestSessionLoadFailureKeepsPublicHeadQuiet` | `sessions` renamed | the public `HEAD` stays a silent 404; `/management/` logs `session` 42P01 and answers the plain SCS 500 |
 | `TestSignInCommitFailureLogsActualStatusWithoutCredentials` | the session insert at sign-in rejected | `session` 23514; no session row persists |
 | `TestAgreementFailuresLogOnceWithoutContactData` | the agreement page with `settings` renamed, then acceptance rejected by a `CHECK` | `load` 42P01, then `accept` 23514 with the enrollment unchanged; the retry redirects to `/payments` silently |
+| `TestHandlerPanicReachesSentryOnceWithoutRequestData` | `newServer` with no database behind its stores, so a draft save panics | no log event; one Sentry `panic` event named `POST /customer/{token}/draft/{field}`, with an exception type and none of the URL token, query, header, cookie, body or IP; the panic still reaches net/http |
+| `TestSentryOffWithoutDSN` | the rolled-back draft save, with no DSN | `sentrylog.New` returns nil; the failure is logged and the transport is never configured or sent anything |
 
 The route table itself is documented in [Architecture](architecture.md).
 
@@ -148,7 +150,7 @@ Tests do not prove randomness statistically. No test proves these browser checks
 
 - `main_test.go`: `TestServeLifecycle`
 - `main_wiring_integration_test.go`: `TestRoutesAreMounted`, `TestPublicCustomerIgnoresStaffSessions`, `TestCrossOriginWritesAreRejected`, `TestSessionCookiesFollowPublicOrigin`, `newTestServer`, `serverHandler`, `addStaff`, `signInStaff`, `send`
-- `main_logging_integration_test.go`: `TestCustomerRolledBackRequestsLogOnce`, `TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging`, `TestSessionLoadFailureKeepsPublicHeadQuiet`, `TestSignInCommitFailureLogsActualStatusWithoutCredentials`, `TestAgreementFailuresLogOnceWithoutContactData`, `requireFailure`
+- `main_logging_integration_test.go`: `TestCustomerRolledBackRequestsLogOnce`, `TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging`, `TestSessionLoadFailureKeepsPublicHeadQuiet`, `TestSignInCommitFailureLogsActualStatusWithoutCredentials`, `TestAgreementFailuresLogOnceWithoutContactData`, `TestHandlerPanicReachesSentryOnceWithoutRequestData`, `TestSentryOffWithoutDSN`, `requireFailure`, `requireNoPrivate`, `sentryCapture`
 - `internal/testdb/testdb.go`: `Open`, `AwaitBlocked`, `TEST_DATABASE_URL`
 - `internal/billing/billingtest/billingtest.go`: `Config`, `Catalog`, `Client`, `New`
 - `internal/management/students.go`: `HX-Replace-Url`

@@ -9,7 +9,9 @@ flowchart TD
   args["main: read args"]
   help["print auth.Usage\nexit 0"]
   unknown["stderr: unknown command\nexit 1"]
-  logger["build logger\nservice, environment, version\noptional deployment_id, replica_id"]
+  reporter["sentrylog.New from SENTRY_DSN\nnil when unset: Sentry off"]
+  logger["build logger\nservice, environment, version\noptional deployment_id, replica_id\nerror events also to Sentry when on"]
+  check["checkSentry: log sentry_check, flush\nprint event ID, exit 0 or 1"]
   begin["run: startup_started, server only\ndblog.New, NotifyContext SIGINT and SIGTERM"]
   dsn{"DATABASE_URL set?"}
   open["gorm.Open\nno ping"]
@@ -32,7 +34,9 @@ flowchart TD
 
   args -->|"--help, -h, user, user --help"| help
   args -->|"other first argument"| unknown
-  args --> logger --> begin --> dsn
+  args --> reporter --> logger --> begin --> dsn
+  reporter -.->|"sentry_configuration"| fail
+  logger -->|"sentry-check"| check
   dsn -->|"no: configuration"| fail
   dsn -->|"yes"| open --> pool --> ping --> migrate --> branch
   open -.->|"database_open"| fail
@@ -51,7 +55,9 @@ flowchart TD
 
 Facts the diagram compresses:
 
-- The logger is built first, from the `RAILWAY_*` variables; only the web server logs to stdout ([Observability](observability.md)).
+- The Sentry reporter, then the logger, are built first, from `SENTRY_DSN` and the `RAILWAY_*` variables; only the web server logs to stdout ([Observability](observability.md)). Without `SENTRY_DSN` the reporter is nil and nothing Sentry-related runs.
+- `apollo sentry-check` stops after the logger: it needs no database ([Observability](observability.md#sentry)).
+- After every path but help and an unknown command, `main` logs `startup_failed` if a stage failed, then flushes Sentry for at most 2 s, then exits.
 - Ping and `AutoMigrate` share one 10 s context derived from the signal context. The slow-query summary is flushed right after the migration.
 - `AutoMigrate(models()...)` creates or alters every table: `auth.User`, `auth.Session`, `settings.Settings`, `links.Link`, `links.Enrollment`, `students.Student` and `billing.Models()`. It never drops a table or column. There are no migration files ([Data model](../data-model.md)).
 - Stripe settings, and the cookie `Secure` flag derived from `PUBLIC_BASE_URL`, are read only after the database is migrated, so a bad Stripe variable still leaves the schema migrated.
@@ -102,6 +108,7 @@ sequenceDiagram
   participant H as http.Server
   participant F as live.Feed
   participant D as run defers
+  participant M as main
 
   OS->>Sig: SIGINT or SIGTERM
   Sig-->>W: worker context cancelled
@@ -120,12 +127,14 @@ sequenceDiagram
   D->>W: cancelWorker, then worker.Wait
   D->>D: sqlDB.Close
   D->>D: stop signal handling, final stripeTimer.Flush and slow.Flush
+  D-->>M: run returns
+  M->>M: Sentry Flush, at most 2 s (nothing when Sentry is off)
 ```
 
 Details:
 
 - `Shutdown` closes the listeners and starts the `feed.Close` hook at its beginning; the drain then waits for active connections up to 10 s. If the deadline passes, `server.Close()` is joined into the error and `shutdown_failed` is logged; the process exits 1.
-- The deferred calls unwind last-in first: worker cancel and `Wait`, the catalog context, the final `stripeTimer.Flush`, the migration context, `sqlDB.Close`, `stop`, then the final `slow.Flush`.
+- The deferred calls unwind last-in first: worker cancel and `Wait`, the catalog context, the final `stripeTimer.Flush`, the migration context, `sqlDB.Close`, `stop`, then the final `slow.Flush`. Then `main` flushes Sentry, so `shutdown_failed` or `server_failed` reaches it before the process exits.
 - A clean shutdown exits 0. A signal during startup cancels the budgeted contexts, so the step in progress fails under its own stage (`database_connect`, `database_migrate` or `billing_catalog`) and the process exits 1.
 - Worker steps run under leases and resume from stored state. A webhook stored during the drain is only an event record that the next worker picks up ([Worker](../billing/worker.md)).
 
@@ -142,7 +151,8 @@ Details:
 
 ## Source
 
-- `main.go`: `main`, `run`, `newApp`, `serve`, `newServer`, `startupError`, `models`, `signalContext`, `cancelWorker`
+- `main.go`: `main`, `newLogger`, `checkSentry`, `run`, `newApp`, `serve`, `newServer`, `startupError`, `models`, `signalContext`, `cancelWorker`
+- `internal/logging/sentrylog/sentrylog.go`: `New`, `Reporter.Flush`
 - `internal/auth/http.go`: `New`, `Run`, `deleteExpiredSessions`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`
 - `internal/live/live.go`: `Feed.Close`, `writeTimeout`

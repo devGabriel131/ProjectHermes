@@ -32,7 +32,7 @@ flowchart LR
 | Learning | `internal/learning` | none yet (Hephaestus games) |
 | Documents | `internal/documents` | none yet (Hephaestus forms and letters) |
 
-**Platform, not a context:** `main.go` (wiring), `internal/logging` (with `httplog`, `dblog` and `logtest` under it), `internal/live`, `internal/puertorico`, `internal/testdb`, and later `internal/db` (pool, migrations, unit of work) and `internal/ui` (shared layouts). `internal/management` is the staff UI for two contexts until phase F splits it into `studentsweb` and `billingweb`. Platform packages and `internal/management` own no table.
+**Platform, not a context:** `main.go` (wiring), `internal/logging` (with `httplog`, `dblog`, `sentrylog` and `logtest` under it), `internal/live`, `internal/puertorico`, `internal/testdb`, and later `internal/db` (pool, migrations, unit of work) and `internal/ui` (shared layouts). `internal/management` is the staff UI for two contexts until phase F splits it into `studentsweb` and `billingweb`. Platform packages and `internal/management` own no table.
 
 ## Identity & Access
 
@@ -125,7 +125,7 @@ internal/<context>/<context>web/ thin handlers (parse → call service → rende
 ```
 
 - **The root holds no SQL and no HTTP.** It depends on no `net/http`, `html/template`, templ, pgx, GORM or `<context>db` package, transitively, and on `database/sql` only as linked by `internal/logging`: no package in its closure but `internal/logging` imports `database/sql`. `TestContextRootsImportNoAdapters` enforces this for every root in `reshapedRoots`.
-- **Roots log through a `*slog.Logger` passed in** and may import `internal/logging` (`ErrorAttrs`, `WithOperation`, `Label`), never `internal/logging/httplog` (`net/http`) or `internal/logging/dblog` (GORM). `internal/logging` links `database/sql` only for the `ErrTxDone` and `ErrConnDone` sentinels `ErrorAttrs` matches.
+- **Roots log through a `*slog.Logger` passed in** and may import `internal/logging` (`ErrorAttrs`, `WithOperation`, `Label`), never `internal/logging/httplog` (`net/http`), `internal/logging/dblog` (GORM) or `internal/logging/sentrylog` (`net/http`); their error events reach Sentry through that logger. `internal/logging` links `database/sql` only for the `ErrTxDone` and `ErrConnDone` sentinels `ErrorAttrs` matches.
 - **The consumer declares the store interface.** One per service, with methods named by use case (`ContractForUpdate`, `AppendResponses`); no `Repository[T]`. It exists to keep the root free of SQL: the root says what it needs, `<context>db` satisfies it, `main.go` wires them. A context with no domain logic in a read (the Program calendar, for example) has its handlers call the adapter directly, with no pass-through service.
 - **No in-memory fakes.** Domain invariants are tested with plain Go tests on domain types. Services and seams are tested against real PostgreSQL through `internal/testdb`, with the real adapter and the real provider service behind every seam. Only external systems are faked, at their HTTP boundary (Stripe through `billingtest`, [Testing](testing.md)).
 - **At most three packages per context**, with no further layers. Subdomains that are pure logic (`documents/ist`, `learning/words`) may sit beside them.

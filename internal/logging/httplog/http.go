@@ -87,6 +87,14 @@ func RecordError(r *http.Request, stage string, err error) {
 	state.failureStage = stage
 }
 
+// RequestID is the ID Requests gave the request ctx belongs to, or "" outside a request.
+func RequestID(ctx context.Context) string {
+	if state, ok := ctx.Value(requestContextKey{}).(*requestState); ok {
+		return state.requestID
+	}
+	return ""
+}
+
 func stateFromContext(ctx context.Context) *requestState {
 	if state, ok := ctx.Value(requestContextKey{}).(*requestState); ok {
 		return state
