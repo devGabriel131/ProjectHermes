@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -148,13 +147,6 @@ func run(log *slog.Logger, args []string) error {
 		return err
 	}
 
-	secureCookies := true
-	if value, ok := os.LookupEnv("SESSION_COOKIE_SECURE"); ok {
-		secureCookies, err = strconv.ParseBool(value)
-		if err != nil {
-			return startupError{"configuration", err}
-		}
-	}
 	// Committed writes tell open management pages to refresh themselves.
 	feed := live.New()
 
@@ -162,6 +154,8 @@ func run(log *slog.Logger, args []string) error {
 	if err != nil {
 		return startupError{"billing_configuration", err}
 	}
+	// The public origin alone decides cookie security: only a sandbox localhost origin may be plain http.
+	secureCookies := billingCfg.SecureOrigin()
 	// Testing aid: installments due this far apart instead of monthly. Never on a live Stripe account.
 	if value, ok := os.LookupEnv("INSTALLMENT_SPACING"); ok {
 		spacing, err := time.ParseDuration(value)

@@ -54,13 +54,11 @@ func (c Config) Validate() error {
 	}
 	isLocalhost := parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "::1"
 	if c.Live {
-		if parsed.Scheme != "https" {
+		if !c.SecureOrigin() {
 			return errors.New("billing: PUBLIC_BASE_URL must use https in live mode")
 		}
-	} else {
-		if parsed.Scheme != "https" && !(parsed.Scheme == "http" && isLocalhost) {
-			return errors.New("billing: PUBLIC_BASE_URL must use https except localhost in sandbox mode")
-		}
+	} else if !c.SecureOrigin() && !(parsed.Scheme == "http" && isLocalhost) {
+		return errors.New("billing: PUBLIC_BASE_URL must use https except localhost in sandbox mode")
 	}
 	if strings.TrimSpace(c.WebhookSecret) == "" {
 		return errors.New("billing: STRIPE_WEBHOOK_SECRET is required")
@@ -72,6 +70,14 @@ func (c Config) Validate() error {
 		return errors.New("billing: STRIPE_PORTAL_CONFIGURATION_ID is required")
 	}
 	return nil
+}
+
+// SecureOrigin reports whether PUBLIC_BASE_URL is https, which makes every session cookie Secure.
+// It compares the parsed scheme, which url.Parse lowercases, so HTTPS:// counts.
+// Validate allows anything else only for a localhost origin in sandbox mode.
+func (c Config) SecureOrigin() bool {
+	parsed, err := url.Parse(c.BaseURL)
+	return err == nil && parsed.Scheme == "https"
 }
 
 // LoadConfigFromEnv reads and validates Stripe configuration from environment variables.

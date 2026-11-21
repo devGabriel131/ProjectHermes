@@ -8,7 +8,7 @@ All data is mock. Losing links, sessions, settings, or any rows in a migration i
 
 - Keep one Air dev server always running: `go tool air` from the repo root, serving <http://127.0.0.1:3000>.
 - Reuse it. Never start a second server or Air instance; start one only if nothing listens on port 3000.
-- It needs the Compose database (`docker compose up --detach --wait db`) and `.env` with `DATABASE_URL` and `SESSION_COOKIE_SECURE=false`.
+- It needs the Compose database (`docker compose up --detach --wait db`) and `.env` with `DATABASE_URL` and a sandbox `PUBLIC_BASE_URL=http://localhost:3000`, which keeps session cookies without `Secure` so sign-in works over http.
 
 ## Railway
 

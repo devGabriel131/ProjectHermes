@@ -20,6 +20,7 @@ import (
 	"gorm.io/gorm"
 
 	"projecthermes/internal/auth"
+	"projecthermes/internal/billing/billingtest"
 	"projecthermes/internal/links"
 	"projecthermes/internal/logging"
 	"projecthermes/internal/settings"
@@ -50,7 +51,7 @@ func TestCustomerRolledBackRequestsLogOnce(t *testing.T) {
 	if err := tx.Rollback().Error; err != nil {
 		t.Fatal(err)
 	}
-	handler := serverHandler(t, fixture.db, tx, fixture.log)
+	handler := serverHandler(t, fixture.db, tx, fixture.log, billingtest.Config())
 	sessionCookie := &http.Cookie{Name: "enrollment_session", Value: cookieToken}
 	form := httpContactForm("Private rolled back name")
 	rec := send(t, handler, http.MethodPost, "/customer/"+entry.Token+"/draft/name"+privateQuery, sessionCookie, form, loggedHeader)
@@ -89,7 +90,7 @@ func TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging(t *testing.T) {
 	if err := fixture.db.WithContext(t.Context()).Where("enrollment_id = ?", source.ID).Take(&original).Error; err != nil {
 		t.Fatal(err)
 	}
-	handler := serverHandler(t, fixture.db, fixture.db, fixture.log)
+	handler := serverHandler(t, fixture.db, fixture.db, fixture.log, billingtest.Config())
 	cookie := signInStaff(t, fixture.db, handler)
 	fixture.requireQuiet(t)
 	var user auth.User
@@ -122,7 +123,7 @@ func TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging(t *testing.T) {
 
 func TestSessionLoadFailureKeepsPublicHeadQuiet(t *testing.T) {
 	fixture := newHTTPLoggingFixture(t)
-	handler := serverHandler(t, fixture.db, fixture.db, fixture.log)
+	handler := serverHandler(t, fixture.db, fixture.db, fixture.log, billingtest.Config())
 	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE sessions RENAME TO unavailable_sessions").Error; err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +149,7 @@ func TestSignInCommitFailureLogsActualStatusWithoutCredentials(t *testing.T) {
 	// in redirect commit, not session load or RenewToken's old-token deletion.
 	fixture := newHTTPLoggingFixture(t)
 	user := addStaff(t, fixture.db, httpUsername, httpPassword)
-	handler := serverHandler(t, fixture.db, fixture.db, fixture.log)
+	handler := serverHandler(t, fixture.db, fixture.db, fixture.log, billingtest.Config())
 	var count int64
 	if err := fixture.db.WithContext(t.Context()).Model(&auth.Session{}).Count(&count).Error; err != nil || count != 0 {
 		t.Fatalf("fresh sessions: count = %d, error = %v", count, err)
@@ -180,7 +181,7 @@ func TestAgreementFailuresLogOnceWithoutContactData(t *testing.T) {
 	if err := settings.New(fixture.db).SetProgramStartDate(t.Context(), date, httpUsername); err != nil {
 		t.Fatal(err)
 	}
-	handler := serverHandler(t, fixture.db, fixture.db, fixture.log)
+	handler := serverHandler(t, fixture.db, fixture.db, fixture.log, billingtest.Config())
 	path := "/customer/" + entry.Token
 	sessionCookie := &http.Cookie{Name: "enrollment_session", Value: cookieToken}
 	private := []string{details.Name, details.Email, details.Phone, details.Municipality, entry.Token, cookieToken,

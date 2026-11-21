@@ -127,6 +127,7 @@ func readSessionCookie(r *http.Request) string {
 }
 
 func setSessionCookie(w http.ResponseWriter, linkToken, sessionToken string, secure bool) {
+	// #nosec G124 -- secure is Config.SecureOrigin: true on every https PUBLIC_BASE_URL, false only for sandbox localhost.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    sessionToken,

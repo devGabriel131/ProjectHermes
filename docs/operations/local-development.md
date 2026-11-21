@@ -10,7 +10,7 @@ docker compose up --detach --wait --wait-timeout 90 db
 go tool air
 ```
 
-- `.env.example` holds the local Compose `DATABASE_URL`, `SESSION_COOKIE_SECURE=false` and Stripe **placeholders**. The server refuses to start without a valid sandbox Stripe key, webhook secret, `PUBLIC_BASE_URL`, two configuration IDs and the six catalog prices; see [Stripe setup](stripe-setup.md).
+- `.env.example` holds the local Compose `DATABASE_URL` and Stripe **placeholders**. Its `PUBLIC_BASE_URL=http://localhost:3000` keeps session cookies without `Secure`, so sign-in works over plain http. The server refuses to start without a valid sandbox Stripe key, webhook secret, `PUBLIC_BASE_URL`, two configuration IDs and the six catalog prices; see [Stripe setup](stripe-setup.md).
 - `go.mod` declares Air as a project tool, so run `go tool air`, never a global `air`.
 - The server listens on `127.0.0.1:3000` unless `PORT` is set ([Configuration](configuration.md)).
 - Create a staff account before opening `/management/` (below).
@@ -101,7 +101,7 @@ Every open links, Trash, students or dashboard page holds one server-sent-event 
 
 - `compose.yaml`: `postgres:17`, `POSTGRES_DB`, `postgres_data`, `pg_isready`
 - `.air.toml`: `env_files`, `entrypoint`, `include_ext`, `exclude_dir`
-- `.env.example`: `DATABASE_URL`, `SESSION_COOKIE_SECURE`, `STRIPE_WEBHOOK_SECRET`, `PUBLIC_BASE_URL`
+- `.env.example`: `DATABASE_URL`, `STRIPE_WEBHOOK_SECRET`, `PUBLIC_BASE_URL`
 - `main.go`: `assets`, `run`, `newServer`, `models`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`, `readNewPassword`
 - `internal/live/live.go`: `Feed`
