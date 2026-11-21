@@ -23,6 +23,7 @@ import (
 	"apollo/internal/links"
 	"apollo/internal/live"
 	"apollo/internal/logging"
+	"apollo/internal/logging/sentrylog"
 	"apollo/internal/testdb"
 )
 
@@ -130,7 +131,7 @@ func TestSessionCookiesFollowPublicOrigin(t *testing.T) {
 				t.Fatal(err)
 			}
 			db := testdb.Open(t, models()...)
-			handler := serverHandler(t, db, db, logging.New(io.Discard), cfg)
+			handler := serverHandler(t, db, db, logging.New(io.Discard), nil, cfg)
 			staff := signInStaff(t, db, handler)
 			link, err := links.New(db, nil).CreateLink(t.Context(), "staff", "", time.Now().Add(time.Hour))
 			if err != nil {
@@ -152,16 +153,17 @@ func TestSessionCookiesFollowPublicOrigin(t *testing.T) {
 func newTestServer(t *testing.T) (http.Handler, *gorm.DB) {
 	t.Helper()
 	db := testdb.Open(t, models()...)
-	return serverHandler(t, db, db, logging.New(io.Discard), billingtest.Config()), db
+	return serverHandler(t, db, db, logging.New(io.Discard), nil, billingtest.Config()), db
 }
 
 // serverHandler builds the real handler with newApp, the composition run uses, from cfg on the fake
-// Stripe. Auth and billing always use db, so a test can hand newServer a broken connection and still sign in.
-func serverHandler(t *testing.T, db, served *gorm.DB, log *slog.Logger, cfg billing.Config) http.Handler {
+// Stripe; a nil reporter leaves Sentry off. Auth and billing always use db, so a test can hand newServer a
+// broken connection and still sign in.
+func serverHandler(t *testing.T, db, served *gorm.DB, log *slog.Logger, reporter *sentrylog.Reporter, cfg billing.Config) http.Handler {
 	t.Helper()
 	feed := live.New()
 	t.Cleanup(feed.Close)
-	app, err := newApp("127.0.0.1:0", db, served, feed, billingtest.Client(t, nil), cfg, billingtest.Catalog(), log)
+	app, err := newApp("127.0.0.1:0", db, served, feed, billingtest.Client(t, nil), cfg, billingtest.Catalog(), log, reporter)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -44,6 +44,7 @@ Validation, defaults and failure stages for each variable are in [Configuration]
 | `STRIPE_WEBHOOK_SECRET` | signing secret of the **registered webhook endpoint**, not the `stripe listen` secret used locally |
 | `PUBLIC_BASE_URL` | the public HTTPS origin; the Stripe webhook endpoint is `<PUBLIC_BASE_URL>/webhooks/stripe`, and its `https` scheme makes both session cookies `Secure` |
 | `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID`, `STRIPE_PORTAL_CONFIGURATION_ID` | IDs from the same Stripe mode |
+| `SENTRY_DSN` | not set yet, so Sentry is off; once set, a sealed variable. Check it with `/app/out sentry-check` over `railway ssh` ([Observability](observability.md#sentry)) |
 
 Railway also provides metadata variables the app reads for log fields: `RAILWAY_SERVICE_NAME`, `RAILWAY_ENVIRONMENT_NAME`, `RAILWAY_GIT_COMMIT_SHA`, `RAILWAY_DEPLOYMENT_ID`, `RAILWAY_REPLICA_ID` ([Observability](observability.md)). Never copy Railway credentials into `.env` or `.env.example`; `.gitignore` excludes `.env`.
 

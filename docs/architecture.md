@@ -59,6 +59,7 @@ flowchart LR
   main --> logging
   main --> dblog
   main --> httplog
+  main --> sentrylog
   main --> management
   main --> payments
   main --> settings
@@ -88,16 +89,18 @@ flowchart LR
   management --> students
   httplog --> logging
   dblog --> logging
+  sentrylog --> logging
+  sentrylog --> httplog
   payments --> puertorico
   students --> puertorico
   billingtest --> billing
 ```
 
-`logging`, `logtest`, `puertorico` and `settings` import no other module package; `payments` and `students` import only `puertorico`, and `httplog` and `dblog` only `logging`. `management` does not import `auth`: staff identity arrives as a function argument (see Wiring).
+`logging`, `logtest`, `puertorico` and `settings` import no other module package; `payments` and `students` import only `puertorico`, `httplog` and `dblog` only `logging`, and `sentrylog` only `logging` and `httplog`. `management` does not import `auth`: staff identity arrives as a function argument (see Wiring).
 
 | Path | Responsibility |
 |---|---|
-| `main.go` | CLI dispatch, logger metadata, startup order, `newApp` composition (billing, auth, cookie `Secure` from the public origin) and `newServer` wiring, `serve` drain |
+| `main.go` | CLI dispatch, logger metadata and the Sentry reporter, startup order, `newApp` composition (billing, auth, cookie `Secure` from the public origin) and `newServer` wiring, `serve` drain |
 | `internal/auth` | Staff accounts, sessions, login limiter, `Require`, the `user` CLI ([Staff authentication](staff-auth.md)) |
 | `internal/billing` | Stripe configuration and catalog, Checkout, invoices, webhook intake, the leased worker ([Billing overview](billing/overview.md)) |
 | `internal/billing/billingtest` | Billing services backed by a fake Stripe, for other packages' tests ([Testing](testing.md)) |
@@ -107,6 +110,7 @@ flowchart LR
 | `internal/logging` | Shared logging conventions, stdlib only: the JSON event format, `ErrorAttrs`, request levels, call labels ([Observability](operations/observability.md)) |
 | `internal/logging/httplog` | HTTP instrumentation: request IDs, `request_failed`, route labels, the server error log, Stripe call timing |
 | `internal/logging/dblog` | GORM's logger: slow-query and pool-wait summaries |
+| `internal/logging/sentrylog` | Sentry, off without `SENTRY_DSN`: error events from the logger, handler panics, `BeforeSend` scrubbing ([Observability](operations/observability.md#sentry)) |
 | `internal/logging/logtest` | Decodes logged JSON events, for the logging packages' tests |
 | `internal/management` | Staff pages and fragments ([Management overview](management/overview.md)) |
 | `internal/payments` | Plans, integer-cent installments, due-date schedules, money formatting |
@@ -172,6 +176,7 @@ Session lifetime, auth-version revocation and the limiter are in [Staff authenti
 flowchart TD
   conn["http.Server\nReadHeaderTimeout 5 s, WriteTimeout 10 s, IdleTimeout 60 s\nErrorLog becomes http_server_error"]
   req["httplog.Requests\nrequest ID, status capture, one request_failed"]
+  sentry["sentrylog Reporter.Middleware, only with SENTRY_DSN\ndrop sentry-trace, baggage\nsentryhttp: report a panic, then panic again"]
   sec["secureHeaders\nsite CSP, HSTS, nosniff, noindex"]
   cop["http.CrossOriginProtection\n403 for cross-origin writes"]
   outer["httplog.Routes(mux)\nlabel = matched pattern"]
@@ -186,7 +191,7 @@ flowchart TD
   cust["customer handlers"]
   hook["billing.Service.Webhook"]
 
-  conn --> req --> sec --> cop --> outer --> mux
+  conn --> req --> sentry --> sec --> cop --> outer --> mux
   mux -->|"GET /static/, /favicon.ico, /{$}"| static
   mux -->|"POST /management/login, /logout"| authh
   mux -->|"/management/"| require --> inner
@@ -221,7 +226,7 @@ The 403 from `CrossOriginProtection` fires for non-safe methods (such as POST) w
 ## Source
 
 - `main.go`: `newApp`, `newServer`, `secureHeaders`, `sitePolicy`, `serve`, `run`, `models`, `startupError`, `assets`
-- `go.mod`: `github.com/air-verse/air`, `github.com/nyaruka/phonenumbers/v2`, `github.com/stripe/stripe-go/v87`, `gorm.io/gorm`, `gorm.io/driver/postgres`
+- `go.mod`: `github.com/air-verse/air`, `github.com/getsentry/sentry-go`, `github.com/nyaruka/phonenumbers/v2`, `github.com/stripe/stripe-go/v87`, `gorm.io/gorm`, `gorm.io/driver/postgres`
 - `internal/auth/http.go`: `Manager.RegisterRoutes`, `Require`, `Staff`
 - `internal/logging/httplog/http.go`: `Requests`, `Routes`, `RecordError`
 - `internal/customer/customer.go`: `RegisterRoutes`, `withHeaders`

@@ -8,6 +8,7 @@ require (
 	github.com/alexedwards/argon2id v1.0.0
 	github.com/alexedwards/scs/postgresstore v0.0.0-20251002162104-209de6e426de
 	github.com/alexedwards/scs/v2 v2.9.0
+	github.com/getsentry/sentry-go v0.50.0
 	github.com/nyaruka/phonenumbers/v2 v2.0.15
 	github.com/stripe/stripe-go/v87 v87.0.0
 	github.com/xuri/excelize/v2 v2.11.1

@@ -4,26 +4,33 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	"gorm.io/gorm"
 
 	"apollo/internal/auth"
 	"apollo/internal/billing/billingtest"
 	"apollo/internal/links"
-	"apollo/internal/logging"
 	"apollo/internal/logging/dblog"
+	"apollo/internal/logging/httplog"
+	"apollo/internal/logging/logtest"
+	"apollo/internal/logging/sentrylog"
 	"apollo/internal/settings"
 	"apollo/internal/students"
 	"apollo/internal/testdb"
@@ -37,6 +44,8 @@ const (
 	httpHeader    = "PRIVATE_HTTP_HEADER"
 	// privateQuery rides on every logged request; no event may carry it.
 	privateQuery = "?private=" + httpQuery
+	// testDSN turns Sentry on; its events go to sentryCapture, never to this host.
+	testDSN = "https://public@sentry.invalid/1"
 )
 
 // loggedHeader fixes the request ID and adds a private header no event may carry.
@@ -52,7 +61,7 @@ func TestCustomerRolledBackRequestsLogOnce(t *testing.T) {
 	if err := tx.Rollback().Error; err != nil {
 		t.Fatal(err)
 	}
-	handler := serverHandler(t, fixture.db, tx, fixture.log, billingtest.Config())
+	handler := serverHandler(t, fixture.db, tx, fixture.log, fixture.reporter, billingtest.Config())
 	sessionCookie := &http.Cookie{Name: "enrollment_session", Value: cookieToken}
 	form := httpContactForm("Private rolled back name")
 	rec := send(t, handler, http.MethodPost, "/customer/"+entry.Token+"/draft/name"+privateQuery, sessionCookie, form, loggedHeader)
@@ -91,7 +100,7 @@ func TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging(t *testing.T) {
 	if err := fixture.db.WithContext(t.Context()).Where("enrollment_id = ?", source.ID).Take(&original).Error; err != nil {
 		t.Fatal(err)
 	}
-	handler := serverHandler(t, fixture.db, fixture.db, fixture.log, billingtest.Config())
+	handler := serverHandler(t, fixture.db, fixture.db, fixture.log, fixture.reporter, billingtest.Config())
 	cookie := signInStaff(t, fixture.db, handler)
 	fixture.requireQuiet(t)
 	var user auth.User
@@ -124,7 +133,7 @@ func TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging(t *testing.T) {
 
 func TestSessionLoadFailureKeepsPublicHeadQuiet(t *testing.T) {
 	fixture := newHTTPLoggingFixture(t)
-	handler := serverHandler(t, fixture.db, fixture.db, fixture.log, billingtest.Config())
+	handler := serverHandler(t, fixture.db, fixture.db, fixture.log, fixture.reporter, billingtest.Config())
 	if err := fixture.db.WithContext(t.Context()).Exec("ALTER TABLE sessions RENAME TO unavailable_sessions").Error; err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +159,7 @@ func TestSignInCommitFailureLogsActualStatusWithoutCredentials(t *testing.T) {
 	// in redirect commit, not session load or RenewToken's old-token deletion.
 	fixture := newHTTPLoggingFixture(t)
 	user := addStaff(t, fixture.db, httpUsername, httpPassword)
-	handler := serverHandler(t, fixture.db, fixture.db, fixture.log, billingtest.Config())
+	handler := serverHandler(t, fixture.db, fixture.db, fixture.log, fixture.reporter, billingtest.Config())
 	var count int64
 	if err := fixture.db.WithContext(t.Context()).Model(&auth.Session{}).Count(&count).Error; err != nil || count != 0 {
 		t.Fatalf("fresh sessions: count = %d, error = %v", count, err)
@@ -182,7 +191,7 @@ func TestAgreementFailuresLogOnceWithoutContactData(t *testing.T) {
 	if err := settings.New(fixture.db).SetProgramStartDate(t.Context(), date, httpUsername); err != nil {
 		t.Fatal(err)
 	}
-	handler := serverHandler(t, fixture.db, fixture.db, fixture.log, billingtest.Config())
+	handler := serverHandler(t, fixture.db, fixture.db, fixture.log, fixture.reporter, billingtest.Config())
 	path := "/customer/" + entry.Token
 	sessionCookie := &http.Cookie{Name: "enrollment_session", Value: cookieToken}
 	private := []string{details.Name, details.Email, details.Phone, details.Municipality, entry.Token, cookieToken,
@@ -223,6 +232,71 @@ func TestAgreementFailuresLogOnceWithoutContactData(t *testing.T) {
 	fixture.requireQuiet(t)
 }
 
+func TestHandlerPanicReachesSentryOnceWithoutRequestData(t *testing.T) {
+	// The SDK's own HTTP transport sends to the sink, so the test sees whole envelopes, headers included.
+	sink := newSentrySink(t)
+	fixture := newLoggingFixture(t, newReporter(t, sentrylog.Options{DSN: sink.dsn()}))
+	entry, cookieToken := fixture.createAndStart(t)
+	// With no database behind newServer's stores, the customer handler panics on its first query. A real
+	// http.Server with run's ErrorLog recovers the panic and logs http_server_error, as in production.
+	server := httptest.NewUnstartedServer(serverHandler(t, fixture.db, nil, fixture.log, fixture.reporter, billingtest.Config()))
+	server.Config.ErrorLog = httplog.ServerErrorLog(fixture.log)
+	server.Start()
+	form := httpContactForm("Private panic name")
+	const clientIP, traceID, baggage = "203.0.113.9", "5bd2e0f1c0a8473f9e3c6d7a4b1f2e90", "PRIVATE_BAGGAGE"
+	r, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		server.URL+"/customer/"+entry.Token+"/draft/name"+privateQuery, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	maps.Copy(r.Header, loggedHeader)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("X-Forwarded-For", clientIP)
+	r.Header.Set("Sentry-Trace", traceID+"-a1b2c3d4e5f60718-1")
+	r.Header.Set("Baggage", "sentry-trace_id="+traceID+",sentry-sample_rate=1,sentry-user="+baggage)
+	r.AddCookie(&http.Cookie{Name: "enrollment_session", Value: cookieToken})
+	if resp, err := server.Client().Do(r); err == nil {
+		resp.Body.Close()
+		t.Fatalf("a panicking handler answered %d", resp.StatusCode)
+	}
+	server.Close() // waits for the handler, so its log line is written
+	if !fixture.reporter.Flush(2 * time.Second) {
+		t.Fatal("Sentry events were still queued after 2s")
+	}
+
+	logged := logtest.Events(t, fixture.out.Bytes())
+	if len(logged) != 1 || logged[0]["message"] != "http_server_error" || logged[0]["kind"] != "panic" {
+		t.Fatalf("log events = %v, want one http_server_error of kind panic", logged)
+	}
+	raw, events := sink.take(t)
+	if len(events) != 1 || events[0]["message"] != "panic" || events[0]["transaction"] != "POST /customer/{token}/draft/{field}" {
+		t.Fatalf("Sentry events = %d, want one panic event named by its route pattern", len(events))
+	}
+	if tags, _ := events[0]["tags"].(map[string]any); tags["request_id"] != httpRequestID {
+		t.Fatalf("panic event tags = %v, want the request ID", events[0]["tags"])
+	}
+	requireNoPrivate(t, "Sentry envelope", raw, append(httpContactValues(form), entry.Token, cookieToken, clientIP, traceID, baggage)...)
+}
+
+func TestSentryOffWithoutDSN(t *testing.T) {
+	reporter := newReporter(t, sentrylog.Options{})
+	if reporter != nil {
+		t.Fatal("an empty DSN built a Sentry reporter")
+	}
+	fixture := newLoggingFixture(t, reporter)
+	tx := fixture.db.WithContext(t.Context()).Begin()
+	if err := tx.Rollback().Error; err != nil {
+		t.Fatal(err)
+	}
+	entry, cookieToken := fixture.createAndStart(t)
+	handler := serverHandler(t, fixture.db, tx, fixture.log, fixture.reporter, billingtest.Config())
+	send(t, handler, http.MethodPost, "/customer/"+entry.Token+"/draft/name",
+		&http.Cookie{Name: "enrollment_session", Value: cookieToken}, httpContactForm("Private off name"), loggedHeader)
+	if !strings.Contains(fixture.out.String(), `"request_failed"`) {
+		t.Fatal("the forced failure was not logged")
+	}
+}
+
 func httpContactDetails(name string) students.Details {
 	return students.Details{Name: name, Email: "Private+retained@example.com", Phone: "+17872345678", Municipality: "Río Grande", DateOfBirth: "2005-06-15"}
 }
@@ -250,21 +324,144 @@ func httpContactValues(form url.Values) []string {
 	return private
 }
 
-// httpLoggingFixture captures every event the server and its queries log, over an isolated database.
+// httpLoggingFixture captures every event the server and its queries log, and every Sentry event, over an
+// isolated database.
 type httpLoggingFixture struct {
-	db    *gorm.DB
-	store *links.Store
-	log   *slog.Logger
-	out   bytes.Buffer
+	db       *gorm.DB
+	store    *links.Store
+	log      *slog.Logger
+	out      bytes.Buffer
+	reporter *sentrylog.Reporter
+	sentry   *sentryCapture
 }
 
+// newHTTPLoggingFixture turns Sentry on, its events kept by a sentryCapture.
 func newHTTPLoggingFixture(t *testing.T) *httpLoggingFixture {
+	capture := &sentryCapture{}
+	fixture := newLoggingFixture(t, newReporter(t, sentrylog.Options{DSN: testDSN, Transport: capture}))
+	fixture.sentry = capture
+	return fixture
+}
+
+// newLoggingFixture logs as main does, through newLogger; a nil reporter leaves Sentry off.
+func newLoggingFixture(t *testing.T, reporter *sentrylog.Reporter) *httpLoggingFixture {
 	t.Helper()
-	fixture := &httpLoggingFixture{}
-	fixture.log = logging.New(&fixture.out)
+	fixture := &httpLoggingFixture{reporter: reporter}
+	fixture.log = newLogger(&fixture.out, reporter)
 	fixture.db = testdb.Open(t, models()...).Session(&gorm.Session{Logger: dblog.New(fixture.log)})
 	fixture.store = links.New(fixture.db, nil)
 	return fixture
+}
+
+// newReporter fills in the environment and release the tests use; with no DSN it returns nil.
+func newReporter(t *testing.T, options sentrylog.Options) *sentrylog.Reporter {
+	t.Helper()
+	options.Environment, options.Release = "test", "test"
+	reporter, err := sentrylog.New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reporter
+}
+
+// sentryCapture is the Sentry client's transport in these tests: it keeps the events the client would send.
+type sentryCapture struct {
+	mu     sync.Mutex
+	events []*sentry.Event
+}
+
+func (*sentryCapture) Configure(sentry.ClientOptions) {}
+
+func (c *sentryCapture) SendEvent(event *sentry.Event) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, event)
+}
+
+func (*sentryCapture) Flush(time.Duration) bool              { return true }
+func (*sentryCapture) FlushWithContext(context.Context) bool { return true }
+func (*sentryCapture) Close()                                {}
+
+// take returns the events captured since the last take.
+func (c *sentryCapture) take() []*sentry.Event {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	events := c.events
+	c.events = nil
+	return events
+}
+
+// sentrySink is a Sentry ingest endpoint on loopback that keeps every envelope the SDK posts to it.
+type sentrySink struct {
+	server *httptest.Server
+	mu     sync.Mutex
+	bodies [][]byte
+}
+
+func newSentrySink(t *testing.T) *sentrySink {
+	sink := &sentrySink{}
+	sink.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		sink.bodies = append(sink.bodies, body)
+	}))
+	t.Cleanup(sink.server.Close)
+	return sink
+}
+
+func (s *sentrySink) dsn() string {
+	return "http://public@" + s.server.Listener.Addr().String() + "/1"
+}
+
+// take returns every envelope received, concatenated, and the payloads of their event items.
+func (s *sentrySink) take(t *testing.T) ([]byte, []map[string]any) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var raw []byte
+	var events []map[string]any
+	for _, body := range s.bodies {
+		raw = append(raw, body...)
+		// An envelope is a header line, then an item header line and a payload line per item.
+		lines := bytes.Split(bytes.TrimSpace(body), []byte{'\n'})
+		for i := 1; i+1 < len(lines); i += 2 {
+			var item struct{ Type string }
+			if err := json.Unmarshal(lines[i], &item); err != nil {
+				t.Fatalf("envelope item header: %v", err)
+			}
+			if item.Type == "event" {
+				var event map[string]any
+				if err := json.Unmarshal(lines[i+1], &event); err != nil {
+					t.Fatalf("event item: %v", err)
+				}
+				events = append(events, event)
+			}
+		}
+	}
+	s.bodies = nil
+	return raw, events
+}
+
+func sentryJSON(t *testing.T, events []*sentry.Event) []byte {
+	t.Helper()
+	data, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// requireNoPrivate fails if data holds, plain or query-escaped, the private query or header, the staff
+// cookie's name, SQL, httptest's client IP, or any of private.
+func requireNoPrivate(t *testing.T, what string, data []byte, private ...string) {
+	t.Helper()
+	for _, value := range append([]string{httpQuery, httpHeader, "management_session", "192.0.2.1",
+		"SELECT ", "UPDATE ", "INSERT INTO ", "DELETE FROM ", "ALTER TABLE "}, private...) {
+		if value != "" && (bytes.Contains(data, []byte(value)) || bytes.Contains(data, []byte(url.QueryEscape(value)))) {
+			t.Fatalf("%s contains forbidden private value %q", what, value)
+		}
+	}
 }
 
 func (fixture *httpLoggingFixture) createAndStart(t *testing.T) (links.LinkEntry, string) {
@@ -302,11 +499,13 @@ func (fixture *httpLoggingFixture) requireFailure(t *testing.T, rec *httptest.Re
 	if !bytes.HasSuffix(data, []byte{'\n'}) || bytes.Count(data, []byte{'\n'}) != 1 {
 		t.Fatal("request must emit exactly one newline-terminated event")
 	}
-	for _, value := range append([]string{httpQuery, httpHeader, "management_session", "SELECT ", "UPDATE ", "INSERT INTO ", "DELETE FROM ", "ALTER TABLE "}, private...) {
-		if value != "" && (bytes.Contains(data, []byte(value)) || bytes.Contains(data, []byte(url.QueryEscape(value)))) {
-			t.Fatalf("request event contains forbidden private value %q", value)
-		}
+	requireNoPrivate(t, "request event", data, private...)
+	events := fixture.sentry.take()
+	if len(events) != 1 || events[0].Message != "request_failed" || events[0].Transaction != want.route ||
+		events[0].Tags["request_id"] != httpRequestID {
+		t.Fatalf("Sentry events = %d, want one request_failed named %q and tagged with the request ID", len(events), want.route)
 	}
+	requireNoPrivate(t, "Sentry event", sentryJSON(t, events), private...)
 	var event map[string]any
 	if err := json.Unmarshal(data, &event); err != nil {
 		t.Fatalf("request event is not JSON: %v", err)
@@ -348,7 +547,7 @@ func (fixture *httpLoggingFixture) requireFailure(t *testing.T, rec *httptest.Re
 
 func (fixture *httpLoggingFixture) requireQuiet(t *testing.T) {
 	t.Helper()
-	if fixture.out.Len() != 0 {
+	if fixture.out.Len() != 0 || len(fixture.sentry.take()) != 0 {
 		t.Fatal("successful or expected request emitted an event")
 	}
 }
