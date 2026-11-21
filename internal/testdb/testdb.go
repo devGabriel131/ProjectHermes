@@ -45,7 +45,11 @@ func Open(t *testing.T, models ...any) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { pool.Close() })
+	t.Cleanup(func() {
+		if err := pool.Close(); err != nil {
+			t.Errorf("close test pool: %v", err)
+		}
+	})
 	pool.SetMaxOpenConns(10)
 	pool.SetMaxIdleConns(10)
 	// Schema identifiers contain only this fixed prefix and internally generated hex.

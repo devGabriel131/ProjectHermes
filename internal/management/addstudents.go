@@ -305,6 +305,7 @@ func (s *site) importStudents(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Could not build the rows-to-fix file. Please try again.", http.StatusInternalServerError)
 			return
 		}
+		// #nosec G203 -- constant MIME prefix and a base64 payload, whose alphabet cannot leave the href or change its scheme.
 		report.FixFile = template.URL("data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64," + base64.StdEncoding.EncodeToString(fixBytes))
 	}
 

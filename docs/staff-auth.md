@@ -86,7 +86,7 @@ flowchart TD
 |---|---|
 | Store | scs v2.9.0 with its PostgreSQL store on the shared SQL pool. The store's own cleanup is off (interval 0). |
 | Lifetime | Fixed 14 days from login. `IdleTimeout` is unset, so visits never extend or rewrite the session and reissue no cookie. |
-| Cookie | `management_session`, path `/management/`, `HttpOnly`, `SameSite=Lax`, persistent (`Expires` and `Max-Age`). `Secure` unless `SESSION_COOKIE_SECURE` parses as false. |
+| Cookie | `management_session`, path `/management/`, `HttpOnly`, `SameSite=Lax`, persistent (`Expires` and `Max-Age`). `Secure` whenever `PUBLIC_BASE_URL` is https; only a sandbox localhost `http` origin leaves it off ([Configuration](operations/configuration.md)). |
 | Contents | `username` and `auth_version` (gob in `sessions.data`). |
 | Cleanup | `Manager.Run`, which `main` starts beside the billing worker, ticks every 5 minutes and runs `DELETE ... WHERE expiry < CURRENT_TIMESTAMP` through GORM with a 5 s timeout; failures log `session_cleanup_failed` ([Observability](operations/observability.md)). It returns when its context ends and never closes the pool ([Startup and shutdown](operations/startup-shutdown.md)). |
 
@@ -246,8 +246,8 @@ Only this browser's session row is deleted; other devices stay signed in. A sign
 - `internal/auth/http.go`: `Manager`, `New`, `Run`, `deleteExpiredSessions`, `RegisterRoutes`, `Staff`, `Require`, `authenticated`, `logout`, `login`, `verify`, `render`, `cookieName`, `loginInterval`, `dummyHash`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`, `listUsers`, `readNewPassword`, `promptPassword`
 - `internal/auth/http_test.go`: `TestSignIn`, `TestCredentialChangesEndSessions`, `TestSignOutEndsOnlyThisBrowser`, `TestSessionCleanupDeletesOnlyExpired`
-- `main.go`: `main`, `run`, `newServer`, `SESSION_COOKIE_SECURE`
-- `main_wiring_integration_test.go`: `TestPublicCustomerIgnoresStaffSessions`, `TestCrossOriginWritesAreRejected`
+- `main.go`: `main`, `run`, `newServer`
+- `main_wiring_integration_test.go`: `TestPublicCustomerIgnoresStaffSessions`, `TestCrossOriginWritesAreRejected`, `TestSessionCookiesFollowPublicOrigin`
 - `internal/links/links.go`: `Store.CreateLink`, `Store.CancelLink`, `CancelEnrollmentTx`, `errNoStaff`, `CreatedBy`, `CanceledBy`
 - `internal/settings/settings.go`: `SetLinkLifetimeDays`, `SetProgramStartDate`, `SetBootcampDate`, `UpdatedBy`
 - `internal/billing/suspension.go`: `RequestReinstatement`

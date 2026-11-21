@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alexedwards/argon2id"
 	"gorm.io/gorm"
@@ -19,6 +20,7 @@ import (
 	"projecthermes/internal/auth"
 	"projecthermes/internal/billing"
 	"projecthermes/internal/billing/billingtest"
+	"projecthermes/internal/links"
 	"projecthermes/internal/live"
 	"projecthermes/internal/logging"
 	"projecthermes/internal/testdb"
@@ -111,32 +113,59 @@ func TestCrossOriginWritesAreRejected(t *testing.T) {
 	}
 }
 
+// TestSessionCookiesFollowPublicOrigin guards cookie security: an https PUBLIC_BASE_URL, in any
+// case, makes both session cookies Secure; only a sandbox localhost origin may send them over http.
+func TestSessionCookiesFollowPublicOrigin(t *testing.T) {
+	t.Parallel()
+	for origin, secure := range map[string]bool{
+		"https://enroll.example": true,
+		"HTTPS://enroll.example": true,
+		"http://localhost:3000":  false,
+	} {
+		t.Run(origin, func(t *testing.T) {
+			t.Parallel()
+			cfg := billingtest.Config()
+			cfg.BaseURL = origin
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			db := testdb.Open(t, models()...)
+			handler := serverHandler(t, db, db, logging.New(io.Discard), cfg)
+			staff := signInStaff(t, db, handler)
+			link, err := links.New(db, nil).CreateLink(t.Context(), "staff", "", time.Now().Add(time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := send(t, handler, http.MethodPost, "/customer/"+link.Token+"/start", nil, nil, nil)
+			cookies := rec.Result().Cookies()
+			if rec.Code != http.StatusSeeOther || len(cookies) != 1 || cookies[0].Name != "enrollment_session" {
+				t.Fatalf("customer start: status %d, cookies %v", rec.Code, cookies)
+			}
+			if staff.Secure != secure || cookies[0].Secure != secure {
+				t.Fatalf("Secure: staff %t, customer %t; want %t", staff.Secure, cookies[0].Secure, secure)
+			}
+		})
+	}
+}
+
 // newTestServer builds the real handler over an isolated database.
 func newTestServer(t *testing.T) (http.Handler, *gorm.DB) {
 	t.Helper()
 	db := testdb.Open(t, models()...)
-	return serverHandler(t, db, db, logging.New(io.Discard)), db
+	return serverHandler(t, db, db, logging.New(io.Discard), billingtest.Config()), db
 }
 
-// serverHandler builds the real handler with newServer over served. Auth and billing always use
-// db, so a test can hand newServer a broken connection and still sign in.
-func serverHandler(t *testing.T, db, served *gorm.DB, log *slog.Logger) http.Handler {
+// serverHandler builds the real handler with newApp, the composition run uses, from cfg on the fake
+// Stripe. Auth and billing always use db, so a test can hand newServer a broken connection and still sign in.
+func serverHandler(t *testing.T, db, served *gorm.DB, log *slog.Logger, cfg billing.Config) http.Handler {
 	t.Helper()
 	feed := live.New()
 	t.Cleanup(feed.Close)
-	authentication, err := auth.New(db, false, log)
+	app, err := newApp("127.0.0.1:0", db, served, feed, billingtest.Client(t, nil), cfg, billingtest.Catalog(), log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	biller, err := billing.New(db, billingtest.Client(t, nil), billingtest.Config(), billingtest.Catalog(), feed.Changed, log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server, err := newServer("127.0.0.1:0", served, feed, authentication, biller, false, log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return server.Handler
+	return app.server.Handler
 }
 
 // addStaff stores an account as the CLI does: an Argon2id hash and a random auth version.

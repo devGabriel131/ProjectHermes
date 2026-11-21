@@ -11,7 +11,7 @@ The link token in the path and the path-scoped `enrollment_session` cookie ident
 | Method | Path | Behavior |
 |---|---|---|
 | GET | `/customer/{token}` | Read-only welcome page (`welcome`). Creates no rows. Resumes `Awaiting payment` to `/agreement`, shows "Tu matrícula ya fue completada." (+ "Comenzar nueva matrícula" if the link is still usable) for `Finished`, "Continuar" to `/forms` for `In progress`, or "Comenzar" (`POST /start`) for new visitors. |
-| POST | `/customer/{token}/start` | Calls `StartEnrollment` (one statement for a new enrollment), sets the `enrollment_session` cookie (`HttpOnly`, `SameSite=Lax`, `Path: "/customer/{token}"`) if a new enrollment started, and redirects 303 (or `HX-Redirect`) to `/forms` (or `/agreement` if already submitted). |
+| POST | `/customer/{token}/start` | Calls `StartEnrollment` (one statement for a new enrollment), sets the `enrollment_session` cookie (`HttpOnly`, `SameSite=Lax`, `Path: "/customer/{token}"`, `Secure` whenever `PUBLIC_BASE_URL` is https) if a new enrollment started, and redirects 303 (or `HX-Redirect`) to `/forms` (or `/agreement` if already submitted). |
 | GET | `/customer/{token}/forms` | Resolves session (`resolveSession`, one `LookupSession` read). Without a usable session, GET and HEAD redirect 303 to `/customer/{token}` while the link takes new enrollments (usable and under the cap); otherwise 404. Renders the contact form with drafts prefilled and autosave wired. |
 | POST | `/customer/{token}` | Final submit: six contact fields, `email_confirm` and PIN. Success: 303 to `/agreement`. A spent PIN budget is 429. |
 | POST | `/customer/{token}/draft/{field}` | Autosave one registry field. Answers only a status fragment ("Guardado.") and never redraws the form. |

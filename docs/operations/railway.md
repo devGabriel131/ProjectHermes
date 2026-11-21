@@ -38,12 +38,11 @@ Validation, defaults and failure stages for each variable are in [Configuration]
 | Variable | Value on Railway |
 |---|---|
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` `[EXTERNAL]`, a private-network host a laptop cannot reach |
-| `SESSION_COOKIE_SECURE` | `true` `[EXTERNAL]`; also the default when unset, but a set-and-empty value fails startup |
 | `PORT` | `8080` `[EXTERNAL]`; when set the server binds all interfaces on `:8080` |
 | `STRIPE_API_KEY` | restricted key (code also accepts `sk_` keys) whose `test` or `live` prefix matches `STRIPE_MODE` `[EXTERNAL]` |
 | `STRIPE_MODE` | `sandbox` or `live` |
 | `STRIPE_WEBHOOK_SECRET` | signing secret of the **registered webhook endpoint**, not the `stripe listen` secret used locally |
-| `PUBLIC_BASE_URL` | the public HTTPS origin; the Stripe webhook endpoint is `<PUBLIC_BASE_URL>/webhooks/stripe` |
+| `PUBLIC_BASE_URL` | the public HTTPS origin; the Stripe webhook endpoint is `<PUBLIC_BASE_URL>/webhooks/stripe`, and its `https` scheme makes both session cookies `Secure` |
 | `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID`, `STRIPE_PORTAL_CONFIGURATION_ID` | IDs from the same Stripe mode |
 
 Railway also provides metadata variables the app reads for log fields: `RAILWAY_SERVICE_NAME`, `RAILWAY_ENVIRONMENT_NAME`, `RAILWAY_GIT_COMMIT_SHA`, `RAILWAY_DEPLOYMENT_ID`, `RAILWAY_REPLICA_ID` ([Observability](observability.md)). Never copy Railway credentials into `.env` or `.env.example`; `.gitignore` excludes `.env`.

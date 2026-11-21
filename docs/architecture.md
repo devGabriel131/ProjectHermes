@@ -92,7 +92,7 @@ flowchart LR
 
 | Path | Responsibility |
 |---|---|
-| `main.go` | CLI dispatch, logger metadata, startup order, `newServer` wiring, `serve` drain |
+| `main.go` | CLI dispatch, logger metadata, startup order, `newApp` composition (billing, auth, cookie `Secure` from the public origin) and `newServer` wiring, `serve` drain |
 | `internal/auth` | Staff accounts, sessions, login limiter, `Require`, the `user` CLI ([Staff authentication](staff-auth.md)) |
 | `internal/billing` | Stripe configuration and catalog, Checkout, invoices, webhook intake, the leased worker ([Billing overview](billing/overview.md)) |
 | `internal/billing/billingtest` | Billing services backed by a fake Stripe, for other packages' tests ([Testing](testing.md)) |
@@ -212,7 +212,7 @@ The 403 from `CrossOriginProtection` fires for non-safe methods (such as POST) w
 
 ## Source
 
-- `main.go`: `newServer`, `secureHeaders`, `sitePolicy`, `serve`, `run`, `models`, `startupError`, `assets`
+- `main.go`: `newApp`, `newServer`, `secureHeaders`, `sitePolicy`, `serve`, `run`, `models`, `startupError`, `assets`
 - `go.mod`: `github.com/air-verse/air`, `github.com/nyaruka/phonenumbers/v2`, `github.com/stripe/stripe-go/v87`, `gorm.io/gorm`, `gorm.io/driver/postgres`
 - `internal/auth/http.go`: `Manager.RegisterRoutes`, `Require`, `Staff`
 - `internal/logging/http.go`: `Requests`, `Routes`, `RecordError`

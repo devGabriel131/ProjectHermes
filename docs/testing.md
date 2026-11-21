@@ -86,15 +86,16 @@ The fake is whatever handler a test supplies: billing worker and checkout tests 
 
 ## Wiring tests
 
-`main_wiring_integration_test.go` runs the real `newServer` handler over a `testdb` database, with a billing service on `billingtest`'s fake Stripe (`nil` handler):
+`main_wiring_integration_test.go` runs the real handler from `newApp`, the composition `run` uses, over a `testdb` database, with a billing service on `billingtest`'s fake Stripe (`nil` handler):
 
 | Test | Guards |
 |---|---|
 | `TestRoutesAreMounted` | `/` redirects to `/management/`; `/static/styles.css` and `/favicon.ico` are public; `/static/` answers 404; `/management/events` requires sign-in; `POST /webhooks/stripe` bypasses sign-in and rejects unsigned events with 400; every response carries the site CSP, `nosniff` and HSTS |
 | `TestPublicCustomerIgnoresStaffSessions` | with the `sessions` table made unavailable, `HEAD /customer/{token}` for an unknown token still answers 404 with the customer headers, an empty body, no `Vary: Cookie` and no cookie, while `/management/` answers 500 |
 | `TestCrossOriginWritesAreRejected` | management, customer and login `POST`s with cross-site `Sec-Fetch-Site` or foreign `Origin` get 403; without either header they reach their handlers |
+| `TestSessionCookiesFollowPublicOrigin` | an `https` `PUBLIC_BASE_URL`, upper-case `HTTPS://` included, makes both the staff `management_session` and the customer `enrollment_session` cookie `Secure`; a sandbox `http://localhost` origin makes neither `Secure` |
 
-Helpers: `newTestServer` builds the handler over a fresh database; `serverHandler` builds it with auth and billing on one database and `newServer`'s stores on another; `addStaff` stores an account as the CLI does; `signInStaff` adds the account `staff` and signs in through the real form; `send` serves one request in memory.
+Helpers: `newTestServer` builds the handler over a fresh database with `billingtest.Config()`; `serverHandler` builds it through `newApp`, the same composition `run` calls, from a `billing.Config` on the fake Stripe, with auth and billing on one database and `newServer`'s stores on another, so the cookie `Secure` flag comes from `run`'s own `cfg.SecureOrigin()` line; `addStaff` stores an account as the CLI does; `signInStaff` adds the account `staff` and signs in through the real form; `send` serves one request in memory.
 
 ### Request logging through the real server
 
@@ -146,7 +147,7 @@ Tests do not prove randomness statistically. No test proves these browser checks
 ## Source
 
 - `main_test.go`: `TestServeLifecycle`
-- `main_wiring_integration_test.go`: `TestRoutesAreMounted`, `TestPublicCustomerIgnoresStaffSessions`, `TestCrossOriginWritesAreRejected`, `newTestServer`, `serverHandler`, `addStaff`, `signInStaff`, `send`
+- `main_wiring_integration_test.go`: `TestRoutesAreMounted`, `TestPublicCustomerIgnoresStaffSessions`, `TestCrossOriginWritesAreRejected`, `TestSessionCookiesFollowPublicOrigin`, `newTestServer`, `serverHandler`, `addStaff`, `signInStaff`, `send`
 - `main_logging_integration_test.go`: `TestCustomerRolledBackRequestsLogOnce`, `TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging`, `TestSessionLoadFailureKeepsPublicHeadQuiet`, `TestSignInCommitFailureLogsActualStatusWithoutCredentials`, `TestAgreementFailuresLogOnceWithoutContactData`, `requireFailure`
 - `internal/testdb/testdb.go`: `Open`, `AwaitBlocked`, `TEST_DATABASE_URL`
 - `internal/billing/billingtest/billingtest.go`: `Config`, `Catalog`, `Client`, `New`

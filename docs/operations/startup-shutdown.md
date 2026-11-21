@@ -18,14 +18,13 @@ flowchart TD
   migrate["AutoMigrate models\nsame 10 s budget, then slow.Flush"]
   branch{"args after the binary name?"}
   cli["auth.RunCLI user command\nexit 0 or 1"]
-  cookie["read SESSION_COOKIE_SECURE"]
   feed["live.New"]
   cfg["billing.LoadConfigFromEnv"]
   catalog["NewStripeClient, LoadCatalog\n15 s budget"]
-  biller["billing.New"]
-  authm["auth.New"]
+  biller["newApp: billing.New"]
+  authm["newApp: auth.New\nSecure cookies when PUBLIC_BASE_URL is https"]
   addr["address from PORT"]
-  server["newServer: stores, routes, middleware"]
+  server["newApp: newServer\nstores, routes, middleware"]
   worker["go biller.Run, go authentication.Run\nsession cleanup every 5 min"]
   listen["net.Listen"]
   serve["server_listening, serve"]
@@ -41,8 +40,7 @@ flowchart TD
   ping -.->|"database_connect"| fail
   migrate -.->|"database_migrate"| fail
   branch -->|"user ..."| cli
-  branch -->|"none"| cookie --> feed --> cfg --> catalog --> biller --> authm --> addr --> server --> worker --> listen --> serve
-  cookie -.->|"configuration"| fail
+  branch -->|"none"| feed --> cfg --> catalog --> addr --> biller --> authm --> server --> worker --> listen --> serve
   cfg -.->|"billing_configuration"| fail
   catalog -.->|"billing_catalog"| fail
   biller -.->|"billing_initialize"| fail
@@ -56,7 +54,7 @@ Facts the diagram compresses:
 - The logger is built first, from the `RAILWAY_*` variables; only the web server logs to stdout ([Observability](observability.md)).
 - Ping and `AutoMigrate` share one 10 s context derived from the signal context. The slow-query summary is flushed right after the migration.
 - `AutoMigrate(models()...)` creates or alters every table: `auth.User`, `auth.Session`, `settings.Settings`, `links.Link`, `links.Enrollment`, `students.Student` and `billing.Models()`. It never drops a table or column. There are no migration files ([Data model](../data-model.md)).
-- Cookie and Stripe settings are read only after the database is migrated, so a bad Stripe variable still leaves the schema migrated.
+- Stripe settings, and the cookie `Secure` flag derived from `PUBLIC_BASE_URL`, are read only after the database is migrated, so a bad Stripe variable still leaves the schema migrated.
 - Both worker goroutines start before `net.Listen`; a `listen` failure unwinds through the deferred stop, which cancels and awaits them.
 - Any startup failure is logged by `main` after `run` returns, so deferred cleanup (including the final slow-query flush) happens first.
 
@@ -144,7 +142,7 @@ Details:
 
 ## Source
 
-- `main.go`: `main`, `run`, `serve`, `newServer`, `startupError`, `models`, `signalContext`, `cancelWorker`
+- `main.go`: `main`, `run`, `newApp`, `serve`, `newServer`, `startupError`, `models`, `signalContext`, `cancelWorker`
 - `internal/auth/http.go`: `New`, `Run`, `deleteExpiredSessions`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`
 - `internal/live/live.go`: `Feed.Close`, `writeTimeout`
