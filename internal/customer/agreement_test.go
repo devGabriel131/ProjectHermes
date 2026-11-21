@@ -125,7 +125,7 @@ func TestAgreementDateChangeRequiresFreshConsentAndReplaysKeepSnapshot(t *testin
 		t.Fatal("stale date kept consent or accepted old agreement")
 	}
 	w = customerRequest(t, fixture.mux, http.MethodPost, fixture.path+"/agreement", agreementForm(changedDate).Encode(), false, fixture.sessionCookie())
-	requireAdvance(t, w, fixture.path+"/payments", false, privateFormValues(contactForm("Agreement private student"))...)
+	requireAdvance(t, w, fixture.path+"/payments", false)
 	before, studentsBefore := stored(t, fixture.db), studentRecords(t, fixture.db)
 	if before[0].TermsAcceptedAt == nil || before[0].ProgramStartDate != changedDate {
 		t.Fatalf("acceptance snapshot missing: %+v", before[0])
