@@ -9,7 +9,7 @@ Versions are the ones pinned in `go.mod`.
 | Layer | Choice | Version | Notes |
 |---|---|---|---|
 | Language | Go | `1.27.4` (`go` directive; no `toolchain` line) | `net/http` `ServeMux` with method and path patterns |
-| Views | templ (`tool github.com/a-h/templ/cmd/templ`), MIT | v0.3.1118 | `.templ` files compile to committed `*_templ.go`; run as `go tool templ`. The staff login, settings, links and students (list and details) pages and the customer welcome, agreement and not-found pages so far; the other pages stay on `html/template` until their Phase C step. See [Local development](operations/local-development.md#templ) |
+| Views | templ (`tool github.com/a-h/templ/cmd/templ`), MIT | v0.3.1118 | `.templ` files compile to committed `*_templ.go`; run as `go tool templ`. The staff login, settings, links, students (list and details) and add-students pages and the customer welcome, agreement and not-found pages so far; the other pages stay on `html/template` until their Phase C step. See [Local development](operations/local-development.md#templ) |
 | Database | PostgreSQL through one pgx pool, with GORM on it; goose migrations | `github.com/jackc/pgx/v5` v5.12.0, `gorm.io/gorm` v1.31.2, `gorm.io/driver/postgres` v1.6.3, `github.com/pressly/goose/v3` v3.30.1 | `internal/db` opens the pool and applies the migrations embedded from `internal/db/migrations` ([Data model](data-model.md#migrations)); GORM and the session store reach the pool through `database/sql` |
 | Payments | `github.com/stripe/stripe-go/v87` | v87.0.0 | Used by `internal/billing` only |
 | Staff passwords | `github.com/alexedwards/argon2id` | v1.0.0 | |
