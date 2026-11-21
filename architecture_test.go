@@ -10,9 +10,9 @@
 //   - SQL: in every constant string expression (a literal, a constant, or a concatenation of them; a
 //     constant is charged where it is declared and again where it is used), an upper-case FROM, JOIN,
 //     UPDATE, INTO or USING followed by a lower-case name, with an optional alias, and each further name in
-//     a comma list, is a table. After FROM or JOIN a name followed by "(" is a function, and a name declared
-//     as "name AS (" in the same string is a CTE; both are skipped. IS DISTINCT FROM and EXTRACT(...) are
-//     removed first.
+//     a comma list, is a table. After FROM, JOIN or USING a name followed by "(" is a function, and a name
+//     declared as "name AS (" in the same string is a CTE; both are skipped. IS DISTINCT FROM and
+//     EXTRACT(...) are removed first.
 //   - GORM calls: an argument whose type is a model from models(), or a pointer, slice or array of one, uses
 //     that model's table when the call is made on a *gorm.DB or takes one as a parameter; so does a literal
 //     Table("name").
@@ -27,6 +27,7 @@
 //   - SQL outside Go. No package embeds .sql today; sqlc's generated Go holds each query as a constant,
 //     which is scanned, so queries.sql must keep upper-case keywords.
 //   - A second reach into the same table from an allowlisted declaration: entries are per declaration.
+//   - GORM many-to-many join tables: a relationship charges only the related model's table. None exist today.
 //
 // Known false positives fail loudly as a table with no owner: prose with an upper-case keyword before a
 // lower-case word ("UPDATE contract %d failed"), and a lower-case word after a keyword ("DO UPDATE set").
@@ -268,8 +269,8 @@ func sqlTableNames(sql string) []string {
 	var tables []string
 	for _, m := range sqlTables.FindAllStringSubmatch(sql, -1) {
 		items := strings.Split(m[2], ",")
-		// A set-returning function follows FROM or JOIN; after INTO the "(" opens a column list.
-		if m[3] != "" && (m[1] == "FROM" || m[1] == "JOIN") {
+		// A set-returning function may follow FROM, JOIN or USING; after INTO the "(" opens a column list.
+		if m[3] != "" && (m[1] == "FROM" || m[1] == "JOIN" || m[1] == "USING") {
 			items = items[:len(items)-1]
 		}
 		for _, item := range items {
@@ -289,6 +290,7 @@ func TestSQLTableNames(t *testing.T) {
 		"SELECT 1 FROM billing_contracts AS c, students s":                     "billing_contracts students",
 		"DELETE FROM billing_payments p USING students s":                      "billing_payments students",
 		"SELECT * FROM unnest(?) JOIN links USING (id)":                        "links",
+		"DELETE FROM billing_payments p USING unnest(?) AS u(id)":              "billing_payments",
 		"WITH slot AS (UPDATE links SET n = 1) SELECT id FROM slot":            "links",
 		"SELECT a IS NOT DISTINCT FROM b, EXTRACT(YEAR FROM created_at)":       "",
 		"SELECT 1 FROM enrollments WHERE id = ? FOR UPDATE SKIP LOCKED":        "enrollments",
