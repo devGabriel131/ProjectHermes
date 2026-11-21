@@ -129,6 +129,8 @@ All foreign keys use `ON UPDATE RESTRICT, ON DELETE RESTRICT`. The `sessions` ta
 
 Numeric primary keys are `BIGINT`, which Go holds as `uint64`. The range is checked once, where an ID enters from a request: management parses path and query IDs with `strconv.ParseUint(v, 10, 63)` and requires at least 1, so a number PostgreSQL cannot hold answers as not found. Stores take any `uint64` and never re-check it.
 
+Which context owns each table is in [Context map](context-map.md#table-ownership); "Owner package" below is today's package.
+
 | Table | Owner package | Written by | DB-enforced rules |
 |---|---|---|---|
 | `users` | `internal/auth` | CLI commands (`user add`, `passwd`, `revoke`, `remove`) | Primary key `username`. Non-null `password_hash`, `auth_version`. |
