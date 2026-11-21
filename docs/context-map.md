@@ -32,7 +32,7 @@ flowchart LR
 | Learning | `internal/learning` | none yet (Hephaestus games) |
 | Documents | `internal/documents` | none yet (Hephaestus forms and letters) |
 
-**Platform, not a context:** `main.go` (wiring), `internal/logging` (with `httplog`, `dblog`, `sentrylog` and `logtest` under it), `internal/live`, `internal/puertorico`, `internal/testdb`, and later `internal/db` (pool, migrations, unit of work) and `internal/ui` (shared layouts). `internal/management` is the staff UI for two contexts until phase F splits it into `studentsweb` and `billingweb`. Platform packages and `internal/management` own no table.
+**Platform, not a context:** `main.go` (wiring), `internal/db` (the one pgx pool today; migrations and the unit of work later), `internal/logging` (with `httplog`, `dblog`, `sentrylog` and `logtest` under it), `internal/live`, `internal/puertorico`, `internal/testdb`, and later `internal/ui` (shared layouts). `internal/management` is the staff UI for two contexts until phase F splits it into `studentsweb` and `billingweb`. Platform packages and `internal/management` own no table.
 
 ## Identity & Access
 
@@ -125,7 +125,7 @@ internal/<context>/<context>web/ thin handlers (parse → call service → rende
 ```
 
 - **The root holds no SQL and no HTTP.** It depends on no `net/http`, `html/template`, templ, pgx, GORM or `<context>db` package, transitively, and on `database/sql` only as linked by `internal/logging`: no package in its closure but `internal/logging` imports `database/sql`. `TestContextRootsImportNoAdapters` enforces this for every root in `reshapedRoots`.
-- **Roots log through a `*slog.Logger` passed in** and may import `internal/logging` (`ErrorAttrs`, `WithOperation`, `Label`), never `internal/logging/httplog` (`net/http`), `internal/logging/dblog` (GORM) or `internal/logging/sentrylog` (`net/http`); their error events reach Sentry through that logger. `internal/logging` links `database/sql` only for the `ErrTxDone` and `ErrConnDone` sentinels `ErrorAttrs` matches.
+- **Roots log through a `*slog.Logger` passed in** and may import `internal/logging` (`ErrorAttrs`, `WithOperation`, `Label`), never `internal/logging/httplog` (`net/http`), `internal/logging/dblog` (pgx) or `internal/logging/sentrylog` (`net/http`); their error events reach Sentry through that logger. `internal/logging` links `database/sql` only for the `ErrTxDone` and `ErrConnDone` sentinels `ErrorAttrs` matches.
 - **The consumer declares the store interface.** One per service, with methods named by use case (`ContractForUpdate`, `AppendResponses`); no `Repository[T]`. It exists to keep the root free of SQL: the root says what it needs, `<context>db` satisfies it, `main.go` wires them. A context with no domain logic in a read (the Program calendar, for example) has its handlers call the adapter directly, with no pass-through service.
 - **No in-memory fakes.** Domain invariants are tested with plain Go tests on domain types. Services and seams are tested against real PostgreSQL through `internal/testdb`, with the real adapter and the real provider service behind every seam. Only external systems are faked, at their HTTP boundary (Stripe through `billingtest`, [Testing](testing.md)).
 - **At most three packages per context**, with no further layers. Subdomains that are pure logic (`documents/ist`, `learning/words`) may sit beside them.
@@ -152,7 +152,7 @@ The `hephaestus_*` tables in the shared production database belong to ProjectHep
 `architecture_test.go` runs with the unit tests and needs the `go` command, not a database. Its doc comment states what each matcher cannot see.
 
 - **`TestContextRootsImportNoAdapters`** runs `go list -deps` on each root in `reshapedRoots` and fails on any forbidden dependency, naming the root, the package and where it belongs. No root is reshaped yet, so the list is empty and the test skips with a message saying what it would check. Each reshape step adds its root in one line.
-- **`TestLoggingCoreImportsNoAdapters`** runs the same check on `internal/logging`, so HTTP and GORM code stays in `httplog` and `dblog`.
+- **`TestLoggingCoreImportsNoAdapters`** runs the same check on `internal/logging`, so HTTP and database code stays in `httplog` and `dblog`.
 - **`TestContextsTouchOnlyOwnedTables`** type-checks every production package and charges each table it finds to the package's context (`contextOf`). It fails on a table with no owner, and on a table outside the context's ownership, naming the file, line, declaration, table and owning context. It finds tables in constant SQL strings, in GORM calls given a model from `models()` or a literal `Table` name, and in model associations. `TestSQLTableNames` guards the SQL scanner.
 - **The allowlist only shrinks.** `crossContextAllowlist` holds today's Billing → Students reaches, keyed by file, declaration and table, each commented with the seam that replaces it. An entry that no longer matches fails the test until it is deleted. Phase F moves each reach behind its seam and F9 leaves the list empty.
 

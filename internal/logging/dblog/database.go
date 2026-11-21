@@ -1,17 +1,17 @@
-// Package dblog is GORM's logger: slow-query and pool-wait summaries in the shared format of
+// Package dblog is the pgx pool's query tracer: slow-query and pool-wait summaries in the shared format of
 // internal/logging, never SQL. See docs/operations/observability.md.
 package dblog
 
 import (
 	"context"
-	"database/sql"
 	"log/slog"
 	"maps"
 	"slices"
 	"sync"
 	"time"
 
-	"gorm.io/gorm/logger"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"apollo/internal/logging"
 )
@@ -23,73 +23,85 @@ type slowQueryBucket struct {
 	worst time.Duration
 }
 
-// Logger reports bounded slow-success summaries without evaluating SQL callbacks and, once WatchPool
-// is set, the connection pool waits since the previous Flush. A statement's time includes its pool wait.
-type Logger struct {
+// Tracer counts slow successful queries per label without reading their SQL, arguments or rows and, once
+// WatchPool is set, the pool waits since the previous Flush. A query's time starts once it holds a
+// connection, so it excludes its pool wait.
+type Tracer struct {
 	log     *slog.Logger
 	mu      sync.Mutex
 	buckets map[string]slowQueryBucket
-	// pool and the wait totals it reported at the previous Flush.
-	pool       func() sql.DBStats
+	// waits reads the pool's cumulative waits; poolWaits and poolWaited are its values at the previous Flush.
+	waits      func() (int64, time.Duration)
 	poolWaits  int64
 	poolWaited time.Duration
 }
 
-var _ logger.Interface = (*Logger)(nil)
+var _ pgx.QueryTracer = (*Tracer)(nil)
 
-func New(log *slog.Logger) *Logger {
-	return &Logger{log: log, buckets: map[string]slowQueryBucket{}}
+func New(log *slog.Logger) *Tracer {
+	return &Tracer{log: log, buckets: map[string]slowQueryBucket{}}
 }
 
-// WatchPool makes Flush report pool waits read from stats, normally (*sql.DB).Stats.
-func (l *Logger) WatchPool(stats func() sql.DBStats) {
-	l.mu.Lock()
-	l.pool = stats
-	l.mu.Unlock()
+// WatchPool makes Flush report pool's waits: acquires that found every connection busy and waited for one to
+// be released, counted as a lower bound. The pool also counts an acquire that opened a new connection as a
+// wait, so the connections opened are subtracted; that undercounts by each failed connection attempt, each
+// acquire abandoned while its connection was opening, and each waiter that ended up opening a replacement for
+// an expired or broken connection. It relies on db.Open opening connections only on acquire (MinConns and
+// MinIdleConns 0). The wait time cannot be split, so it also holds the time spent opening connections.
+func (t *Tracer) WatchPool(pool *pgxpool.Pool) {
+	t.watch(func() (int64, time.Duration) {
+		stat := pool.Stat()
+		return stat.EmptyAcquireCount() - stat.NewConnsCount(), stat.EmptyAcquireWaitTime()
+	})
 }
 
-// LogMode ignores levels: SQL is never logged.
-func (l *Logger) LogMode(logger.LogLevel) logger.Interface { return l }
-
-func (l *Logger) Info(context.Context, string, ...any)  {}
-func (l *Logger) Error(context.Context, string, ...any) {}
-
-func (l *Logger) Warn(ctx context.Context, _ string, _ ...any) {
-	l.log.WarnContext(ctx, "orm_warning")
+func (t *Tracer) watch(waits func() (int64, time.Duration)) {
+	t.mu.Lock()
+	t.waits = waits
+	t.mu.Unlock()
 }
 
-// Trace counts slow successful queries per label; failed ones are reported by their callers.
-func (l *Logger) Trace(ctx context.Context, begin time.Time, _ func() (string, int64), err error) {
+type queryStart struct{}
+
+// TraceQueryStart stamps the start time on the query's context; the SQL and arguments in data are never read.
+func (t *Tracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	return context.WithValue(ctx, queryStart{}, time.Now())
+}
+
+// TraceQueryEnd counts a slow successful query under its context's label; failed ones are reported by
+// their callers.
+func (t *Tracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+	begin, ok := ctx.Value(queryStart{}).(time.Time)
 	elapsed := time.Since(begin)
-	if err != nil || elapsed <= slowQueryThreshold {
+	if !ok || data.Err != nil || elapsed <= slowQueryThreshold {
 		return
 	}
 	label := logging.Label(ctx)
-	l.mu.Lock()
-	bucket := l.buckets[label]
+	t.mu.Lock()
+	bucket := t.buckets[label]
 	bucket.count++
 	bucket.worst = max(bucket.worst, elapsed)
-	l.buckets[label] = bucket
-	l.mu.Unlock()
+	t.buckets[label] = bucket
+	t.mu.Unlock()
 }
 
 // Flush atomically takes all counters, then emits at most one warning per label and one for pool waits.
-func (l *Logger) Flush() {
-	l.mu.Lock()
-	buckets := l.buckets
-	l.buckets = map[string]slowQueryBucket{}
+func (t *Tracer) Flush() {
+	t.mu.Lock()
+	buckets := t.buckets
+	t.buckets = map[string]slowQueryBucket{}
 	var waits int64
 	var waited time.Duration
-	if l.pool != nil {
-		stats := l.pool()
-		waits, waited = stats.WaitCount-l.poolWaits, stats.WaitDuration-l.poolWaited
-		l.poolWaits, l.poolWaited = stats.WaitCount, stats.WaitDuration
+	if t.waits != nil {
+		count, duration := t.waits()
+		waits, waited = count-t.poolWaits, duration-t.poolWaited
+		t.poolWaits, t.poolWaited = count, duration
 	}
-	l.mu.Unlock()
+	t.mu.Unlock()
 
 	for _, label := range slices.Sorted(maps.Keys(buckets)) {
 		bucket := buckets[label]
-		l.log.LogAttrs(context.Background(), slog.LevelWarn, "database_slow_summary",
+		t.log.LogAttrs(context.Background(), slog.LevelWarn, "database_slow_summary",
 			slog.String("operation", label),
 			slog.Uint64("count", bucket.count),
 			slog.Float64("worst_duration_ms", float64(bucket.worst)/float64(time.Millisecond)),
@@ -97,7 +109,7 @@ func (l *Logger) Flush() {
 		)
 	}
 	if waits > 0 {
-		l.log.LogAttrs(context.Background(), slog.LevelWarn, "database_pool_wait",
+		t.log.LogAttrs(context.Background(), slog.LevelWarn, "database_pool_wait",
 			slog.Int64("count", waits),
 			slog.Float64("total_wait_ms", float64(waited)/float64(time.Millisecond)),
 		)

@@ -9,7 +9,7 @@ Versions are the ones pinned in `go.mod`.
 | Layer | Choice | Version | Notes |
 |---|---|---|---|
 | Language | Go | `1.27.4` (`go` directive; no `toolchain` line) | `net/http` `ServeMux` with method and path patterns, `html/template` |
-| Database | PostgreSQL through GORM | `gorm.io/gorm` v1.31.2, `gorm.io/driver/postgres` v1.6.3 (pgx v5.10.0, indirect) | Schema comes from `AutoMigrate(models()...)`; there are no migration files |
+| Database | PostgreSQL through one pgx pool, with GORM on it | `github.com/jackc/pgx/v5` v5.10.0, `gorm.io/gorm` v1.31.2, `gorm.io/driver/postgres` v1.6.3 | `internal/db` opens the pool; GORM and the session store reach it through `database/sql`. Schema comes from `AutoMigrate(models()...)`; there are no migration files |
 | Payments | `github.com/stripe/stripe-go/v87` | v87.0.0 | Used by `internal/billing` only |
 | Staff passwords | `github.com/alexedwards/argon2id` | v1.0.0 | |
 | Staff sessions | `github.com/alexedwards/scs/v2` + `scs/postgresstore` | v2.9.0 + a pinned pseudo-version | The store shares the application's SQL pool |
@@ -36,7 +36,7 @@ flowchart LR
 
   customer -->|"/customer/{token}, /payments/return"| app
   staff -->|"/management/..."| app
-  app -->|"GORM, one pool of 10"| pg
+  app -->|"pgx, one pool of 10"| pg
   app -->|"API: prices, Checkout, invoices, portal"| stripe
   stripe -->|"POST /webhooks/stripe"| app
   customer -.->|"redirected to hosted Checkout"| stripe
@@ -57,6 +57,7 @@ flowchart LR
   main --> links
   main --> live
   main --> logging
+  main --> db
   main --> dblog
   main --> httplog
   main --> sentrylog
@@ -96,7 +97,7 @@ flowchart LR
   billingtest --> billing
 ```
 
-`logging`, `logtest`, `puertorico` and `settings` import no other module package; `payments` and `students` import only `puertorico`, `httplog` and `dblog` only `logging`, and `sentrylog` only `logging` and `httplog`. `management` does not import `auth`: staff identity arrives as a function argument (see Wiring).
+`db`, `logging`, `logtest`, `puertorico` and `settings` import no other module package; `payments` and `students` import only `puertorico`, `httplog` and `dblog` only `logging`, and `sentrylog` only `logging` and `httplog`. `management` does not import `auth`: staff identity arrives as a function argument (see Wiring).
 
 | Path | Responsibility |
 |---|---|
@@ -105,11 +106,12 @@ flowchart LR
 | `internal/billing` | Stripe configuration and catalog, Checkout, invoices, webhook intake, the leased worker ([Billing overview](billing/overview.md)) |
 | `internal/billing/billingtest` | Billing services backed by a fake Stripe, for other packages' tests ([Testing](testing.md)) |
 | `internal/customer` | Private `/customer/{token}` pages and the payment return page ([Customer flow](domain/customer-flow.md)) |
+| `internal/db` | The one pgx pool (10 connections, the query tracer), and the `database/sql` and GORM handles on it ([Startup and shutdown](operations/startup-shutdown.md)) |
 | `internal/links` | Customer links by token digest; `Enroll` turns a paid link into a Student ([Links](domain/links.md)) |
 | `internal/live` | In-process server-sent-event fan-out ([Live updates](live-updates.md)) |
 | `internal/logging` | Shared logging conventions, stdlib only: the JSON event format, `ErrorAttrs`, request levels, call labels ([Observability](operations/observability.md)) |
 | `internal/logging/httplog` | HTTP instrumentation: request IDs, `request_failed`, route labels, the server error log, Stripe call timing |
-| `internal/logging/dblog` | GORM's logger: slow-query and pool-wait summaries |
+| `internal/logging/dblog` | The pool's pgx query tracer: slow-query and pool-wait summaries |
 | `internal/logging/sentrylog` | Sentry, off without `SENTRY_DSN`: error events from the logger, handler panics, `BeforeSend` scrubbing ([Observability](operations/observability.md#sentry)) |
 | `internal/logging/logtest` | Decodes logged JSON events, for the logging packages' tests |
 | `internal/management` | Staff pages and fragments ([Management overview](management/overview.md)) |

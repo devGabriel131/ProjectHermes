@@ -7,7 +7,7 @@
 // may, for the sentinels ErrorAttrs matches, so roots can log through it; any other package in the closure
 // that imports database/sql directly fails.
 //
-// TestLoggingCoreImportsNoAdapters holds internal/logging to the root rule, so net/http and GORM stay in
+// TestLoggingCoreImportsNoAdapters holds internal/logging to the root rule, so net/http and pgx stay in
 // httplog and dblog.
 //
 // TestContextsTouchOnlyOwnedTables type-checks each package's production files and applies three matchers:

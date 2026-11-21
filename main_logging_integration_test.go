@@ -348,7 +348,7 @@ func newLoggingFixture(t *testing.T, reporter *sentrylog.Reporter) *httpLoggingF
 	t.Helper()
 	fixture := &httpLoggingFixture{reporter: reporter}
 	fixture.log = newLogger(&fixture.out, reporter)
-	fixture.db = testdb.Open(t, models()...).Session(&gorm.Session{Logger: dblog.New(fixture.log)})
+	fixture.db = testdb.OpenTraced(t, dblog.New(fixture.log), models()...)
 	fixture.store = links.New(fixture.db, nil)
 	return fixture
 }

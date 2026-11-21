@@ -3,9 +3,10 @@ package dblog
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"apollo/internal/logging"
 	"apollo/internal/logging/logtest"
@@ -14,7 +15,7 @@ import (
 type databasePrivateData struct{}
 
 func (databasePrivateData) Error() string  { panic("PRIVATE database error was formatted") }
-func (databasePrivateData) String() string { panic("PRIVATE ORM data was formatted") }
+func (databasePrivateData) String() string { panic("PRIVATE query argument was formatted") }
 
 // A zero begin saturates elapsed to the max Duration; a far-future begin saturates it to the min.
 // Both keep worst_duration_ms deterministic.
@@ -24,16 +25,28 @@ var (
 	maxWorst  = time.Duration(1<<63 - 1)
 )
 
-func TestLoggerTraceCountsOnlySlowSuccessAndNeverEvaluatesSQL(t *testing.T) {
-	var out bytes.Buffer
-	db := New(logging.New(&out))
-	ctx := context.Background()
-	// A nil callback panics if Trace evaluates SQL; the error type panics if formatted.
-	db.Trace(ctx, slowBegin, nil, nil)
-	db.Trace(ctx, slowBegin, nil, databasePrivateData{})
-	db.Trace(ctx, fastBegin, nil, nil)
-	db.Flush()
+// trace runs one query through tracer as pgx would, with its start moved to begin.
+func trace(ctx context.Context, tracer *Tracer, begin time.Time, err error) {
+	ctx = tracer.TraceQueryStart(ctx, nil, pgx.TraceQueryStartData{
+		SQL:  "SELECT 'PRIVATE SQL'",
+		Args: []any{databasePrivateData{}},
+	})
+	tracer.TraceQueryEnd(context.WithValue(ctx, queryStart{}, begin), nil, pgx.TraceQueryEndData{Err: err})
+}
 
+func TestTracerCountsOnlySlowSuccessAndNeverLogsSQL(t *testing.T) {
+	var out bytes.Buffer
+	tracer := New(logging.New(&out))
+	ctx := context.Background()
+	// The arguments and the error type panic if formatted.
+	trace(ctx, tracer, slowBegin, nil)
+	trace(ctx, tracer, slowBegin, databasePrivateData{})
+	trace(ctx, tracer, fastBegin, nil)
+	tracer.Flush()
+
+	if bytes.Contains(out.Bytes(), []byte("PRIVATE")) {
+		t.Fatalf("query data reached the log: %s", out.Bytes())
+	}
 	events := logtest.Events(t, out.Bytes())
 	if len(events) != 1 {
 		t.Fatalf("events = %d, want 1", len(events))
@@ -41,9 +54,9 @@ func TestLoggerTraceCountsOnlySlowSuccessAndNeverEvaluatesSQL(t *testing.T) {
 	assertDatabaseSummary(t, events[0], "other", 1, maxWorst)
 }
 
-func TestLoggerFlushBoundsAndResets(t *testing.T) {
+func TestTracerFlushBoundsAndResets(t *testing.T) {
 	var out bytes.Buffer
-	db := New(logging.New(&out))
+	tracer := New(logging.New(&out))
 	a := logging.WithOperation(context.Background(), "a")
 	b := logging.WithOperation(context.Background(), "b")
 	for i := range 1000 {
@@ -51,12 +64,12 @@ func TestLoggerFlushBoundsAndResets(t *testing.T) {
 		if i%2 == 1 {
 			ctx = b
 		}
-		db.Trace(ctx, slowBegin, nil, nil)
+		trace(ctx, tracer, slowBegin, nil)
 	}
 	if out.Len() != 0 {
 		t.Fatal("slow traces emitted before Flush")
 	}
-	db.Flush()
+	tracer.Flush()
 	events := logtest.Events(t, out.Bytes())
 	if len(events) != 2 {
 		t.Fatalf("summary events = %d, want 2", len(events))
@@ -65,21 +78,21 @@ func TestLoggerFlushBoundsAndResets(t *testing.T) {
 	assertDatabaseSummary(t, events[1], "b", 500, maxWorst)
 
 	before := out.Len()
-	db.Flush()
+	tracer.Flush()
 	if out.Len() != before {
 		t.Fatal("second Flush repeated previous summaries")
 	}
 }
 
-func TestLoggerFlushReportsPoolWaitGrowth(t *testing.T) {
+func TestTracerFlushReportsPoolWaitGrowth(t *testing.T) {
 	var out bytes.Buffer
-	db := New(logging.New(&out))
-	stats := sql.DBStats{WaitCount: 3, WaitDuration: 30 * time.Millisecond}
-	db.WatchPool(func() sql.DBStats { return stats })
-	db.Flush()
-	stats.WaitCount, stats.WaitDuration = 5, 50*time.Millisecond
-	db.Flush()
-	db.Flush() // no new waits: silent
+	tracer := New(logging.New(&out))
+	count, waited := int64(3), 30*time.Millisecond
+	tracer.watch(func() (int64, time.Duration) { return count, waited })
+	tracer.Flush()
+	count, waited = 5, 50*time.Millisecond
+	tracer.Flush()
+	tracer.Flush() // no new waits: silent
 
 	events := logtest.Events(t, out.Bytes())
 	if len(events) != 2 {

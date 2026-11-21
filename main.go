@@ -18,12 +18,12 @@ import (
 	"time"
 
 	"github.com/stripe/stripe-go/v87"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
 	"apollo/internal/auth"
 	"apollo/internal/billing"
 	"apollo/internal/customer"
+	"apollo/internal/db"
 	"apollo/internal/links"
 	"apollo/internal/live"
 	"apollo/internal/logging"
@@ -156,36 +156,27 @@ func run(log *slog.Logger, reporter *sentrylog.Reporter, args []string) error {
 	if dsn == "" {
 		return startupError{"configuration", errors.New("DATABASE_URL is required")}
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		DisableAutomaticPing:   true,
-		SkipDefaultTransaction: true,
-		Logger:                 slow,
-	})
+	database, err := db.Open(dsn, slow)
 	if err != nil {
 		return startupError{"database_open", err}
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return startupError{"database_pool", err}
-	}
-	defer sqlDB.Close()
-	sqlDB.SetMaxOpenConns(10)
-	sqlDB.SetMaxIdleConns(10)
-	slow.WatchPool(sqlDB.Stats)
+	// Deferred before the workers' stop, so the pool closes after the server and the workers are done.
+	defer database.Close()
+	slow.WatchPool(database.Pool)
 
 	ctx, cancel := context.WithTimeout(signalContext, 10*time.Second)
 	defer cancel()
-	if err := sqlDB.PingContext(ctx); err != nil {
+	if err := database.Pool.Ping(ctx); err != nil {
 		return startupError{"database_connect", err}
 	}
-	err = db.WithContext(logging.WithOperation(ctx, "startup_migrate")).AutoMigrate(models()...)
+	err = database.GORM.WithContext(logging.WithOperation(ctx, "startup_migrate")).AutoMigrate(models()...)
 	slow.Flush()
 	if err != nil {
 		return startupError{"database_migrate", err}
 	}
 
 	if len(args) > 0 {
-		err := auth.RunCLI(logging.WithOperation(signalContext, "cli_user"), db, args[1:])
+		err := auth.RunCLI(logging.WithOperation(signalContext, "cli_user"), database.GORM, args[1:])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
@@ -224,7 +215,7 @@ func run(log *slog.Logger, reporter *sentrylog.Reporter, args []string) error {
 	if port := os.Getenv("PORT"); port != "" {
 		addr = ":" + port
 	}
-	app, err := newApp(addr, db, db, feed, stripeClient, billingCfg, catalog, log, reporter)
+	app, err := newApp(addr, database.GORM, database.GORM, feed, stripeClient, billingCfg, catalog, log, reporter)
 	if err != nil {
 		return err
 	}

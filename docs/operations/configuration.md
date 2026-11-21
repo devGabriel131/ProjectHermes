@@ -53,9 +53,8 @@ A startup failure logs `startup_failed` with a `stage` field, then the process e
 |---|---|---|
 | `sentry_configuration` | `sentrylog.New` in `main` | `SENTRY_DSN` set but not a valid DSN; checked before `run`, so no database is touched |
 | `configuration` | `run` | `DATABASE_URL` empty; `INSTALLMENT_SPACING` not a positive duration or set with `STRIPE_MODE=live` |
-| `database_open` | `gorm.Open` | DSN does not parse. No connection is attempted here: `DisableAutomaticPing` is set |
-| `database_pool` | `db.DB()` | GORM holds no `*sql.DB`; not reachable with the PostgreSQL driver in use [INFERENCE] |
-| `database_connect` | `PingContext` | Server unreachable, rejected credentials, the shared 10 s budget spent, or a signal during startup |
+| `database_open` | `db.Open` | DSN does not parse. No connection is attempted here: the pool connects on first use |
+| `database_connect` | `Pool.Ping` | Server unreachable, rejected credentials, the shared 10 s budget spent, or a signal during startup |
 | `database_migrate` | `AutoMigrate(models()...)` | DDL failure or the shared 10 s budget spent |
 | `billing_configuration` | `billing.LoadConfigFromEnv` | Any Stripe variable above; `INSTALLMENT_RETRY_DELAY` not a positive duration |
 | `billing_catalog` | `billing.LoadCatalog` | Price missing, duplicated, inactive, wrong mode, currency, billing scheme, type or amount; Stripe unreachable within 15 s |

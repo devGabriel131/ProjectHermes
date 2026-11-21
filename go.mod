@@ -9,6 +9,7 @@ require (
 	github.com/alexedwards/scs/postgresstore v0.0.0-20251002162104-209de6e426de
 	github.com/alexedwards/scs/v2 v2.9.0
 	github.com/getsentry/sentry-go v0.50.0
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/nyaruka/phonenumbers/v2 v2.0.15
 	github.com/stripe/stripe-go/v87 v87.0.0
 	github.com/xuri/excelize/v2 v2.11.1
@@ -33,7 +34,6 @@ require (
 	github.com/gohugoio/hugo v0.164.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.10.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
