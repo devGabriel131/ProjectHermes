@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#eef4f4">
-  <title>{{if eq .View "welcome"}}Bienvenidos{{else if eq .View "agreement"}}Acuerdo de Pago y Términos y Condiciones{{else if eq .View "payments"}}Selección del plan de pago{{else if eq .View "payment-return"}}Estado del pago{{else if .Editing}}Edita la información del estudiante{{else}}Agrega la información del estudiante{{end}} | Masterminds</title>
+  <title>{{if eq .View "payments"}}Selección del plan de pago{{else if eq .View "payment-return"}}Estado del pago{{else if .Editing}}Edita la información del estudiante{{else}}Agrega la información del estudiante{{end}} | Masterminds</title>
   <link rel="icon" type="image/vnd.microsoft.icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
   {{if and (eq .View "form") (not .Editing)}}
   <meta name="htmx-config" content='{"reportValidityOfForms":true,"includeIndicatorStyles":false,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"422","swap":true,"error":false},{"code":"[45]..","swap":true,"error":true}]}'>
@@ -24,12 +24,10 @@
   <link rel="stylesheet" href="/static/customer.css">
 </head>
 <body class="customer customer-{{.View}}">
-  {{if ne .View "welcome"}}
   <header class="customer-top">
     <img class="customer-mark" src="/static/logo-mark.webp" alt="Masterminds Programa ASVAB" width="320" height="314">
     {{template "customer-steps" .}}
   </header>
-  {{end}}
   <main>
     {{template "customer-content" .}}
   </main>
@@ -38,11 +36,11 @@
 
 {{/* The three-step journey. Only the steps a person actually walks (contact, agreement, plan and payment) appear. */}}
 {{define "customer-steps"}}
-{{$step := 0}}{{if eq .View "form"}}{{$step = 1}}{{else if eq .View "agreement"}}{{$step = 2}}{{else if eq .View "payments"}}{{$step = 3}}{{end}}
+{{$step := 0}}{{if eq .View "form"}}{{$step = 1}}{{else if eq .View "payments"}}{{$step = 3}}{{end}}
 {{if $step}}
 <ol class="customer-steps" aria-label="Progreso de la matrícula">
   <li{{if lt 1 $step}} class="is-done"{{else if eq $step 1}} aria-current="step"{{end}}>{{if lt 1 $step}}<span class="visually-hidden">Completado: </span>{{end}}Estudiante</li>
-  <li{{if lt 2 $step}} class="is-done"{{else if eq $step 2}} aria-current="step"{{end}}>{{if lt 2 $step}}<span class="visually-hidden">Completado: </span>{{end}}Acuerdo</li>
+  <li{{if lt 2 $step}} class="is-done"{{end}}>{{if lt 2 $step}}<span class="visually-hidden">Completado: </span>{{end}}Acuerdo</li>
   <li{{if and .Billing .Billing.Funded}} class="is-done"{{else if eq $step 3}} aria-current="step"{{end}}>{{if and .Billing .Billing.Funded}}<span class="visually-hidden">Completado: </span>{{end}}Pago</li>
 </ol>
 {{end}}
@@ -50,53 +48,10 @@
 
 {{define "customer-content"}}
 <section id="customer-content">
-{{if eq .View "agreement"}}
-{{template "agreement" .}}
-{{else if eq .View "payments"}}
+{{if eq .View "payments"}}
 {{template "payments" .}}
 {{else if eq .View "payment-return"}}
 {{template "payment-return" .}}
-{{else if eq .View "welcome"}}
-<div class="welcome">
-  <img class="welcome-logo" src="/static/logo-mark.webp" alt="Masterminds Programa ASVAB" width="320" height="314">
-  <h1>¡Bienvenidos a Masterminds!</h1>
-  <p class="customer-lead">Ya estás un paso más cerca de asegurar tu matrícula en nuestro programa.</p>
-  <ol class="welcome-roadmap" aria-label="Lo que sigue">
-    <li>
-      <span class="welcome-roadmap-icon">{{template "icon-user"}}</span>
-      <div><strong>Información del estudiante</strong><span>Los datos de quien se va a matricular.</span></div>
-    </li>
-    <li>
-      <span class="welcome-roadmap-icon">{{template "icon-file"}}</span>
-      <div><strong>Acuerdo de pago</strong><span>Lee y acepta los términos del programa.</span></div>
-    </li>
-    <li>
-      <span class="welcome-roadmap-icon">{{template "icon-card"}}</span>
-      <div><strong>Plan y pago seguro</strong><span>Elige cómo pagar y completa el pago en Stripe.</span></div>
-    </li>
-  </ol>
-  {{if .Error}}
-  <p class="customer-callout" role="alert">{{template "icon-alert"}}<span>{{.Error}}</span></p>
-  <a class="customer-primary" href="{{.Path}}">Volver a intentar</a>
-  {{else if .Completed}}
-  <p class="customer-callout" role="status">{{template "icon-check"}}<span>Tu matrícula ya fue completada.</span></p>
-  <a class="customer-primary" href="{{.Path}}/payments">Ver mi plan de pago</a>
-  {{if .CanStartNew}}
-  <form method="post" action="{{.Path}}/start">
-    <button class="customer-secondary" type="submit">Comenzar nueva matrícula</button>
-  </form>
-  <p class="customer-note"><span>Al comenzar una nueva matrícula, este navegador ya no mostrará el plan de pago de la matrícula anterior.</span></p>
-  {{end}}
-  {{else if .HasEnrollment}}
-  <a class="customer-primary" href="{{.Path}}/forms">Continuar</a>
-  <p class="customer-note">{{template "icon-check"}}<span>Tu información se guarda automáticamente. Si sales, vuelve a este enlace desde este mismo dispositivo y navegador para continuar.</span></p>
-  {{else}}
-  <form method="post" action="{{.Path}}/start">
-    <button class="customer-primary" type="submit">Comenzar</button>
-  </form>
-  <p class="customer-note">{{template "icon-check"}}<span>Tu información se guarda automáticamente. Si sales, vuelve a este enlace desde este mismo dispositivo y navegador para continuar.</span></p>
-  {{end}}
-</div>
 {{else}}
 {{if .Editing}}<a class="customer-back-link" href="{{.Path}}/agreement">{{template "icon-arrow-left"}}Volver al acuerdo</a>{{end}}
 <header class="customer-heading">

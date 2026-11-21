@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/a-h/templ"
 
 	"apollo/internal/billing"
 	"apollo/internal/links"
@@ -152,26 +155,36 @@ func withHeaders(h http.HandlerFunc) http.Handler {
 	})
 }
 
-// render writes the named template, or the branded 404 that makes HTMX reload the page.
-func (s *site) render(w http.ResponseWriter, r *http.Request, name string, data pageData, status int) {
+// render writes page with data, or the branded 404 that makes HTMX reload the page.
+func (s *site) render(w http.ResponseWriter, r *http.Request, page func(pageData) templ.Component, data pageData, status int) {
+	var view templ.Component
 	if status == http.StatusNotFound {
-		name = "not-found.html"
+		view = notFoundPage()
 		if htmx(r) {
 			w.Header().Set("HX-Refresh", "true")
 		}
+	} else {
+		view = page(data)
 	}
 	w.WriteHeader(status)
 	if r.Method == http.MethodHead {
 		return
 	}
-	if err := s.page.ExecuteTemplate(w, name, data); err != nil {
+	if err := view.Render(r.Context(), w); err != nil {
 		httplog.RecordError(r, "render", err)
+	}
+}
+
+// html runs the named html/template page or fragment, for the pages still on it until C5.
+func (s *site) html(name string) func(pageData) templ.Component {
+	return func(data pageData) templ.Component {
+		return templ.ComponentFunc(func(_ context.Context, w io.Writer) error { return s.page.ExecuteTemplate(w, name, data) })
 	}
 }
 
 // resolveSession resolves the customer's usable enrollment session for inner routes.
 // Without one, GET/HEAD redirect to the welcome page while the link takes new enrollments; anything else renders 404.
-func (s *site) resolveSession(w http.ResponseWriter, r *http.Request, name string, data *pageData, token string) (*links.Enrollment, bool) {
+func (s *site) resolveSession(w http.ResponseWriter, r *http.Request, page func(pageData) templ.Component, data *pageData, token string) (*links.Enrollment, bool) {
 	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
 	defer cancel()
 	enrollment, canStart, err := s.links.LookupSession(ctx, token, readSessionCookie(r))
@@ -179,7 +192,7 @@ func (s *site) resolveSession(w http.ResponseWriter, r *http.Request, name strin
 	case err != nil:
 		httplog.RecordError(r, "lookup", err)
 		data.Error = openFailedMessage
-		s.render(w, r, name, *data, http.StatusInternalServerError)
+		s.render(w, r, page, *data, http.StatusInternalServerError)
 		return nil, false
 	case enrollment != nil:
 		return enrollment, true
@@ -187,7 +200,7 @@ func (s *site) resolveSession(w http.ResponseWriter, r *http.Request, name strin
 		redirectCustomer(w, r, "/customer/"+url.PathEscape(token))
 		return nil, false
 	default:
-		s.render(w, r, name, *data, http.StatusNotFound)
+		s.render(w, r, page, *data, http.StatusNotFound)
 		return nil, false
 	}
 }
@@ -206,7 +219,7 @@ func redirectCustomer(w http.ResponseWriter, r *http.Request, target string) {
 // welcome serves the reusable link landing page without creating database rows.
 func (s *site) welcome(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
-	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "welcome"}
+	data := pageData{Path: "/customer/" + url.PathEscape(token)}
 	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
 	defer cancel()
 	enrollment, canStart, err := s.links.LookupSession(ctx, token, readSessionCookie(r))
@@ -232,25 +245,25 @@ func (s *site) welcome(w http.ResponseWriter, r *http.Request) {
 	default:
 		data.HasEnrollment = true
 	}
-	s.render(w, r, "index.html", data, status)
+	s.render(w, r, welcomePage, data, status)
 }
 
 // start begins or resumes a browser's enrollment session on a reusable link and sets its cookie.
 func (s *site) start(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	path := "/customer/" + url.PathEscape(token)
-	data := pageData{Path: path, View: "welcome"}
+	data := pageData{Path: path}
 	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
 	defer cancel()
 	enrollment, newCookie, err := s.links.StartEnrollment(ctx, token, readSessionCookie(r))
 	if err != nil {
 		httplog.RecordError(r, "start", err)
 		data.Error = openFailedMessage
-		s.render(w, r, "index.html", data, http.StatusInternalServerError)
+		s.render(w, r, welcomePage, data, http.StatusInternalServerError)
 		return
 	}
 	if enrollment == nil {
-		s.render(w, r, "index.html", data, http.StatusNotFound)
+		s.render(w, r, welcomePage, data, http.StatusNotFound)
 		return
 	}
 	if newCookie != "" {
@@ -267,7 +280,7 @@ func (s *site) start(w http.ResponseWriter, r *http.Request) {
 func (s *site) forms(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "form"}
-	enrollment, ok := s.resolveSession(w, r, "index.html", &data, token)
+	enrollment, ok := s.resolveSession(w, r, s.html("index.html"), &data, token)
 	if !ok {
 		return
 	}
@@ -280,7 +293,7 @@ func (s *site) forms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data.fill(enrollment.Details)
-	s.render(w, r, "index.html", data, http.StatusOK)
+	s.render(w, r, s.html("index.html"), data, http.StatusOK)
 }
 
 // submit commits the final contact form and PIN and advances to the agreement. Valid input is written with
@@ -289,9 +302,9 @@ func (s *site) forms(w http.ResponseWriter, r *http.Request) {
 func (s *site) submit(w http.ResponseWriter, r *http.Request) {
 	token, cookieToken := r.PathValue("token"), readSessionCookie(r)
 	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "form"}
-	name := "index.html"
+	page := s.html("index.html")
 	if htmx(r) {
-		name = "customer-content"
+		page = s.html("customer-content")
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
 	defer cancel()
@@ -306,7 +319,7 @@ func (s *site) submit(w http.ResponseWriter, r *http.Request) {
 		case err != nil:
 			httplog.RecordError(r, "save", err)
 			data.Error = saveFailedMessage
-			s.render(w, r, name, data, http.StatusInternalServerError)
+			s.render(w, r, page, data, http.StatusInternalServerError)
 			return
 		case result == links.Saved, result == links.AlreadySubmitted:
 			redirectCustomer(w, r, data.Path+"/agreement")
@@ -319,12 +332,12 @@ func (s *site) submit(w http.ResponseWriter, r *http.Request) {
 			data.FieldErrors["pin"] = pinLimitMessage
 			status = http.StatusTooManyRequests
 		default:
-			s.render(w, r, name, data, http.StatusNotFound)
+			s.render(w, r, page, data, http.StatusNotFound)
 			return
 		}
 	}
 
-	enrollment, ok := s.resolveSession(w, r, name, &data, token)
+	enrollment, ok := s.resolveSession(w, r, page, &data, token)
 	if !ok {
 		return
 	}
@@ -336,7 +349,7 @@ func (s *site) submit(w http.ResponseWriter, r *http.Request) {
 	if status != http.StatusUnprocessableEntity {
 		data.fill(enrollment.Details)
 	}
-	s.render(w, r, name, data, status)
+	s.render(w, r, page, data, status)
 }
 
 // draft autosaves one field on change and answers only with status, so it never redraws fields in use.
@@ -346,7 +359,7 @@ func (s *site) draft(w http.ResponseWriter, r *http.Request) {
 	token, key, cookieToken := r.PathValue("token"), r.PathValue("field"), readSessionCookie(r)
 	field, known := students.FindField(key)
 	if !known {
-		s.render(w, r, "save-status", pageData{}, http.StatusNotFound)
+		s.render(w, r, s.html("save-status"), pageData{}, http.StatusNotFound)
 		return
 	}
 	var data pageData
@@ -373,13 +386,13 @@ func (s *site) draft(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err != nil:
 		httplog.RecordError(r, stage, err)
-		s.render(w, r, "save-status", pageData{Error: failure}, http.StatusInternalServerError)
+		s.render(w, r, s.html("save-status"), pageData{Error: failure}, http.StatusInternalServerError)
 	case result == links.Unavailable:
-		s.render(w, r, "save-status", data, http.StatusNotFound)
+		s.render(w, r, s.html("save-status"), data, http.StatusNotFound)
 	case result == links.AlreadySubmitted:
 		locked(w, r)
 	default:
-		s.render(w, r, "save-status", data, status)
+		s.render(w, r, s.html("save-status"), data, status)
 	}
 }
 
@@ -399,7 +412,7 @@ func (s *site) edit(w http.ResponseWriter, r *http.Request) {
 	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "form", Editing: true}
 	ctx, cancel := context.WithTimeout(r.Context(), dbTimeout)
 	defer cancel()
-	enrollment, ok := s.resolveSession(w, r, "index.html", &data, token)
+	enrollment, ok := s.resolveSession(w, r, s.html("index.html"), &data, token)
 	if !ok {
 		return
 	}
@@ -411,7 +424,7 @@ func (s *site) edit(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httplog.RecordError(r, "load", err)
 		data.Error = openFailedMessage
-		s.render(w, r, "index.html", data, http.StatusInternalServerError)
+		s.render(w, r, s.html("index.html"), data, http.StatusInternalServerError)
 		return
 	}
 	if !editable {
@@ -436,7 +449,7 @@ func (s *site) edit(w http.ResponseWriter, r *http.Request) {
 				redirectCustomer(w, r, data.Path+"/payments")
 				return
 			case errors.Is(err, billing.ErrUnavailable):
-				s.render(w, r, "index.html", data, http.StatusNotFound)
+				s.render(w, r, s.html("index.html"), data, http.StatusNotFound)
 				return
 			case err != nil:
 				httplog.RecordError(r, "save", err)
@@ -448,7 +461,7 @@ func (s *site) edit(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.render(w, r, "index.html", data, status)
+	s.render(w, r, s.html("index.html"), data, status)
 }
 
 func parseCustomerForm(w http.ResponseWriter, r *http.Request) int {
@@ -539,14 +552,14 @@ func (s *site) checkPin(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case err != nil:
 			httplog.RecordError(r, "lookup", err)
-			s.render(w, r, "pin-status", pageData{Error: "No pudimos verificar el PIN. Intenta de nuevo."}, http.StatusInternalServerError)
+			s.render(w, r, s.html("pin-status"), pageData{Error: "No pudimos verificar el PIN. Intenta de nuevo."}, http.StatusInternalServerError)
 			return
 		case spent:
 			if taken {
 				data.FieldErrors = map[string]string{"pin": pinTakenMessage}
 				status = http.StatusUnprocessableEntity
 			}
-			s.render(w, r, "pin-status", data, status)
+			s.render(w, r, s.html("pin-status"), data, status)
 			return
 		}
 		// Out of PIN answers, or the form is not open: the form state below tells which.
@@ -557,13 +570,13 @@ func (s *site) checkPin(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err != nil:
 		httplog.RecordError(r, "lookup", err)
-		s.render(w, r, "pin-status", pageData{Error: openFailedMessage}, http.StatusInternalServerError)
+		s.render(w, r, s.html("pin-status"), pageData{Error: openFailedMessage}, http.StatusInternalServerError)
 	case state == links.Unavailable:
-		s.render(w, r, "pin-status", data, http.StatusNotFound)
+		s.render(w, r, s.html("pin-status"), data, http.StatusNotFound)
 	case state == links.AlreadySubmitted:
 		locked(w, r)
 	default:
-		s.render(w, r, "pin-status", data, status)
+		s.render(w, r, s.html("pin-status"), data, status)
 	}
 }
 

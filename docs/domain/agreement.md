@@ -47,7 +47,7 @@ sequenceDiagram
 | No start date configured | The page says the agreement is unavailable and shows no form. A shown date that is empty or malformed makes `AcceptTerms` fail the same way, so nothing is acceptable. |
 | Replay after acceptance | Keeps the first `terms_accepted_at` and date; later settings changes never alter an accepted agreement |
 
-Acceptance time is the database clock (`now()`). The agreement text is static in `agreement.html`; the database stores only `terms_accepted_at` and the date, so there is no text version. `StartCheckout` requires `terms_accepted_at`, so no payment can start before this step ([Checkout](../billing/checkout.md)).
+Acceptance time is the database clock (`now()`). The agreement text is static in `agreement.templ`; the database stores only `terms_accepted_at` and the date, so there is no text version. `StartCheckout` requires `terms_accepted_at`, so no payment can start before this step ([Checkout](../billing/checkout.md)).
 
 ## links and settings share raw SQL
 
@@ -133,7 +133,7 @@ Page structure and fragments are in [Management overview](../management/overview
 - `internal/settings/settings.go`: `Settings`, `Store.Current`, `Store.SetLinkLifetimeDays`, `Store.SetProgramStartDate`, `Store.SetBootcampDate`, `ParseDate`, `ErrDate`, `MinLinkLifetimeDays`, `MaxLinkLifetimeDays`, `DefaultLinkLifetimeDays`, `ErrLinkLifetimeRange`
 - `internal/customer/agreement.go`: `site.agreement`
 - `internal/customer/customer.go`: `spanishDate`
-- `internal/customer/templates/agreement.html`: `accept_terms`, `program_start_date`
+- `internal/customer/agreement.templ`: `agreementPage`, `acceptance`, `accept_terms`, `program_start_date`
 - `internal/management/management.go`: `RegisterRoutes`
 - `internal/management/links.templ`: `program-start-date`
 - `internal/management/settings.templ`: `lifetime`

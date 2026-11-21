@@ -1,0 +1,113 @@
+package customer
+
+import (
+	"apollo/internal/ui"
+	"cmp"
+)
+
+// agreementPage shows the static terms with the program start date. An accepted agreement shows its own
+// snapshot and the way on to payments; an open one the acceptance form, which carries the shown date back
+// in program_start_date. Without a valid date there is no form.
+templ agreementPage(data pageData) {
+	@ui.CustomerStep("Acuerdo de Pago y Términos y Condiciones", "agreement", agreementSteps()) {
+		<section id="customer-content">
+			<article class="payment-agreement" aria-labelledby="agreement-title">
+				if data.ContactEditable {
+					<a class="customer-back-link" href={ data.Path + "/edit" }>
+						@iconArrowLeft()
+						Editar información del estudiante
+					</a>
+				}
+				<header class="customer-heading">
+					<h1 id="agreement-title">Revisa y acepta el acuerdo</h1>
+					<p>Aquí se presenta la información y los términos para la separación de su espacio en el Programa de preparación para el ASVAB, ofrecido por Masterminds Programa ASVAB.</p>
+				</header>
+				<div class="agreement-start">
+					<span class="agreement-start-icon">
+						@iconCalendar()
+					</span>
+					<p><span>Fecha de comienzo</span><strong>{ cmp.Or(data.ProgramStartLabel, "No disponible") }</strong></p>
+				</div>
+				<section class="agreement-terms customer-card" aria-labelledby="agreement-terms-title">
+					<h2 id="agreement-terms-title">Términos y Condiciones</h2>
+					<p class="customer-hint">Favor de leer detalladamente.</p>
+					<ol class="agreement-clauses" role="list">
+						<li><p>La matrícula solicitada será exclusiva para el estudiante matriculado.</p></li>
+						<li><p>El espacio de matrícula es exclusivo para la fecha de comienzo detallada en este acuerdo (<strong>{ cmp.Or(data.ProgramStartLabel, "fecha no disponible") }</strong>).</p></li>
+						<li><p>Mediante la aceptación de este acuerdo y el pago inicial o total, acepto los términos y condiciones del programa, al igual que el plan de pago seleccionado.</p></li>
+						<li><p>En los planes de pagos a plazos, los cobros se procesan de forma automática en las fechas acordadas. Si un pago no puede procesarse en la fecha correspondiente, el sistema reintentará el cobro automáticamente. De no recibirse el pago adeudado dentro de un periodo máximo de <strong>dos (2) semanas (14 días)</strong> a partir de la fecha de pago acordada, el estudiante matriculado será dado de baja automáticamente del programa.</p></li>
+						<li><p>En caso de que el estudiante sea dado de baja por falta de pago, para ser reinstalado en el programa deberá cubrir el pago atrasado original más un <strong>cargo de reinstalación de $25.00</strong>.</p></li>
+						<li><p>El pago inicial, pago parcial o pago en su totalidad <strong>no será devuelto bajo ningún concepto</strong>.</p></li>
+						<li><p>Si el estudiante decide darse de baja del programa en cualquier momento antes de cubrir el total del acuerdo de pago (matrícula), el estudiante sigue siendo responsable del balance adeudado de la cantidad total de la matrícula.</p></li>
+						<li><p>Cualquier deuda total y/o parcial puede ser reportada a una agencia de cobro de no ser cumplido el acuerdo de pago aquí detallado.</p></li>
+					</ol>
+					<p class="agreement-closing">Cualquier duda o pregunta no dude en contactarnos. ¡Bienvenido/a a la familia de Masterminds Programa ASVAB!</p>
+				</section>
+				if data.Error != "" {
+					<p id="agreement-error" class="customer-callout" role="alert">
+						@iconAlert()
+						<span>{ data.Error }</span>
+					</p>
+				}
+				if data.TermsAcceptedAt != nil {
+					<div class="agreement-acceptance customer-card">
+						<p class="customer-callout is-success" role="status">
+							@iconCheck()
+							<span>Ya aceptaste este acuerdo. La fecha de comienzo mostrada corresponde al acuerdo que aceptaste.</span>
+						</p>
+						<a class="customer-primary" href={ data.Path + "/payments" }>Ver las opciones de pago</a>
+					</div>
+				} else if data.ProgramStartDate != "" {
+					@acceptance(data)
+				}
+			</article>
+		</section>
+	}
+}
+
+// acceptance is the consent form: the box is never rendered checked, and its errors describe it.
+templ acceptance(data pageData) {
+	{{ termsError := data.FieldErrors["accept_terms"] }}
+	{{ describedBy := "" }}
+	if data.Error != "" {
+		{{ describedBy = "agreement-error " }}
+	}
+	if termsError != "" {
+		{{ describedBy += "accept-terms-error" }}
+	}
+	<form class="agreement-acceptance customer-card" action={ data.Path + "/agreement" } method="post">
+		<input type="hidden" name="program_start_date" value={ data.ProgramStartDate }/>
+		<label class="customer-choice" for="accept-terms">
+			<input
+				id="accept-terms"
+				name="accept_terms"
+				type="checkbox"
+				value="yes"
+				required
+				if describedBy != "" {
+					aria-describedby={ describedBy }
+				}
+				if termsError != "" {
+					aria-invalid="true"
+				}
+			/>
+			<span>He leído detalladamente y acepto los Términos y Condiciones y el Acuerdo de Pago del programa.</span>
+		</label>
+		if termsError != "" {
+			<p id="accept-terms-error" class="customer-callout" role="alert">
+				@iconAlert()
+				<span>{ termsError }</span>
+			</p>
+		}
+		<button class="customer-primary" type="submit">Aceptar y elegir plan de pago</button>
+	</form>
+}
+
+// agreementSteps marks Estudiante done and Acuerdo current.
+templ agreementSteps() {
+	<ol class="customer-steps" aria-label="Progreso de la matrícula">
+		<li class="is-done"><span class="visually-hidden">Completado: </span>Estudiante</li>
+		<li aria-current="step">Acuerdo</li>
+		<li>Pago</li>
+	</ol>
+}
