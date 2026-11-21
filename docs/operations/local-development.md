@@ -49,6 +49,13 @@ Compose used to run `postgres:17` with the volume `postgres_data`. Postgres 18 c
 docker volume rm (string lower (basename $PWD))_postgres_data
 ```
 
+The new volume starts empty, holding only `hermes`. If you set up the integration test database before, re-create `hermes_test` on it, or every integration test fails in `testdb.Open` ([Testing](../testing.md#commands)):
+
+```fish
+docker compose up --detach --wait --wait-timeout 90 db
+docker compose exec -T db createdb -U postgres hermes_test
+```
+
 The app creates its own tables: startup runs `AutoMigrate` ([Startup and shutdown](startup-shutdown.md)). Mock data may be dropped freely ([AGENTS.md](../../AGENTS.md#production-ready-false)).
 
 This repository owns the `hermes` database. ProjectHephaestus (`../ProjectHephaestus`) connects to the same database and has no Compose database of its own, so start it from here.
