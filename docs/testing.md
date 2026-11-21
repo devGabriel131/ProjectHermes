@@ -46,6 +46,21 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 - `deadcode` runs with `-test -tags=integration` so helpers used only by integration tests (`billingtest`, `testdb`) count as used.
 - The `@latest` tools are fetched on first run.
 
+## CI
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs one job on every pull request and every push to `master`, on the Go version from `go.mod` with a `postgres:17` service container holding `hermes_test` (the `TEST_DATABASE_URL` above). Steps, in order; each fails the run except `gosec`, and the two scanners run even after an earlier step fails:
+
+| Step | Command |
+|---|---|
+| Format | `gofmt -l .` must print nothing |
+| Vet | `go vet -tags=integration ./...` |
+| Build | `go build ./...` |
+| Tests | `go test -race -tags=integration -count=1 ./...` |
+| Vulnerabilities | `go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...` |
+| SAST, report only | `go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 ./...`; findings appear in the job log and are triaged by hand |
+
+To reproduce locally, set up the test database as in [Commands](#commands) and run the same commands. The workflow reads only repository contents (`permissions: contents: read`), uses no secrets, pins its actions to commit SHAs, and cancels a run superseded by a newer push to the same ref. Whether a red run blocks a merge or a Railway deploy is set outside the repository `[EXTERNAL]`: branch protection on `master` and Railway's "Wait for CI".
+
 ## `testdb`: one schema per test
 
 `testdb.Open(t, models...)` gives each test an isolated database view on the one `TEST_DATABASE_URL` database:
@@ -141,3 +156,4 @@ Tests do not prove randomness statistically. No test proves these browser checks
 - `internal/students/students_test.go`: `Filter`
 - `loadtest/lib.js`: `BASE_URL`, `BASE`
 - `compose.yaml`: `POSTGRES_DB`
+- `.github/workflows/ci.yml`: `check`, `TEST_DATABASE_URL`

@@ -2,7 +2,7 @@
 
 How the app is deployed and operated on Railway: service layout, variables, deploy flow, the health check and the `user.fish` account launcher. Variable validation lives in [Configuration](configuration.md), Stripe dashboard prerequisites in [Stripe setup](stripe-setup.md), and the local equivalent in [Local development](local-development.md).
 
-The repository carries no Dockerfile, `railway.json`, Nixpacks file or CI workflow. Everything about the Railway project itself is `[EXTERNAL]`: it cannot be proven from this repository, only from the Railway dashboard and the rules in [AGENTS.md](../../AGENTS.md#railway).
+The repository carries no Dockerfile, `railway.json` or Nixpacks file; its only CI is the GitHub Actions workflow in [Testing](../testing.md#ci). Everything about the Railway project itself is `[EXTERNAL]`: it cannot be proven from this repository, only from the Railway dashboard and the rules in [AGENTS.md](../../AGENTS.md#railway).
 
 ## Deployment
 

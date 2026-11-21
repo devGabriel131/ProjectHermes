@@ -1,0 +1,72 @@
+# What this runs and how to reproduce it locally: docs/testing.md#ci
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: hermes_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d hermes_test"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/hermes_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Run gofmt -w on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet -tags=integration ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test (race, integration)
+        run: go test -race -tags=integration -count=1 ./...
+
+      # The scanners run even after an earlier step fails, so every run reports them.
+      - name: govulncheck
+        if: ${{ !cancelled() }}
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+
+      # Report only: findings are triaged by hand, so they never fail the run.
+      - name: gosec (report only)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 ./...
