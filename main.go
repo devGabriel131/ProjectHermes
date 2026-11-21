@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/stripe/stripe-go/v87"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
@@ -154,8 +155,6 @@ func run(log *slog.Logger, args []string) error {
 	if err != nil {
 		return startupError{"billing_configuration", err}
 	}
-	// The public origin alone decides cookie security: only a sandbox localhost origin may be plain http.
-	secureCookies := billingCfg.SecureOrigin()
 	// Testing aid: installments due this far apart instead of monthly. Never on a live Stripe account.
 	if value, ok := os.LookupEnv("INSTALLMENT_SPACING"); ok {
 		spacing, err := time.ParseDuration(value)
@@ -176,41 +175,31 @@ func run(log *slog.Logger, args []string) error {
 	if err != nil {
 		return startupError{"billing_catalog", err}
 	}
-	biller, err := billing.New(db, stripeClient, billingCfg, catalog, feed.Changed, log)
-	if err != nil {
-		return startupError{"billing_initialize", err}
-	}
-
-	authentication, err := auth.New(db, secureCookies, log)
-	if err != nil {
-		return startupError{"auth_initialize", err}
-	}
-
 	// Railway sets PORT and routes to every interface; without it the server stays on loopback.
 	addr := "127.0.0.1:3000"
 	if port := os.Getenv("PORT"); port != "" {
 		addr = ":" + port
 	}
-	server, err := newServer(addr, db, feed, authentication, biller, secureCookies, log)
+	app, err := newApp(addr, db, db, feed, stripeClient, billingCfg, catalog, log)
 	if err != nil {
 		return err
 	}
 
 	workerCtx, cancelWorker := context.WithCancel(signalContext)
 	var worker sync.WaitGroup
-	worker.Go(func() { biller.Run(workerCtx) })
-	worker.Go(func() { authentication.Run(workerCtx) })
+	worker.Go(func() { app.biller.Run(workerCtx) })
+	worker.Go(func() { app.authentication.Run(workerCtx) })
 	defer func() {
 		cancelWorker()
 		worker.Wait()
 	}()
 
-	listener, err := net.Listen("tcp", server.Addr)
+	listener, err := net.Listen("tcp", app.server.Addr)
 	if err != nil {
 		return startupError{"listen", err}
 	}
 	log.Info("server_listening", "addr", listener.Addr().String())
-	return serve(signalContext, server, listener, log, func() { slow.Flush(); stripeTimer.Flush() }, 10*time.Second)
+	return serve(signalContext, app.server, listener, log, func() { slow.Flush(); stripeTimer.Flush() }, 10*time.Second)
 }
 
 // sitePolicy is the Content-Security-Policy of every response. Pages load local assets, the one
@@ -230,6 +219,34 @@ func secureHeaders(next http.Handler) http.Handler {
 		header.Set("X-Robots-Tag", "noindex, nofollow")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// application is the HTTP server plus the two services whose workers run starts beside it.
+type application struct {
+	server         *http.Server
+	biller         *billing.Service
+	authentication *auth.Manager
+}
+
+// newApp is the one place run and the wiring tests build billing, staff auth and the routes, so
+// the tests exercise the real composition. Auth and billing use db; newServer's stores use served
+// (run passes db twice; tests may hand over a broken connection).
+func newApp(addr string, db, served *gorm.DB, feed *live.Feed, stripeClient *stripe.Client, cfg billing.Config, catalog billing.Catalog, log *slog.Logger) (application, error) {
+	biller, err := billing.New(db, stripeClient, cfg, catalog, feed.Changed, log)
+	if err != nil {
+		return application{}, startupError{"billing_initialize", err}
+	}
+	// The public origin alone decides cookie security: only a sandbox localhost origin may be plain http.
+	secureCookies := cfg.SecureOrigin()
+	authentication, err := auth.New(db, secureCookies, log)
+	if err != nil {
+		return application{}, startupError{"auth_initialize", err}
+	}
+	server, err := newServer(addr, served, feed, authentication, biller, secureCookies, log)
+	if err != nil {
+		return application{}, err
+	}
+	return application{server: server, biller: biller, authentication: authentication}, nil
 }
 
 func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.Manager, biller *billing.Service, secureCookies bool, log *slog.Logger) (*http.Server, error) {

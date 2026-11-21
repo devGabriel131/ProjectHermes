@@ -155,26 +155,17 @@ func newTestServer(t *testing.T) (http.Handler, *gorm.DB) {
 	return serverHandler(t, db, db, logging.New(io.Discard), billingtest.Config()), db
 }
 
-// serverHandler builds the real handler with newServer over served, wired from cfg as run wires it.
-// Auth and billing always use db, so a test can hand newServer a broken connection and still sign in.
+// serverHandler builds the real handler with newApp, the composition run uses, from cfg on the fake
+// Stripe. Auth and billing always use db, so a test can hand newServer a broken connection and still sign in.
 func serverHandler(t *testing.T, db, served *gorm.DB, log *slog.Logger, cfg billing.Config) http.Handler {
 	t.Helper()
 	feed := live.New()
 	t.Cleanup(feed.Close)
-	secureCookies := cfg.SecureOrigin()
-	authentication, err := auth.New(db, secureCookies, log)
+	app, err := newApp("127.0.0.1:0", db, served, feed, billingtest.Client(t, nil), cfg, billingtest.Catalog(), log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	biller, err := billing.New(db, billingtest.Client(t, nil), cfg, billingtest.Catalog(), feed.Changed, log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server, err := newServer("127.0.0.1:0", served, feed, authentication, biller, secureCookies, log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return server.Handler
+	return app.server.Handler
 }
 
 // addStaff stores an account as the CLI does: an Argon2id hash and a random auth version.

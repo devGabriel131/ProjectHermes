@@ -19,12 +19,12 @@ flowchart TD
   branch{"args after the binary name?"}
   cli["auth.RunCLI user command\nexit 0 or 1"]
   feed["live.New"]
-  cfg["billing.LoadConfigFromEnv\nSecure cookies when PUBLIC_BASE_URL is https"]
+  cfg["billing.LoadConfigFromEnv"]
   catalog["NewStripeClient, LoadCatalog\n15 s budget"]
-  biller["billing.New"]
-  authm["auth.New"]
+  biller["newApp: billing.New"]
+  authm["newApp: auth.New\nSecure cookies when PUBLIC_BASE_URL is https"]
   addr["address from PORT"]
-  server["newServer: stores, routes, middleware"]
+  server["newApp: newServer\nstores, routes, middleware"]
   worker["go biller.Run, go authentication.Run\nsession cleanup every 5 min"]
   listen["net.Listen"]
   serve["server_listening, serve"]
@@ -40,7 +40,7 @@ flowchart TD
   ping -.->|"database_connect"| fail
   migrate -.->|"database_migrate"| fail
   branch -->|"user ..."| cli
-  branch -->|"none"| feed --> cfg --> catalog --> biller --> authm --> addr --> server --> worker --> listen --> serve
+  branch -->|"none"| feed --> cfg --> catalog --> addr --> biller --> authm --> server --> worker --> listen --> serve
   cfg -.->|"billing_configuration"| fail
   catalog -.->|"billing_catalog"| fail
   biller -.->|"billing_initialize"| fail
@@ -142,7 +142,7 @@ Details:
 
 ## Source
 
-- `main.go`: `main`, `run`, `serve`, `newServer`, `startupError`, `models`, `signalContext`, `cancelWorker`
+- `main.go`: `main`, `run`, `newApp`, `serve`, `newServer`, `startupError`, `models`, `signalContext`, `cancelWorker`
 - `internal/auth/http.go`: `New`, `Run`, `deleteExpiredSessions`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`
 - `internal/live/live.go`: `Feed.Close`, `writeTimeout`
