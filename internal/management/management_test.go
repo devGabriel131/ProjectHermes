@@ -1195,10 +1195,6 @@ func TestManagementBillingRoutes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	enroll := func(name string) students.Student {
-		student, _ := enrollStudent(t, a, name)
-		return student
-	}
 	seedContract := func(student students.Student, funded *time.Time) billing.Contract {
 		t.Helper()
 		contract := billing.Contract{
@@ -1218,7 +1214,10 @@ func TestManagementBillingRoutes(t *testing.T) {
 		return o
 	}
 
-	active, suspended, plain := enroll("Active Student"), enroll("Suspended Student"), enroll("Plain Student")
+	// The registry's Paid time is the enrollment's own paid_at, which enrollStudent stamps from its own clock.
+	active, activeSource := enrollStudent(t, a, "Active Student")
+	suspended, _ := enrollStudent(t, a, "Suspended Student")
+	plain, _ := enrollStudent(t, a, "Plain Student")
 
 	// Student A: active and funded; installment 1 paid, 2 has a hosted invoice, 3 is a draft without one.
 	contractA := seedContract(active, &now)
@@ -1276,9 +1275,9 @@ func TestManagementBillingRoutes(t *testing.T) {
 		}
 	}
 
-	// The funded contract shows its paid time in the registry row.
+	// The funded student's registry row shows its enrollment's paid time.
 	_, registry := request(http.MethodGet, "/management/", http.StatusOK)
-	requireText("funded registry row", registry, true, `Paid <time datetime="`+now.Format(time.RFC3339)+`">`)
+	requireText("funded registry row", registry, true, `Paid <time datetime="`+activeSource.PaidAt.UTC().Format(time.RFC3339)+`">`)
 
 	// GET fragment: out-of-range and unknown students are 404; a student without a contract still gets the shell.
 	for _, id := range missing {
