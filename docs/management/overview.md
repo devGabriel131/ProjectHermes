@@ -33,8 +33,8 @@ flowchart TD
 | `POST /management/links/{id}/rename` | `index.html` | `result` + `HX-Trigger`; 204 when the ID names no link | Trims whitespace, rejects empty/over-100-rune/control names with 422; no-op preserves existing row and notice "Link renamed." |
 | `POST /management/links/{id}/cancel` | `index.html` | `result` + `HX-Trigger`; 204 when the ID names no link | Notice "Link canceled." or "Link can no longer be canceled." |
 | `POST /management/enrollments/{id}/cancel` | `index.html` | `result` + `HX-Trigger`; 409 on `ErrCancelBlocked`; 204 when the ID names no enrollment | Delegates to `billing.Service.CancelEnrollment`; notices "Enrollment canceled.", "Expired PIN cleared.", or "Enrollment can no longer be canceled." |
-| `POST /management/settings` | 303 to `/management/settings?saved`, or 422 `settings.html` | none | Ordinary form post; the link lifetime only. |
-| `POST /management/bootcamp-date` | 303 to `/management/settings?bootcamp-date-saved`, or 422 `settings.html` "Enter a valid date (YYYY-MM-DD)." | none | Ordinary form post. Saves `settings.bootcamp_date`, the next Bootcamp Militarizado, which ProjectHephaestus prints on its employer letter and treats as over once the day has passed. |
+| `POST /management/settings` | 303 to `/management/settings?saved`, or 422 `settingsView` | none | Ordinary form post; the link lifetime only. |
+| `POST /management/bootcamp-date` | 303 to `/management/settings?bootcamp-date-saved`, or 422 `settingsView` "Enter a valid date (YYYY-MM-DD)." | none | Ordinary form post. Saves `settings.bootcamp_date`, the next Bootcamp Militarizado, which ProjectHephaestus prints on its employer letter and treats as over once the day has passed. |
 | `GET /management/dashboard` | `dashboard.html` | `dashboard-content` | [Dashboard](dashboard.md). |
 | `GET /management/students` | `students.html` | `student-records` + `HX-Replace-Url` | Filters in [Students](students.md). |
 | `GET /management/students/new` | `add-students.html` | none | Add students: one form for a single student and a roster import. `?added={id}` confirms the student just added. |
@@ -54,7 +54,7 @@ flowchart TD
 
 On the links page `list` also loads `DeclinedEnrollments` (skipped for Trash, which holds no `Awaiting payment` rows) and each `linkRow` carries it, so an `Awaiting payment` enrollment whose first payment was declined shows a "Payment declined" badge next to its status. Billing's change signal refreshes it live ([Live updates](../live-updates.md)).
 
-All staff templates are parsed together from `templates/*.html`, so `brand`, `account`, `navigation`, `time`, `link-icon` and `trash-icon` defined in `index.html` serve every page. Only the login page ([Staff auth](../staff-auth.md)) has its own template set.
+The settings page is a templ view, `settingsView` in `settings.templ`, inside the `ui.Staff` layout ([Architecture](../architecture.md)). The other staff templates are parsed together from `templates/*.html`, so `brand`, `account`, `navigation`, `time`, `link-icon` and `trash-icon` defined in `index.html` serve every one of them; `ui.Staff` renders the same brand, navigation and account until each page moves to templ in its Phase C step.
 
 | File | Defines |
 |---|---|
@@ -62,11 +62,10 @@ All staff templates are parsed together from `templates/*.html`, so `brand`, `ac
 | `students.html` | `students.html`, `student-records`, `student-row`, `student-detail`, `student-field`, `student-save`, `student-billing`, `student-billing-portal` |
 | `add-students.html` | `add-students.html` |
 | `dashboard.html` | `dashboard.html`, `dashboard-content` |
-| `settings.html` | `settings.html` |
 
 ## Response headers
 
-`site.render` sets `Content-Type: text/html; charset=utf-8`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and `Vary: HX-Request`, then writes the status and template. `Vary` is required because one URL returns a full page to a browser and a fragment to htmx. The invoice redirect sets `no-store` itself. Plain-text errors (`http.Error`) skip `render`.
+`site.view` sets `Content-Type: text/html; charset=utf-8`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and `Vary: HX-Request`, then writes the status and renders the templ component; `site.render` passes an `html/template` page through it. `Vary` is required because one URL returns a full page to a browser and a fragment to htmx. The invoice redirect sets `no-store` itself. Plain-text errors (`http.Error`) skip `view`.
 
 Staff pages carry the same server-wide CSP and browser headers as every response ([Frontend](../frontend.md)), so the settings slider's output is updated by `/static/settings.js`, not an inline handler. Cross-origin POSTs are rejected server-wide by `CrossOriginProtection` ([Architecture](../architecture.md)), not by this package.
 
@@ -117,7 +116,7 @@ Other POST handlers read no body. `GET /management/events` clears its own write 
 ## Source
 
 - `main.go`: `newServer`, `managementMux`, `RegisterRoutes`
-- `internal/management/management.go`: `RegisterRoutes`, `site`, `timed`, `dbTimeout`, `render`, `htmx`, `answer`, `list`, `postedValue`, `readForm`, `pageData`, `linkRow`, `settingsData`, `cancelEnrollment`, `cancelEnrollmentNotice`, `plural`, `MaxBytesReader`
+- `internal/management/management.go`: `RegisterRoutes`, `site`, `timed`, `dbTimeout`, `render`, `view`, `htmx`, `answer`, `list`, `postedValue`, `readForm`, `pageData`, `linkRow`, `settingsData`, `cancelEnrollment`, `cancelEnrollmentNotice`, `plural`, `MaxBytesReader`
 - `internal/management/students.go`: `pathID`, `billingFailure`, `act`, `withdraw`
 - `internal/management/addstudents.go`: `addStudentsPage`, `addStudent`, `importStudents`, `readRoster`, `maxRosterRows`, `fixWorkbook`
 - `internal/management/dashboard.go`: `dashboard`
@@ -125,7 +124,7 @@ Other POST handlers read no body. `GET /management/events` clears its own write 
 - `internal/management/templates/students.html`: `student-records`, `student-detail`, `student-billing`
 - `internal/management/templates/dashboard.html`: `dashboard-content`
 - `internal/management/templates/add-students.html`: `add-students.html`
-- `internal/management/templates/settings.html`: `settings.js`
+- `internal/management/settings.templ`: `settingsView`, `settings.js`
 - `internal/auth/http.go`: `Require`
 - `internal/billing/billing.go`: `providerBudget`, `ErrCancelBlocked`
 - `internal/billing/cancel.go`: `CancelEnrollment`

@@ -62,14 +62,16 @@ This repository owns the `hermes` database. ProjectHephaestus (`../ProjectHephae
 
 ## Air
 
-Air is configured in [.air.toml](../../.air.toml), which sets only four things.
+Air is configured in [.air.toml](../../.air.toml), which sets only six things.
 
 | Setting | Value | Effect |
 |---|---|---|
 | `env_files` | `[".env"]` | Air loads `.env` into the app's environment. A variable already set in your shell wins. **The app never reads `.env` itself.** |
+| `build.pre_cmd` | `go tool templ generate` | Regenerates `*_templ.go` from the `.templ` views before every build ([templ](#templ)). |
 | `build.entrypoint` | `./tmp/main` | The binary Air runs; the build is Air's default `go build -o ./tmp/main .`. |
-| `build.include_ext` | `go`, `html`, `css`, `js` | A change to any such file rebuilds and restarts. Air skips `_test.go` files by default. |
+| `build.include_ext` | `go`, `templ`, `html`, `css`, `js` | A change to any such file rebuilds and restarts. |
 | `build.exclude_dir` | `tmp`, `loadtest` | Air ignores its own build output and the k6 scripts, so editing a load test never restarts the server. The repository has none of Air's other default exclusions (`assets`, `vendor`, `testdata`). |
+| `build.exclude_regex` | `_test\.go$`, `_templ\.go$` | Tests never rebuild, as by Air's default; generated views are not watched, so `pre_cmd` writing them cannot trigger a second rebuild. |
 
 Consequences:
 
@@ -78,6 +80,17 @@ Consequences:
 - **Rebuilds kill the server.** `.air.toml` does not set `send_interrupt`, so Air stops the old process with SIGKILL. Locally there is no graceful drain and no `shutdown_*` log lines; the shutdown sequence in [Startup and shutdown](startup-shutdown.md) applies to SIGINT and SIGTERM only.
 - **Environment edits.** `.env` is not a watched file. Air re-reads it on the next rebuild, so save any watched file or restart Air after changing it.
 - **Run exactly one Air.** It owns port 3000 and `tmp/main`. Reuse the running instance and start one only if nothing listens on port 3000 (rule and reasoning in [AGENTS.md](../../AGENTS.md#dev-server)).
+
+## templ
+
+Views are `.templ` files beside their handlers, and the layouts they share are in `internal/ui` ([Architecture](../architecture.md)). templ is a `tool` line in `go.mod`, so run `go tool templ`, never a global `templ`. Each `.templ` compiles to a `*_templ.go` file that is committed; never edit one by hand.
+
+```fish
+go tool templ fmt internal  # format .templ files
+go tool templ generate      # regenerate every *_templ.go
+```
+
+Air regenerates before each build, so a running dev server needs nothing more. Commit the `.templ` change and its regenerated `*_templ.go` together: CI regenerates and fails on any difference ([Testing](../testing.md#ci)).
 
 ## Staff accounts
 
@@ -113,7 +126,8 @@ Every open links, Trash, students or dashboard page holds one server-sent-event 
 ## Source
 
 - `compose.yaml`: `postgres:18@sha256:…`, `POSTGRES_DB`, `postgres18_data`, `pg_isready`
-- `.air.toml`: `env_files`, `entrypoint`, `include_ext`, `exclude_dir`
+- `.air.toml`: `env_files`, `pre_cmd`, `entrypoint`, `include_ext`, `exclude_dir`, `exclude_regex`
+- `go.mod`: `tool github.com/a-h/templ/cmd/templ`
 - `.env.example`: `DATABASE_URL`, `STRIPE_WEBHOOK_SECRET`, `PUBLIC_BASE_URL`
 - `main.go`: `assets`, `run`, `newServer`, `models`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`, `readNewPassword`

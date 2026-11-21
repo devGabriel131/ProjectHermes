@@ -32,7 +32,7 @@ flowchart LR
 | Learning | `internal/learning` | none yet (Hephaestus games) |
 | Documents | `internal/documents` | none yet (Hephaestus forms and letters) |
 
-**Platform, not a context:** `main.go` (wiring), `internal/db` (the one pgx pool today; migrations and the unit of work later), `internal/logging` (with `httplog`, `dblog`, `sentrylog` and `logtest` under it), `internal/live`, `internal/puertorico`, `internal/testdb`, and later `internal/ui` (shared layouts). `internal/management` is the staff UI for two contexts until phase F splits it into `studentsweb` and `billingweb`. Platform packages and `internal/management` own no table.
+**Platform, not a context:** `main.go` (wiring), `internal/db` (the one pgx pool today; migrations and the unit of work later), `internal/logging` (with `httplog`, `dblog`, `sentrylog` and `logtest` under it), `internal/live`, `internal/puertorico`, `internal/testdb`, and `internal/ui` (shared templ layouts; only `<context>web` packages and today's `internal/auth` and `internal/management` import it, never a root). `internal/management` is the staff UI for two contexts until phase F splits it into `studentsweb` and `billingweb`. Platform packages and `internal/management` own no table.
 
 ## Identity & Access
 

@@ -3,9 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/rand"
-	"embed"
 	"errors"
-	"html/template"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -20,9 +18,6 @@ import (
 	"apollo/internal/logging"
 	"apollo/internal/logging/httplog"
 )
-
-//go:embed templates/login.html
-var templates embed.FS
 
 const (
 	cookieName         = "management_session"
@@ -40,7 +35,6 @@ type loginPage struct {
 type Manager struct {
 	db        *gorm.DB
 	sessions  *scs.SessionManager
-	page      *template.Template
 	dummyHash string
 	// ponytail: one limit shared by every client bounds guessing and Argon2's
 	// 64 MiB per check. Accepted risk: an outsider who keeps it spent blocks new
@@ -53,10 +47,6 @@ type Manager struct {
 
 // New owns staff-session configuration, not the SQL pool; Run deletes expired sessions.
 func New(db *gorm.DB, secureCookies bool, log *slog.Logger) (*Manager, error) {
-	page, err := template.ParseFS(templates, "templates/login.html")
-	if err != nil {
-		return nil, err
-	}
 	// Unknown usernames are verified against this hash so they cost the same as wrong passwords.
 	dummyHash, err := argon2id.CreateHash(rand.Text(), argon2id.DefaultParams)
 	if err != nil {
@@ -83,7 +73,6 @@ func New(db *gorm.DB, secureCookies bool, log *slog.Logger) (*Manager, error) {
 	return &Manager{
 		db:        db,
 		sessions:  sessions,
-		page:      page,
 		dummyHash: dummyHash,
 		limiter:   rate.NewLimiter(rate.Every(loginInterval), 2),
 		log:       log,
@@ -250,7 +239,7 @@ func (m *Manager) render(w http.ResponseWriter, r *http.Request, status int, pag
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.WriteHeader(status)
-	if err := m.page.Execute(w, page); err != nil {
+	if err := loginView(page).Render(r.Context(), w); err != nil {
 		httplog.RecordError(r, "render", err)
 	}
 }

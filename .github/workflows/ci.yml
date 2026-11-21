@@ -55,6 +55,13 @@ jobs:
             exit 1
           fi
 
+      # The committed *_templ.go must be what the pinned templ generates; intent-to-add lets the diff see new files.
+      - name: templ generate
+        run: |
+          go tool templ generate
+          git add --intent-to-add .
+          git diff --exit-code
+
       - name: go vet
         run: go vet -tags=integration ./...
 

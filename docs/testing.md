@@ -31,6 +31,7 @@ Integration tests need a dedicated database. Create it once, then run the checks
 docker compose up --detach --wait --wait-timeout 90 db
 docker compose exec -T db createdb -U postgres hermes_test
 set -gx TEST_DATABASE_URL 'postgres://postgres:postgres@127.0.0.1:5432/hermes_test?sslmode=disable'
+go tool templ generate  # git status must then show no *_templ.go change; CI checks the same
 go build ./...
 go vet -tags=integration ./...
 go test -count=1 ./...  # unit tests, no database
@@ -53,6 +54,7 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 | Step | Command |
 |---|---|
 | Format | `gofmt -l .` must print nothing |
+| templ generate | `go tool templ generate`, then `git add --intent-to-add .` and `git diff --exit-code`: a `.templ` change committed without its regenerated `*_templ.go`, or a hand edit to one, fails the run ([Local development](operations/local-development.md#templ)) |
 | Vet | `go vet -tags=integration ./...` |
 | Build | `go build ./...` |
 | Tests | `go test -race -tags=integration -count=1 ./...` |
