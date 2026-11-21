@@ -19,7 +19,8 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:17
+        # Production runs Railway's postgres-ssl:18; pinned to the postgres:18 index digest.
+        image: postgres:18@sha256:eb63372c1e05c755f55fa30cbd07aecc443676fc6c0fa90b9002d01537841e1a
         env:
           POSTGRES_DB: hermes_test
           POSTGRES_USER: postgres

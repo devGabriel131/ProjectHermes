@@ -48,7 +48,7 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 ## CI
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs one job on every pull request and every push to `master`, on the Go version from `go.mod` with a `postgres:17` service container holding `hermes_test` (the `TEST_DATABASE_URL` above). Steps, in order; each fails the run except `gosec`, and the two scanners run even after an earlier step fails:
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs one job on every pull request and every push to `master`, on the Go version from `go.mod` with a `postgres:18` service container (production's major version, [Railway](operations/railway.md)) holding `hermes_test` (the `TEST_DATABASE_URL` above). Steps, in order; each fails the run except `gosec`, and the two scanners run even after an earlier step fails:
 
 | Step | Command |
 |---|---|
@@ -59,7 +59,7 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 | Vulnerabilities | `go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...` |
 | SAST, report only | `go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 ./...`; findings appear in the job log and are triaged by hand |
 
-To reproduce locally, set up the test database as in [Commands](#commands) and run the same commands. The workflow reads only repository contents (`permissions: contents: read`), uses no secrets, pins its actions to commit SHAs, and cancels a run superseded by a newer push to the same ref. Whether a red run blocks a merge or a Railway deploy is set outside the repository `[EXTERNAL]`: branch protection on `master` and Railway's "Wait for CI".
+To reproduce locally, set up the test database as in [Commands](#commands) and run the same commands; Compose still runs `postgres:17`, so only CI tests against 18. The workflow reads only repository contents (`permissions: contents: read`), uses no secrets, pins its actions to commit SHAs and its Postgres image to a digest, and cancels a run superseded by a newer push to the same ref. Whether a red run blocks a merge or a Railway deploy is set outside the repository `[EXTERNAL]`: branch protection on `master` and Railway's "Wait for CI".
 
 ## `testdb`: one schema per test
 

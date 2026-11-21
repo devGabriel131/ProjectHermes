@@ -14,7 +14,7 @@ The repository carries no Dockerfile, `railway.json` or Nixpacks file; its only 
 | Build | Railpack from GitHub `devGabriel131/ProjectHermes`, branch `master` `[EXTERNAL]` |
 | Deploy trigger | every push to `master` `[EXTERNAL]`; push only with approval ([AGENTS.md](../../AGENTS.md#railway)) |
 | Binary | `/app/out`, the path `user.fish` runs `[EXTERNAL]` |
-| Database | Railway PostgreSQL service `Postgres` `[EXTERNAL]` |
+| Database | Railway PostgreSQL service `Postgres`, image `postgres-ssl:18` `[EXTERNAL]` |
 | Replicas | one; see [Go-live](../go-live.md) |
 
 ```mermaid
