@@ -60,7 +60,7 @@ The links and Trash page (`linksView`, `linkRows`, `linkNotice` in `links.templ`
 | File | Defines |
 |---|---|
 | `links.templ` | `linksView`, `programStart`, `linkRows`, `linkItem`, `enrollmentItem`, `linkNotice`, `timestamp` |
-| `students.templ` | `studentsView`, `studentFilter`, `statusOption`, `studentRecords`, `studentRow`, `studentDetail`, `studentField`, `studentSave`, `billingBlock`, `billingPortal` |
+| `students.templ` | `studentsView`, `studentRecords`, `studentRow`, `studentDetail`, `studentField`, `studentSave`, `billingBlock`, `billingPortal`, `timeOr` |
 | `settings.templ` | `settingsView` |
 | `templates/staff.html` | `brand`, `account`, `navigation`, `link-icon`, `trash-icon` |
 | `templates/add-students.html` | `add-students.html` |

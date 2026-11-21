@@ -170,7 +170,8 @@ templ studentField(field studentFieldView) {
 	{{ path := "/management/students/" + strconv.FormatUint(field.StudentID, 10) + "/fields/" + field.Key }}
 	{{ cancel, edit := path, path+"?edit=1" }}
 	if field.Modal {
-		{{ cancel, edit = path+"?modal=1", edit+"&modal=1" }}
+		{{ cancel += "?modal=1" }}
+		{{ edit += "&modal=1" }}
 	}
 	<div class="student-field" id={ "student-field-" + id }>
 		if field.Editing {
@@ -250,7 +251,7 @@ templ billingBlock(studentID uint64, b *billing.Summary) {
 				<div>
 					<dt>Funding</dt>
 					if b.Funded {
-						<dd>Funded @timeOr(b.FundedAt, "")</dd>
+						<dd>{ "Funded" }@timeOr(" ", b.FundedAt, "")</dd>
 					} else {
 						<dd>Not funded</dd>
 					}
@@ -278,7 +279,7 @@ templ billingBlock(studentID uint64, b *billing.Summary) {
 						<dd>Active</dd>
 					}
 				</div>
-				<div><dt>Last synced</dt><dd>@timeOr(b.LastSyncedAt, "Never")</dd></div>
+				<div><dt>Last synced</dt><dd>@timeOr("", b.LastSyncedAt, "Never")</dd></div>
 			</dl>
 			if len(b.ReviewReasons) > 0 {
 				<p class="student-billing-review">
@@ -304,12 +305,12 @@ templ billingBlock(studentID uint64, b *billing.Summary) {
 						for _, installment := range b.Installments {
 							<tr>
 								<td>{ strconv.Itoa(installment.Number) }</td>
-								<td>@timeOr(installment.DueAt, "Set when funded")</td>
+								<td>@timeOr("", installment.DueAt, "Set when funded")</td>
 								<td>{ payments.Money(installment.AmountCents) }</td>
 								<td>
 									switch installment.Status {
 										case "paid":
-											<span class="status-badge" data-tone="ok">Paid</span>{ " " }@timeOr(installment.PaidAt, "")
+											<span class="status-badge" data-tone="ok">Paid</span>@timeOr(" ", installment.PaidAt, "")
 										case "overdue":
 											<span class="status-badge" data-tone="danger">Overdue</span>
 										case "action_required":
@@ -382,10 +383,10 @@ templ billingPortal(url string) {
 	<p>Customer portal link, short-lived. Share it only with the student's payer: <a href={ url } target="_blank" rel="noopener noreferrer">{ url }</a></p>
 }
 
-// timeOr is t as a timestamp, or fallback when t is nil.
-templ timeOr(t *time.Time, fallback string) {
+// timeOr is prefix and t as a timestamp, or fallback when t is nil.
+templ timeOr(prefix string, t *time.Time, fallback string) {
 	if t != nil {
-		@timestamp(*t)
+		{ prefix }@timestamp(*t)
 	} else {
 		{ fallback }
 	}
