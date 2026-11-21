@@ -160,7 +160,7 @@ func TestSessionCleanupDeletesOnlyExpired(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	log := logging.New(&out)
-	db := testdb.Open(t, &Session{}).Session(&gorm.Session{Logger: dblog.New(log)})
+	db := testdb.OpenTraced(t, dblog.New(log), &Session{})
 	manager := &Manager{db: db, log: log}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	sessions := []Session{
