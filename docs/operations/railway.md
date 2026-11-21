@@ -9,7 +9,8 @@ The repository carries no Dockerfile, `railway.json` or Nixpacks file; its only 
 | Item | Value |
 |---|---|
 | Project | `amused-light` `[EXTERNAL]`; its ID is hard-coded in `user.fish` |
-| Service | `ProjectHermes`, the name `user.fish` targets; the log field `service` reads it from `RAILWAY_SERVICE_NAME` |
+| Service | `Apollo`, the name `user.fish` targets. Deployed logs' `service` field comes from `RAILWAY_SERVICE_NAME`, so it reads `Apollo` |
+| Public addresses | `paymentwebsite-production.up.railway.app` and `paymentwebsite-preview.up.railway.app` `[EXTERNAL]`, kept through the service rename: Railway allows one Railway-provided domain per service, customer links and the Stripe webhook use these addresses, and Apollo's own address arrives with the custom domain |
 | Environment | `production`, the `user.fish` default. It is test-only: use no real customer or payment data ([AGENTS.md](../../AGENTS.md#production-ready-false)) |
 | Build | Railpack from GitHub `devGabriel131/Apollo`, branch `master` `[EXTERNAL]` |
 | Deploy trigger | every push to `master` `[EXTERNAL]`; push only with approval ([AGENTS.md](../../AGENTS.md#railway)) |
@@ -71,7 +72,7 @@ The health-check path is `/management/` `[EXTERNAL]` (a dashboard setting). The 
 | Help | `--help`, `-h` or no command prints usage and exits 0 without any Railway access. |
 | Terminal check | `add` and `passwd` need stdin and stdout on a terminal (hidden password prompts); otherwise the script exits 2. |
 | Environment | `production` unless `--environment <name>` comes **before** the command (`argparse --stop-nonopt`). |
-| What runs | `railway ssh --project <id> --environment <env> --service ProjectHermes -- /app/out user <args>`: the **deployed** build, not your working tree. |
+| What runs | `railway ssh --project <id> --environment <env> --service Apollo -- /app/out user <args>`: the **deployed** build, not your working tree. |
 | Not a substitute | `railway run` and `railway shell` execute on your machine and cannot reach the private database host `[EXTERNAL]`. |
 
 Account rules and sessions: [Staff auth](../staff-auth.md).
@@ -92,7 +93,7 @@ A change to `go.mod`/`go.sum`, the Go toolchain, or build or deploy configuratio
 
 ## Source
 
-- `user.fish`: `argparse`, `--environment`, `isatty`, `railway ssh`, `/app/out`, `ProjectHermes`
+- `user.fish`: `argparse`, `--environment`, `isatty`, `railway ssh`, `/app/out`, `Apollo`
 - `main.go`: `RAILWAY_SERVICE_NAME`, `RAILWAY_ENVIRONMENT_NAME`, `RAILWAY_GIT_COMMIT_SHA`, `RAILWAY_DEPLOYMENT_ID`, `RAILWAY_REPLICA_ID`, `PORT`, `startupError`, `serve`, `run`
 - `internal/auth/http.go`: `Require`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`
