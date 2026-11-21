@@ -14,7 +14,7 @@ import (
 // run only for a GET, or to answer a POST that accepted nothing.
 func (s *site) agreement(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
-	data := pageData{Path: "/customer/" + url.PathEscape(token), View: "agreement", FieldErrors: make(map[string]string)}
+	data := pageData{Path: "/customer/" + url.PathEscape(token), FieldErrors: make(map[string]string)}
 	status := http.StatusOK
 	if r.Method == http.MethodPost {
 		status = parseCustomerForm(w, r)
@@ -47,7 +47,7 @@ func (s *site) agreement(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	enrollment, ok := s.resolveSession(w, r, "index.html", &data, token)
+	enrollment, ok := s.resolveSession(w, r, agreementPage, &data, token)
 	if !ok {
 		return
 	}
@@ -66,7 +66,7 @@ func (s *site) agreement(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httplog.RecordError(r, "load", err)
 		data.Error = openFailedMessage
-		s.render(w, r, "index.html", data, http.StatusInternalServerError)
+		s.render(w, r, agreementPage, data, http.StatusInternalServerError)
 		return
 	}
 	data.ContactEditable = editable
@@ -89,5 +89,5 @@ func (s *site) agreement(w http.ResponseWriter, r *http.Request) {
 			data.Error = "El acuerdo no está disponible porque falta confirmar la fecha de inicio. Comunícate con el equipo."
 		}
 	}
-	s.render(w, r, "index.html", data, status)
+	s.render(w, r, agreementPage, data, status)
 }

@@ -125,7 +125,7 @@ func CustomerStep(title, page string, steps templ.Component) templ.Component {
 	})
 }
 
-// customerDocument is the Spanish HTML document of every customer page, on customer.css alone.
+// customerDocument is the Spanish HTML document of the customer pages on templ, on customer.css alone.
 func customerDocument(title, page string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
