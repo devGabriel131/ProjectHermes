@@ -179,7 +179,7 @@ func TestAutosaveKeepsDraftWithoutFinishing(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("submit: status = %d, body %q", w.Code, w.Body.String())
 	}
-	requireAdvance(t, w, f.path+"/agreement", true, privateFormValues(final)...)
+	requireAdvance(t, w, f.path+"/agreement", true)
 	if enrolled := studentRecords(t, f.db); len(enrolled) != 0 {
 		t.Fatalf("submit students = %+v, want none", enrolled)
 	}
@@ -302,7 +302,7 @@ func TestCompletedAccessAndReplay(t *testing.T) {
 					t.Fatalf("HX-Refresh = %q, want %q", got, refresh)
 				}
 				if tc.status == http.StatusOK {
-					requireAdvance(t, w, f.path+"/agreement", mode == "htmx", private...)
+					requireAdvance(t, w, f.path+"/agreement", mode == "htmx")
 				} else {
 					requireNoPrivate(t, w.Body.String(), private...)
 				}
@@ -318,7 +318,7 @@ func TestCompletedAccessAndReplay(t *testing.T) {
 	for _, target := range []string{f.path, f.path + "/forms"} {
 		for _, htmx := range []bool{false, true} {
 			w := customerRequest(t, f.mux, http.MethodGet, target, "", htmx, f.sessionCookie())
-			requireAdvance(t, w, f.path+"/agreement", false, private...)
+			requireAdvance(t, w, f.path+"/agreement", false)
 		}
 	}
 	server := serve(t, f.db)
@@ -703,7 +703,7 @@ func TestFinalValidationAndEmailConfirmation(t *testing.T) {
 	valid.Set("phone", " (202) 555-0123 ")
 	valid.Set("municipality", " Bayamón ")
 	w := customerRequest(t, f.mux, http.MethodPost, f.path, valid.Encode(), false, f.sessionCookie())
-	requireAdvance(t, w, f.path+"/agreement", false, privateFormValues(valid)...)
+	requireAdvance(t, w, f.path+"/agreement", false)
 	want := students.Details{Name: "María Pérez", Email: "Ada+private@example.com", Phone: "+12025550123", Municipality: "Bayamón", DateOfBirth: "2005-06-15", Gender: "Female"}
 	link, enrolled := stored(t, f.db)[0], studentRecords(t, f.db)
 	if link.Details != want || len(enrolled) != 0 {
@@ -717,7 +717,7 @@ func TestFinalValidationAndEmailConfirmation(t *testing.T) {
 	pre2001.Set("dob_month", "01")
 	pre2001.Set("dob_year", "1985")
 	w = customerRequest(t, fPre2001.mux, http.MethodPost, fPre2001.path, pre2001.Encode(), false, fPre2001.sessionCookie())
-	requireAdvance(t, w, fPre2001.path+"/agreement", false, privateFormValues(pre2001)...)
+	requireAdvance(t, w, fPre2001.path+"/agreement", false)
 	if got := stored(t, fPre2001.db)[0].DateOfBirth; got != "1985-01-20" {
 		t.Fatalf("split DOB before 2001 = %q, want 1985-01-20", got)
 	}
@@ -998,7 +998,10 @@ func requireFormError(t *testing.T, body, path string, fullPage bool) {
 	}
 }
 
-func requireAdvance(t *testing.T, w *httptest.ResponseRecorder, target string, htmx bool, private ...string) {
+// requireAdvance asserts an empty-bodied redirect to exactly target. The exact
+// match is the privacy check: target is built by the test from the link token,
+// so scanning it for private values would only match the random token itself.
+func requireAdvance(t *testing.T, w *httptest.ResponseRecorder, target string, htmx bool) {
 	t.Helper()
 	want, header := http.StatusSeeOther, "Location"
 	if htmx {
@@ -1010,7 +1013,6 @@ func requireAdvance(t *testing.T, w *httptest.ResponseRecorder, target string, h
 	if w.Body.Len() != 0 {
 		t.Fatalf("advance exposed a response body: %s", w.Body.String())
 	}
-	requireNoPrivate(t, w.Header().Get(header), private...)
 }
 
 func requireNoPrivate(t *testing.T, body string, private ...string) {
