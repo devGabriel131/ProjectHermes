@@ -1,0 +1,81 @@
+package customer
+
+import "apollo/internal/ui"
+
+// welcomePage is the link's landing page: the roadmap, then one way on. A failed lookup offers a retry,
+// a finished enrollment its plan (and a fresh start while the link takes one), an enrollment in
+// progress Continuar, and a new visitor Comenzar.
+templ welcomePage(data pageData) {
+	@ui.CustomerLanding("Bienvenidos", "welcome") {
+		<section id="customer-content">
+			<div class="welcome">
+				<img class="welcome-logo" src="/static/logo-mark.webp" alt="Masterminds Programa ASVAB" width="320" height="314"/>
+				<h1>¡Bienvenidos a Masterminds!</h1>
+				<p class="customer-lead">Ya estás un paso más cerca de asegurar tu matrícula en nuestro programa.</p>
+				<ol class="welcome-roadmap" aria-label="Lo que sigue">
+					<li>
+						<span class="welcome-roadmap-icon">
+							@iconUser()
+						</span>
+						<div><strong>Información del estudiante</strong><span>Los datos de quien se va a matricular.</span></div>
+					</li>
+					<li>
+						<span class="welcome-roadmap-icon">
+							@iconFile()
+						</span>
+						<div><strong>Acuerdo de pago</strong><span>Lee y acepta los términos del programa.</span></div>
+					</li>
+					<li>
+						<span class="welcome-roadmap-icon">
+							@iconCard()
+						</span>
+						<div><strong>Plan y pago seguro</strong><span>Elige cómo pagar y completa el pago en Stripe.</span></div>
+					</li>
+				</ol>
+				if data.Error != "" {
+					<p class="customer-callout" role="alert">
+						@iconAlert()
+						<span>{ data.Error }</span>
+					</p>
+					<a class="customer-primary" href={ data.Path }>Volver a intentar</a>
+				} else if data.Completed {
+					<p class="customer-callout" role="status">
+						@iconCheck()
+						<span>Tu matrícula ya fue completada.</span>
+					</p>
+					<a class="customer-primary" href={ data.Path + "/payments" }>Ver mi plan de pago</a>
+					if data.CanStartNew {
+						<form method="post" action={ data.Path + "/start" }>
+							<button class="customer-secondary" type="submit">Comenzar nueva matrícula</button>
+						</form>
+						<p class="customer-note"><span>Al comenzar una nueva matrícula, este navegador ya no mostrará el plan de pago de la matrícula anterior.</span></p>
+					}
+				} else if data.HasEnrollment {
+					<a class="customer-primary" href={ data.Path + "/forms" }>Continuar</a>
+					@autosaveNote()
+				} else {
+					<form method="post" action={ data.Path + "/start" }>
+						<button class="customer-primary" type="submit">Comenzar</button>
+					</form>
+					@autosaveNote()
+				}
+			</div>
+		</section>
+	}
+}
+
+templ autosaveNote() {
+	<p class="customer-note">
+		@iconCheck()
+		<span>Tu información se guarda automáticamente. Si sales, vuelve a este enlace desde este mismo dispositivo y navegador para continuar.</span>
+	</p>
+}
+
+// notFoundPage is the one answer for every unusable link, whatever made it so.
+templ notFoundPage() {
+	@ui.CustomerLanding("Enlace no válido", "not-found") {
+		<img class="welcome-logo" src="/static/logo-mark.webp" alt="Masterminds Programa ASVAB" width="320" height="314"/>
+		<h1>Este enlace ya no es válido</h1>
+		<p class="customer-lead">Si desea una nueva oportunidad para entrar al programa, comuníquese con nosotros.</p>
+	}
+}
