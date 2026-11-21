@@ -21,7 +21,7 @@ flowchart LR
 | Manual browser | a person | a running app, sandbox Stripe | Behavior no Go test can see; list [below](#not-proven-by-tests) |
 | k6 | `docker run grafana/k6` | tokens file, reachable `BASE_URL` | Throughput and single-pass contract checks against a running server |
 
-Untagged (unit) test files: `main_test.go` (`TestServeLifecycle`: in-flight request drains on shutdown; a blocked request is force-closed after the drain timeout), `internal/logging/{logging_test.go,http_test.go,database_test.go}` (JSON shape, error classification and privacy, request IDs, slow-query summaries), `internal/live` (stream catch-up, stalled reader, shutdown budget, heartbeats), `internal/payments/plans_test.go`, `internal/students/fields_test.go`, `internal/settings/parse_test.go` and `internal/billing/stripe_test.go`. Every other test file carries the `integration` tag.
+Untagged (unit) test files: `main_test.go` (`TestServeLifecycle`: in-flight request drains on shutdown; a blocked request is force-closed after the drain timeout), `architecture_test.go` (context roots' dependencies and table ownership, through the `go` command; [Context map](context-map.md#architecture-tests)), `internal/logging/{logging_test.go,http_test.go,database_test.go}` (JSON shape, error classification and privacy, request IDs, slow-query summaries), `internal/live` (stream catch-up, stalled reader, shutdown budget, heartbeats), `internal/payments/plans_test.go`, `internal/students/fields_test.go`, `internal/settings/parse_test.go` and `internal/billing/stripe_test.go`. Every other test file carries the `integration` tag.
 
 ## Commands
 
