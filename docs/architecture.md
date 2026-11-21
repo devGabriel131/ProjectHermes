@@ -100,7 +100,7 @@ flowchart LR
   billingtest --> billing
 ```
 
-`db`, `logging`, `logtest`, `puertorico`, `settings` and `ui` import no other module package; `payments` and `students` import only `puertorico`, `httplog` and `dblog` only `logging`, and `sentrylog` only `logging` and `httplog`. `management` does not import `auth`: staff identity arrives as a function argument (see Wiring).
+`db`, `documents/ist`, `logging`, `logtest`, `puertorico`, `settings` and `ui` import no other module package; `payments` and `students` import only `puertorico`, `httplog` and `dblog` only `logging`, and `sentrylog` only `logging` and `httplog`. Nothing imports `documents/ist` yet, so the graph omits it. `management` does not import `auth`: staff identity arrives as a function argument (see Wiring).
 
 | Path | Responsibility |
 |---|---|
@@ -110,6 +110,7 @@ flowchart LR
 | `internal/billing/billingtest` | Billing services backed by a fake Stripe, for other packages' tests ([Testing](testing.md)) |
 | `internal/customer` | Private `/customer/{token}` pages and the payment return page ([Customer flow](domain/customer-flow.md)) |
 | `internal/db` | The one pgx pool (10 connections, the query tracer), and the `database/sql` and GORM handles on it ([Startup and shutdown](operations/startup-shutdown.md)) |
+| `internal/documents/ist` | The IST (physical evaluation): its events as students are told to do them, the standards by sex and age band, and `Evaluate`, which grades a set of scores. Pure rules, standard library only ([Context map](context-map.md#documents)) |
 | `internal/links` | Customer links by token digest; `Enroll` turns a paid link into a Student ([Links](domain/links.md)) |
 | `internal/live` | In-process server-sent-event fan-out ([Live updates](live-updates.md)) |
 | `internal/logging` | Shared logging conventions, stdlib only: the JSON event format, `ErrorAttrs`, request levels, call labels ([Observability](operations/observability.md)) |
