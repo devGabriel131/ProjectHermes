@@ -114,6 +114,6 @@ The Student row and its PIN are kept; the PIN stays held ([Students](../domain/s
 - `internal/students/students.go`: `Student`, `WithdrawnAt`
 - `internal/management/management.go`: `RegisterRoutes`
 - `internal/management/students.go`: `withdraw`, `act`
-- `internal/management/templates/students.html`: `student-billing`
+- `internal/management/students.templ`: `billingBlock`
 - `internal/customer/templates/payments.html`: `payments`
 - `internal/billing/worker_test.go`: `TestWithdrawalRefundsAndStopsCollection`

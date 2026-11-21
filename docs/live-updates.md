@@ -169,6 +169,6 @@ The feed is an in-process map of channels. A write handled by another process ne
 - `internal/billing/invoices.go`: `store`, `reviewObligation`
 - `internal/settings/settings.go`: `New`
 - `internal/management/links.templ`: `management-live.js`, `management-changed`, `generated-links`
-- `internal/management/templates/students.html`: `management-live.js`, `student-records`, `student-billing`
+- `internal/management/students.templ`: `management-live.js`, `student-records`, `student-billing`
 - `internal/management/templates/dashboard.html`: `management-live.js`, `management-changed`
 - `internal/management/management.go`: `answer`
