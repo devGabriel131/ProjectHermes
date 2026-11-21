@@ -13,7 +13,10 @@ templ agreementPage(data pageData) {
 		<section id="customer-content">
 			<article class="payment-agreement" aria-labelledby="agreement-title">
 				if data.ContactEditable {
-					<a class="customer-back-link" href={ data.Path + "/edit" }>@iconArrowLeft()Editar información del estudiante</a>
+					<a class="customer-back-link" href={ data.Path + "/edit" }>
+						@iconArrowLeft()
+						Editar información del estudiante
+					</a>
 				}
 				<header class="customer-heading">
 					<h1 id="agreement-title">Revisa y acepta el acuerdo</h1>

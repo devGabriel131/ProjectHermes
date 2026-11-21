@@ -72,25 +72,12 @@ func agreementPage(data pageData) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, " ")
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				var templ_7745c5c3_Var4 string
-				templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs("Editar información del estudiante")
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/customer/agreement.templ`, Line: 18, Col: 44}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "</a>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, " Editar información del estudiante</a>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<header class=\"customer-heading\"><h1 id=\"agreement-title\">Revisa y acepta el acuerdo</h1><p>Aquí se presenta la información y los términos para la separación de su espacio en el Programa de preparación para el ASVAB, ofrecido por Masterminds Programa ASVAB.</p></header><div class=\"agreement-start\"><span class=\"agreement-start-icon\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<header class=\"customer-heading\"><h1 id=\"agreement-title\">Revisa y acepta el acuerdo</h1><p>Aquí se presenta la información y los términos para la separación de su espacio en el Programa de preparación para el ASVAB, ofrecido por Masterminds Programa ASVAB.</p></header><div class=\"agreement-start\"><span class=\"agreement-start-icon\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -98,38 +85,38 @@ func agreementPage(data pageData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</span><p><span>Fecha de comienzo</span><strong>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "</span><p><span>Fecha de comienzo</span><strong>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var4 string
+			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(cmp.Or(data.ProgramStartLabel, "No disponible"))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/customer/agreement.templ`, Line: 29, Col: 95}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</strong></p></div><section class=\"agreement-terms customer-card\" aria-labelledby=\"agreement-terms-title\"><h2 id=\"agreement-terms-title\">Términos y Condiciones</h2><p class=\"customer-hint\">Favor de leer detalladamente.</p><ol class=\"agreement-clauses\" role=\"list\"><li><p>La matrícula solicitada será exclusiva para el estudiante matriculado.</p></li><li><p>El espacio de matrícula es exclusivo para la fecha de comienzo detallada en este acuerdo (<strong>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var5 string
-			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(cmp.Or(data.ProgramStartLabel, "No disponible"))
+			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(cmp.Or(data.ProgramStartLabel, "fecha no disponible"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/customer/agreement.templ`, Line: 29, Col: 95}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/customer/agreement.templ`, Line: 36, Col: 167}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "</strong></p></div><section class=\"agreement-terms customer-card\" aria-labelledby=\"agreement-terms-title\"><h2 id=\"agreement-terms-title\">Términos y Condiciones</h2><p class=\"customer-hint\">Favor de leer detalladamente.</p><ol class=\"agreement-clauses\" role=\"list\"><li><p>La matrícula solicitada será exclusiva para el estudiante matriculado.</p></li><li><p>El espacio de matrícula es exclusivo para la fecha de comienzo detallada en este acuerdo (<strong>")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var6 string
-			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(cmp.Or(data.ProgramStartLabel, "fecha no disponible"))
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/customer/agreement.templ`, Line: 36, Col: 167}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</strong>).</p></li><li><p>Mediante la aceptación de este acuerdo y el pago inicial o total, acepto los términos y condiciones del programa, al igual que el plan de pago seleccionado.</p></li><li><p>En los planes de pagos a plazos, los cobros se procesan de forma automática en las fechas acordadas. Si un pago no puede procesarse en la fecha correspondiente, el sistema reintentará el cobro automáticamente. De no recibirse el pago adeudado dentro de un periodo máximo de <strong>dos (2) semanas (14 días)</strong> a partir de la fecha de pago acordada, el estudiante matriculado será dado de baja automáticamente del programa.</p></li><li><p>En caso de que el estudiante sea dado de baja por falta de pago, para ser reinstalado en el programa deberá cubrir el pago atrasado original más un <strong>cargo de reinstalación de $25.00</strong>.</p></li><li><p>El pago inicial, pago parcial o pago en su totalidad <strong>no será devuelto bajo ningún concepto</strong>.</p></li><li><p>Si el estudiante decide darse de baja del programa en cualquier momento antes de cubrir el total del acuerdo de pago (matrícula), el estudiante sigue siendo responsable del balance adeudado de la cantidad total de la matrícula.</p></li><li><p>Cualquier deuda total y/o parcial puede ser reportada a una agencia de cobro de no ser cumplido el acuerdo de pago aquí detallado.</p></li></ol><p class=\"agreement-closing\">Cualquier duda o pregunta no dude en contactarnos. ¡Bienvenido/a a la familia de Masterminds Programa ASVAB!</p></section>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "</strong>).</p></li><li><p>Mediante la aceptación de este acuerdo y el pago inicial o total, acepto los términos y condiciones del programa, al igual que el plan de pago seleccionado.</p></li><li><p>En los planes de pagos a plazos, los cobros se procesan de forma automática en las fechas acordadas. Si un pago no puede procesarse en la fecha correspondiente, el sistema reintentará el cobro automáticamente. De no recibirse el pago adeudado dentro de un periodo máximo de <strong>dos (2) semanas (14 días)</strong> a partir de la fecha de pago acordada, el estudiante matriculado será dado de baja automáticamente del programa.</p></li><li><p>En caso de que el estudiante sea dado de baja por falta de pago, para ser reinstalado en el programa deberá cubrir el pago atrasado original más un <strong>cargo de reinstalación de $25.00</strong>.</p></li><li><p>El pago inicial, pago parcial o pago en su totalidad <strong>no será devuelto bajo ningún concepto</strong>.</p></li><li><p>Si el estudiante decide darse de baja del programa en cualquier momento antes de cubrir el total del acuerdo de pago (matrícula), el estudiante sigue siendo responsable del balance adeudado de la cantidad total de la matrícula.</p></li><li><p>Cualquier deuda total y/o parcial puede ser reportada a una agencia de cobro de no ser cumplido el acuerdo de pago aquí detallado.</p></li></ol><p class=\"agreement-closing\">Cualquier duda o pregunta no dude en contactarnos. ¡Bienvenido/a a la familia de Masterminds Programa ASVAB!</p></section>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if data.Error != "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<p id=\"agreement-error\" class=\"customer-callout\" role=\"alert\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<p id=\"agreement-error\" class=\"customer-callout\" role=\"alert\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -137,26 +124,26 @@ func agreementPage(data pageData) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "<span>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<span>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var7 string
-				templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(data.Error)
+				var templ_7745c5c3_Var6 string
+				templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(data.Error)
 				if templ_7745c5c3_Err != nil {
 					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/customer/agreement.templ`, Line: 49, Col: 24}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</span></p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "</span></p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
 			if data.TermsAcceptedAt != nil {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<div class=\"agreement-acceptance customer-card\"><p class=\"customer-callout is-success\" role=\"status\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "<div class=\"agreement-acceptance customer-card\"><p class=\"customer-callout is-success\" role=\"status\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -164,20 +151,20 @@ func agreementPage(data pageData) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "<span>Ya aceptaste este acuerdo. La fecha de comienzo mostrada corresponde al acuerdo que aceptaste.</span></p><a class=\"customer-primary\" href=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<span>Ya aceptaste este acuerdo. La fecha de comienzo mostrada corresponde al acuerdo que aceptaste.</span></p><a class=\"customer-primary\" href=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var8 string
-				templ_7745c5c3_Var8, templ_7745c5c3_Err = templruntime.NewAttributeExpression(data.Path + "/payments").ResolveURL(ctx)
+				var templ_7745c5c3_Var7 string
+				templ_7745c5c3_Var7, templ_7745c5c3_Err = templruntime.NewAttributeExpression(data.Path + "/payments").ResolveURL(ctx)
 				if templ_7745c5c3_Err != nil {
 					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/customer/agreement.templ`, Line: 58, Col: 64}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var7)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "\">Ver las opciones de pago</a></div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "\">Ver las opciones de pago</a></div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -187,7 +174,7 @@ func agreementPage(data pageData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "</article></section>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "</article></section>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -227,67 +214,67 @@ func acceptance(data pageData) templ.Component {
 		if termsError != "" {
 			describedBy += "accept-terms-error"
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "<form class=\"agreement-acceptance customer-card\" action=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<form class=\"agreement-acceptance customer-card\" action=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var9 string
+		templ_7745c5c3_Var9, templ_7745c5c3_Err = templruntime.NewAttributeExpression(data.Path + "/agreement").ResolveURL(ctx)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/customer/agreement.templ`, Line: 78, Col: 83}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var9)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "\" method=\"post\"><input type=\"hidden\" name=\"program_start_date\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var10 string
-		templ_7745c5c3_Var10, templ_7745c5c3_Err = templruntime.NewAttributeExpression(data.Path + "/agreement").ResolveURL(ctx)
+		templ_7745c5c3_Var10, templ_7745c5c3_Err = templruntime.NewAttributeExpression(data.ProgramStartDate).Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/customer/agreement.templ`, Line: 78, Col: 83}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/customer/agreement.templ`, Line: 79, Col: 78}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "\" method=\"post\"><input type=\"hidden\" name=\"program_start_date\" value=\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var11 string
-		templ_7745c5c3_Var11, templ_7745c5c3_Err = templruntime.NewAttributeExpression(data.ProgramStartDate).Resolve(ctx)
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/customer/agreement.templ`, Line: 79, Col: 78}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var11)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, "\"> <label class=\"customer-choice\" for=\"accept-terms\"><input id=\"accept-terms\" name=\"accept_terms\" type=\"checkbox\" value=\"yes\" required")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "\"> <label class=\"customer-choice\" for=\"accept-terms\"><input id=\"accept-terms\" name=\"accept_terms\" type=\"checkbox\" value=\"yes\" required")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if describedBy != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, " aria-describedby=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, " aria-describedby=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var12 string
-			templ_7745c5c3_Var12, templ_7745c5c3_Err = templruntime.NewAttributeExpression(describedBy).Resolve(ctx)
+			var templ_7745c5c3_Var11 string
+			templ_7745c5c3_Var11, templ_7745c5c3_Err = templruntime.NewAttributeExpression(describedBy).Resolve(ctx)
 			if templ_7745c5c3_Err != nil {
 				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/customer/agreement.templ`, Line: 88, Col: 35}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var12)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var11)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
 		if termsError != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, " aria-invalid=\"true\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, " aria-invalid=\"true\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "> <span>He leído detalladamente y acepto los Términos y Condiciones y el Acuerdo de Pago del programa.</span></label> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "> <span>He leído detalladamente y acepto los Términos y Condiciones y el Acuerdo de Pago del programa.</span></label> ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if termsError != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<p id=\"accept-terms-error\" class=\"customer-callout\" role=\"alert\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "<p id=\"accept-terms-error\" class=\"customer-callout\" role=\"alert\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -295,25 +282,25 @@ func acceptance(data pageData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "<span>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var13 string
-			templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(termsError)
+			var templ_7745c5c3_Var12 string
+			templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(termsError)
 			if templ_7745c5c3_Err != nil {
 				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/customer/agreement.templ`, Line: 99, Col: 22}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "</span></p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "</span></p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<button class=\"customer-primary\" type=\"submit\">Aceptar y elegir plan de pago</button></form>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<button class=\"customer-primary\" type=\"submit\">Aceptar y elegir plan de pago</button></form>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -339,7 +326,7 @@ func agreementSteps() templ.Component {
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "<ol class=\"customer-steps\" aria-label=\"Progreso de la matrícula\"><li class=\"is-done\"><span class=\"visually-hidden\">Completado: </span>Estudiante</li><li aria-current=\"step\">Acuerdo</li><li>Pago</li></ol>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<ol class=\"customer-steps\" aria-label=\"Progreso de la matrícula\"><li class=\"is-done\"><span class=\"visually-hidden\">Completado: </span>Estudiante</li><li aria-current=\"step\">Acuerdo</li><li>Pago</li></ol>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
