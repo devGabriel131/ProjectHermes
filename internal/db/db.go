@@ -18,12 +18,12 @@ import (
 // maxConns bounds the pool, shared by GORM and the session store.
 const maxConns = 10
 
-// DB is the pgx pool and the handles onto it. SQL borrows a pool connection per call and keeps none idle,
-// so GORM and the scs session store, which both use it, wait in the pool's queue and pass its tracer.
+// DB is the pgx pool and the handles onto it. GORM borrows a pool connection per call through database/sql,
+// which keeps none idle, so GORM and the scs session store wait in the pool's queue and pass its tracer.
 type DB struct {
 	Pool *pgxpool.Pool
-	SQL  *sql.DB
 	GORM *gorm.DB
+	sql  *sql.DB
 }
 
 // Open configures the pool for dsn with tracer timing every query. It connects nothing: the first query,
@@ -34,6 +34,8 @@ func Open(dsn string, tracer pgx.QueryTracer) (*DB, error) {
 		return nil, err
 	}
 	config.MaxConns = maxConns
+	// dblog's pool-wait count needs every connection opened by an acquire, never by the health check.
+	config.MinConns, config.MinIdleConns = 0, 0
 	config.ConnConfig.Tracer = tracer
 	pool, err := pgxpool.NewWithConfig(context.Background(), config)
 	if err != nil {
@@ -47,15 +49,15 @@ func Open(dsn string, tracer pgx.QueryTracer) (*DB, error) {
 		Logger:                 logger.Discard,
 	})
 	if err != nil {
-		db := &DB{Pool: pool, SQL: sqlDB}
+		db := &DB{Pool: pool, sql: sqlDB}
 		return nil, errors.Join(err, db.Close())
 	}
-	return &DB{Pool: pool, SQL: sqlDB, GORM: orm}, nil
+	return &DB{Pool: pool, GORM: orm, sql: sqlDB}, nil
 }
 
-// Close closes SQL, then the pool, which waits for every borrowed connection to come back.
+// Close closes database/sql's handle, then the pool, which waits for every borrowed connection to come back.
 func (db *DB) Close() error {
-	err := db.SQL.Close()
+	err := db.sql.Close()
 	db.Pool.Close()
 	return err
 }

@@ -42,10 +42,12 @@ func New(log *slog.Logger) *Tracer {
 	return &Tracer{log: log, buckets: map[string]slowQueryBucket{}}
 }
 
-// WatchPool makes Flush report pool's waits: acquires that found every connection busy and waited for one
-// to be released. The pool also counts an acquire that opened a new connection as a wait; subtracting the
-// connections opened leaves the saturation waits that database/sql's WaitCount counted. The wait time
-// cannot be split, so it also holds the time spent opening connections in the same window.
+// WatchPool makes Flush report pool's waits: acquires that found every connection busy and waited for one to
+// be released, counted as a lower bound. The pool also counts an acquire that opened a new connection as a
+// wait, so the connections opened are subtracted; that undercounts by each failed connection attempt, each
+// acquire abandoned while its connection was opening, and each waiter that ended up opening a replacement for
+// an expired or broken connection. It relies on db.Open opening connections only on acquire (MinConns and
+// MinIdleConns 0). The wait time cannot be split, so it also holds the time spent opening connections.
 func (t *Tracer) WatchPool(pool *pgxpool.Pool) {
 	t.watch(func() (int64, time.Duration) {
 		stat := pool.Stat()
