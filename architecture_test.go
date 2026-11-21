@@ -28,8 +28,9 @@
 //     TRUNCATE, COPY, FROM ONLY, clause.From, Table(variable), and a model passed as any. Schema-qualified
 //     names fail closed: public.students reads as the unknown table "public".
 //   - A table inside a statement whose CTE has the same name.
-//   - SQL outside Go. Only internal/db embeds .sql, the migrations, whose DDL no context owns; sqlc's
-//     generated Go holds each query as a constant, which is scanned, so queries.sql must keep upper-case keywords.
+//   - SQL outside Go. Only internal/db embeds .sql, the migrations, whose DDL no context owns;
+//     TestMigrationTablesHaveOwners holds every table they create to tableOwners. sqlc's generated Go holds
+//     each query as a constant, which is scanned, so queries.sql must keep upper-case keywords.
 //   - A second reach into the same table from an allowlisted declaration: entries are per declaration.
 //   - GORM many-to-many join tables: a relationship charges only the related model's table. None exist today.
 //
@@ -326,6 +327,27 @@ func TestSQLTableNames(t *testing.T) {
 	} {
 		if got := strings.Join(sqlTableNames(sql), " "); got != want {
 			t.Errorf("sqlTableNames(%q) = %q, want %q", sql, got, want)
+		}
+	}
+}
+
+// TestMigrationTablesHaveOwners fails on a table a migration creates that no context owns, so the ownership
+// test can charge every reach into it. Schema-qualified names fail closed, as in the SQL matcher.
+func TestMigrationTablesHaveOwners(t *testing.T) {
+	files, err := filepath.Glob("internal/db/migrations/*.sql")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no migrations found: %v", err)
+	}
+	createTable := regexp.MustCompile(`(?i)\bCREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)`)
+	for _, file := range files {
+		sql, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range createTable.FindAllSubmatch(sql, -1) {
+			if _, owned := tableOwners[string(m[1])]; !owned {
+				t.Errorf("%s: table %q has no owner; add it to the table-ownership map in docs/context-map.md and tableOwners", file, m[1])
+			}
 		}
 	}
 }

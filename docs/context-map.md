@@ -154,11 +154,12 @@ The `hephaestus_*` tables in the shared production database belong to ProjectHep
 - **`TestContextRootsImportNoAdapters`** runs `go list -deps` on each root in `reshapedRoots` and fails on any forbidden dependency, naming the root, the package and where it belongs. No root is reshaped yet, so the list is empty and the test skips with a message saying what it would check. Each reshape step adds its root in one line.
 - **`TestLoggingCoreImportsNoAdapters`** runs the same check on `internal/logging`, so HTTP and database code stays in `httplog` and `dblog`.
 - **`TestContextsTouchOnlyOwnedTables`** type-checks every production package and charges each table it finds to the package's context (`contextOf`). It fails on a table with no owner, and on a table outside the context's ownership, naming the file, line, declaration, table and owning context. It finds tables in constant SQL strings, in GORM calls given a model from `gormModels()` or a literal `Table` name, and in model associations. `TestSQLTableNames` guards the SQL scanner.
+- **`TestMigrationTablesHaveOwners`** reads `internal/db/migrations/*.sql` and fails on any `CREATE TABLE` name missing from `tableOwners`, so every table has an owning context from the migration that creates it ([Data model](data-model.md#adding-a-migration)).
 - **The allowlist only shrinks.** `crossContextAllowlist` holds today's Billing → Students reaches, keyed by file, declaration and table, each commented with the seam that replaces it. An entry that no longer matches fails the test until it is deleted. Phase F moves each reach behind its seam and F9 leaves the list empty.
 
 ## Source
 
-- `architecture_test.go`: `TestContextRootsImportNoAdapters`, `TestLoggingCoreImportsNoAdapters`, `TestContextsTouchOnlyOwnedTables`, `TestSQLTableNames`, `reshapedRoots`, `rootForbidden`, `contextOf`, `tableOwners`, `crossContextAllowlist`, `gormModels`
+- `architecture_test.go`: `TestContextRootsImportNoAdapters`, `TestLoggingCoreImportsNoAdapters`, `TestContextsTouchOnlyOwnedTables`, `TestSQLTableNames`, `TestMigrationTablesHaveOwners`, `reshapedRoots`, `rootForbidden`, `contextOf`, `tableOwners`, `crossContextAllowlist`, `gormModels`
 - `internal/auth/auth.go`: `User`, `Session`, `usernamePattern`
 - `internal/auth/http.go`: `Manager.Require`, `Staff`
 - `internal/links/links.go`: `MaxLinkEnrollments`, `Status`, `Usable`, `Enroll`, `CancelEnrollmentTx`

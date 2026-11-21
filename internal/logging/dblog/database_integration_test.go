@@ -82,6 +82,8 @@ func TestRequestLabelReachesTracerThroughGORM(t *testing.T) {
 	log := logging.New(&out)
 	tracer := New(log)
 	db := testdb.OpenTraced(t, tracer)
+	tracer.Flush() // drop what schema setup and its migration traced
+	out.Reset()
 
 	const slowSQL = "SELECT 1 FROM pg_sleep(0.21)"
 	mux := http.NewServeMux()

@@ -36,10 +36,10 @@ var baselineTables = []string{
 // baseline nor adopting it is safe.
 var ErrPartialSchema = errors.New("schema holds only part of the baseline")
 
-// Migrate applies every pending migration to the connection's current schema under a session advisory
-// lock on that schema, and logs database_migrated for each version applied. A schema with all the
-// baseline tables adopts version 1 with no DDL; one with none gets the baseline; a partial one fails
-// with ErrPartialSchema before goose creates its version table.
+// Migrate applies each pending migration to the connection's current schema under a session advisory lock
+// on that schema (goose creates goose_db_version before taking it), and logs database_migrated for each
+// version applied. A schema with all the baseline tables adopts version 1 with no DDL; one with none gets
+// the baseline; a partial one fails with ErrPartialSchema before goose creates its version table.
 func (db *DB) Migrate(ctx context.Context, log *slog.Logger) error {
 	var schema string
 	var versioned bool
@@ -51,14 +51,14 @@ func (db *DB) Migrate(ctx context.Context, log *slog.Logger) error {
 	// goose creates goose_db_version before it runs anything, so a partial schema is refused first. Version
 	// 1 decides again inside its transaction, under the lock.
 	if !versioned {
-		if _, err := adoptBaseline(ctx, db.sql); err != nil {
+		if _, err := baselinePresent(ctx, db.sql); err != nil {
 			return err
 		}
 	}
 	var adopted bool
 	baseline := goose.NewGoMigration(1, &goose.GoFunc{RunTx: func(ctx context.Context, tx *sql.Tx) error {
 		var err error
-		if adopted, err = adoptBaseline(ctx, tx); err != nil || adopted {
+		if adopted, err = baselinePresent(ctx, tx); err != nil || adopted {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, baselineSQL)
@@ -97,8 +97,9 @@ func (db *DB) Migrate(ctx context.Context, log *slog.Logger) error {
 	return err
 }
 
-// adoptBaseline reports whether the current schema holds every baseline table (adopt) or none (create).
-func adoptBaseline(ctx context.Context, q interface {
+// baselinePresent reports whether the current schema holds every baseline table (true) or none (false); a
+// partial schema is ErrPartialSchema.
+func baselinePresent(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }) (bool, error) {
 	var missing int

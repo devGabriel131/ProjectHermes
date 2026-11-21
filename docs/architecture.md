@@ -232,8 +232,9 @@ The 403 from `CrossOriginProtection` fires for non-safe methods (such as POST) w
 
 ## Source
 
-- `main.go`: `newApp`, `newServer`, `secureHeaders`, `sitePolicy`, `serve`, `run`, `models`, `startupError`, `assets`
-- `go.mod`: `github.com/a-h/templ`, `github.com/air-verse/air`, `github.com/getsentry/sentry-go`, `github.com/nyaruka/phonenumbers/v2`, `github.com/stripe/stripe-go/v87`, `gorm.io/gorm`, `gorm.io/driver/postgres`
+- `main.go`: `newApp`, `newServer`, `secureHeaders`, `sitePolicy`, `serve`, `run`, `startupError`, `assets`
+- `go.mod`: `github.com/a-h/templ`, `github.com/air-verse/air`, `github.com/getsentry/sentry-go`, `github.com/nyaruka/phonenumbers/v2`, `github.com/pressly/goose/v3`, `github.com/stripe/stripe-go/v87`, `gorm.io/gorm`, `gorm.io/driver/postgres`
+- `internal/db/migrate.go`: `Migrate`
 - `internal/ui/staff.templ`: `SignIn`, `Staff`, `Nav`
 - `internal/auth/http.go`: `Manager.RegisterRoutes`, `Require`, `Staff`
 - `internal/logging/httplog/http.go`: `Requests`, `Routes`, `RecordError`
