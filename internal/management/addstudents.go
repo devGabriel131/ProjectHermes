@@ -4,7 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/csv"
 	"errors"
-	"html/template"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/a-h/templ"
 	"github.com/xuri/excelize/v2"
 
 	"apollo/internal/logging/httplog"
@@ -57,7 +58,16 @@ type rejectedRow struct {
 type rosterReport struct {
 	Added    int
 	Rejected []rejectedRow
-	FixFile  template.URL // data: URL of the fix workbook; "" when nothing was rejected
+	FixFile  templ.SafeURL // data: URL of the fix workbook; "" when nothing was rejected
+}
+
+// summary is the report's status line for an import into group.
+func (r rosterReport) summary(group string) string {
+	line := fmt.Sprintf("Added %d %s to %s.", r.Added, plural(r.Added, "student", "students"), group)
+	if n := len(r.Rejected); n > 0 {
+		line += fmt.Sprintf(" %d %s fixing.", n, plural(n, "row needs", "rows need"))
+	}
+	return line
 }
 
 type addStudentsData struct {
@@ -199,7 +209,7 @@ func (s *site) addStudentsPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.render(w, r, http.StatusOK, "add-students.html", data)
+	s.view(w, r, http.StatusOK, addStudentsView(data))
 }
 
 func (s *site) addStudent(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +221,7 @@ func (s *site) addStudent(w http.ResponseWriter, r *http.Request) {
 	group, err := students.ParseGroup(data.AddGroup, true)
 	if err != nil {
 		data.AddError = err.Error()
-		s.render(w, r, http.StatusUnprocessableEntity, "add-students.html", data)
+		s.view(w, r, http.StatusUnprocessableEntity, addStudentsView(data))
 		return
 	}
 	added, rejected, err := s.roster.Add(r.Context(), group, []students.NewStudent{entry})
@@ -220,13 +230,13 @@ func (s *site) addStudent(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.As(err, &valErr):
 		data.AddError = valErr.Message
-		s.render(w, r, http.StatusConflict, "add-students.html", data)
+		s.view(w, r, http.StatusConflict, addStudentsView(data))
 	case err != nil:
 		httplog.RecordError(r, "save", err)
 		http.Error(w, "Could not add the student. Please try again.", http.StatusInternalServerError)
 	case len(rejected) > 0:
 		data.Errors = rejected[0]
-		s.render(w, r, http.StatusUnprocessableEntity, "add-students.html", data)
+		s.view(w, r, http.StatusUnprocessableEntity, addStudentsView(data))
 	default:
 		http.Redirect(w, r, "/management/students/new?added="+strconv.FormatUint(added[0].ID, 10), http.StatusSeeOther)
 	}
@@ -236,7 +246,7 @@ func (s *site) importStudents(w http.ResponseWriter, r *http.Request) {
 	data := addStudentsData{Staff: s.staff(r.Context()), Groups: students.GroupOptions()}
 	refuse := func(status int, message string) {
 		data.ImportError = message
-		s.render(w, r, status, "add-students.html", data)
+		s.view(w, r, status, addStudentsView(data))
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
@@ -305,10 +315,11 @@ func (s *site) importStudents(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Could not build the rows-to-fix file. Please try again.", http.StatusInternalServerError)
 			return
 		}
-		// #nosec G203 -- constant MIME prefix and a base64 payload, whose alphabet cannot leave the href or change its scheme.
-		report.FixFile = template.URL("data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64," + base64.StdEncoding.EncodeToString(fixBytes))
+		// SafeURL skips templ's scheme check, which refuses data:. The URL is a constant MIME prefix and a base64
+		// payload, whose alphabet cannot leave the href or change its scheme.
+		report.FixFile = templ.SafeURL("data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64," + base64.StdEncoding.EncodeToString(fixBytes))
 	}
 
 	data.Imported = &report
-	s.render(w, r, http.StatusOK, "add-students.html", data)
+	s.view(w, r, http.StatusOK, addStudentsView(data))
 }

@@ -149,7 +149,7 @@ The same middleware sends `Strict-Transport-Security: max-age=31536000` (no `inc
 
 - **`includeIndicatorStyles: false`.** Removing it makes htmx inject inline styles that the site CSP blocks.
 - **Clipboard write started inside the click.** Moving it after the response breaks Safari's user-activation rule.
-- **The htmx tag repeated per template.** The `html/template` management page `dashboard.html` and the customer `index.html` each define their own complete HTML documents rather than sharing a global layout template. Pages moved to templ share one layout instead: login, settings, links and students use `internal/ui`'s staff document, and the rest follow in their Phase C steps.
+- **The htmx tag repeated per template.** The `html/template` management page `dashboard.html` and the customer `index.html` each define their own complete HTML documents rather than sharing a global layout template. Pages moved to templ share one layout instead: login, settings, links, students and add students use `internal/ui`'s staff document, and the rest follow in their Phase C steps.
 
 ## Source
 

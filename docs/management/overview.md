@@ -38,9 +38,9 @@ flowchart TD
 | `POST /management/bootcamp-date` | 303 to `/management/settings?bootcamp-date-saved`, or 422 `settingsView` "Enter a valid date (YYYY-MM-DD)." | none | Ordinary form post. Saves `settings.bootcamp_date`, the next Bootcamp Militarizado, which ProjectHephaestus prints on its employer letter and treats as over once the day has passed. |
 | `GET /management/dashboard` | `dashboard.html` | `dashboard-content` | [Dashboard](dashboard.md). |
 | `GET /management/students` | `studentsView` | `studentRecords` + `HX-Replace-Url` | Filters in [Students](students.md). |
-| `GET /management/students/new` | `add-students.html` | none | Add students: one form for a single student and a roster import. `?added={id}` confirms the student just added. |
-| `POST /management/students` | 303 to `/management/students/new?added={id}`, or `add-students.html`: 422 for an invalid group or field, 409 when a PIN was just taken | none | Ordinary form post; adds one staff-added student through `students.Store.Add`. |
-| `POST /management/students/import` | `add-students.html` with the import report, or with the reason: 413 over 2 MB, 422 for a missing or unreadable file or an invalid group, 409 when a PIN was just taken | none | Multipart `.xlsx` or `.csv` roster (`readRoster`), at most 1000 student rows (`maxRosterRows`); rows `Add` refuses come back as a downloadable rows-to-fix workbook (`fixWorkbook`). |
+| `GET /management/students/new` | `addStudentsView` | none | Add students: one form for a single student and a roster import. `?added={id}` confirms the student just added. |
+| `POST /management/students` | 303 to `/management/students/new?added={id}`, or `addStudentsView`: 422 for an invalid group or field, 409 when a PIN was just taken | none | Ordinary form post; adds one staff-added student through `students.Store.Add`. |
+| `POST /management/students/import` | `addStudentsView` with the import report, or with the reason: 413 over 2 MB, 422 for a missing or unreadable file or an invalid group, 409 when a PIN was just taken | none | Multipart `.xlsx` or `.csv` roster (`readRoster`), at most 1000 student rows (`maxRosterRows`); rows `Add` refuses come back as a downloadable rows-to-fix workbook (`fixWorkbook`). |
 | `GET /management/students/{id}` | `studentsView` (details page) | `studentDetail` (dialog) | |
 | `GET`, `POST /management/students/{id}/fields/{field}` | `studentsView` | `studentField`, or `studentSave` after a save | Non-HTMX save answers 303 to `?saved={field}`. |
 | `GET /management/students/{id}/billing` | same fragment | `billingBlock` | Read-only; never calls Stripe. |
@@ -55,15 +55,15 @@ flowchart TD
 
 On the links page `list` also loads `DeclinedEnrollments` (skipped for Trash, which holds no `Awaiting payment` rows) and each `linkRow` carries it, so an `Awaiting payment` enrollment whose first payment was declined shows a "Payment declined" badge next to its status. Billing's change signal refreshes it live ([Live updates](../live-updates.md)).
 
-The links and Trash page (`linksView`, `linkRows`, `linkNotice` in `links.templ`), the Students page (`studentsView` in `students.templ`) and the settings page (`settingsView` in `settings.templ`) are templ views inside the `ui.Staff` layout ([Architecture](../architecture.md)). The other staff templates are parsed together from `templates/*.html`, so `brand`, `account`, `navigation`, `link-icon` and `trash-icon` defined in `staff.html` serve every one of them; `ui.Staff` renders the same brand, navigation and account until each page moves to templ in its Phase C step.
+The links and Trash page (`linksView`, `linkRows`, `linkNotice` in `links.templ`), the Students page (`studentsView` in `students.templ`), the Add students page (`addStudentsView` in `addstudents.templ`) and the settings page (`settingsView` in `settings.templ`) are templ views inside the `ui.Staff` layout ([Architecture](../architecture.md)). The dashboard is the last `html/template` staff page: it is parsed with `staff.html` from `templates/*.html`, whose `brand`, `account`, `navigation`, `link-icon` and `trash-icon` copy `ui.Staff`'s until the dashboard moves to templ in its Phase C step.
 
 | File | Defines |
 |---|---|
 | `links.templ` | `linksView`, `programStart`, `linkRows`, `linkItem`, `enrollmentItem`, `linkNotice`, `timestamp` |
 | `students.templ` | `studentsView`, `studentRecords`, `studentRow`, `studentDetail`, `studentField`, `studentSave`, `billingBlock`, `billingPortal`, `timeOr` |
+| `addstudents.templ` | `addStudentsView`, `addField`, `groupOptions` |
 | `settings.templ` | `settingsView` |
 | `templates/staff.html` | `brand`, `account`, `navigation`, `link-icon`, `trash-icon` |
-| `templates/add-students.html` | `add-students.html` |
 | `templates/dashboard.html` | `dashboard.html`, `dashboard-content` |
 
 ## Response headers
@@ -95,7 +95,7 @@ Every live region re-fetches itself on the `management-changed` event, which com
 | `POST /management/links/{id}/rename`, `/management/program-start-date` and `/management/bootcamp-date` body | 1 KiB and exactly one value (`postedValue`); otherwise 400 for a rename, 422 for a date |
 | `POST /management/settings` body | 1 KiB (`http.MaxBytesReader`) |
 | `POST .../fields/{field}` and `POST /management/students` body | 4 KiB (`readForm`); larger is 413 "This form is too large.", unreadable is 400 "Could not read this form. Please try again." |
-| `POST /management/students/import` body | 2 MB multipart; larger is 413 with "The file is larger than 2 MB." on `add-students.html` |
+| `POST /management/students/import` body | 2 MB multipart; larger is 413 with "The file is larger than 2 MB." on `addStudentsView` |
 | Billing actions (reconcile, reinstatement, portal, invoice) and enrollment cancel | No 5 s handler context around the billing call. Each billing method bounds its own provider work with `providerBudget` (8 s, under the 10 s server write timeout) |
 | Every other handler | 5 s request context (`timed`) |
 | `{id}` and `{obligation}` path values, `?added=` | Must parse as a positive PostgreSQL BIGINT (`pathID`), else the route's not-found answer without a query: 404 for students, 204 or the unchanged page for link and enrollment actions, no confirmation for `?added=` |
@@ -125,9 +125,9 @@ Other POST handlers read no body. `GET /management/events` clears its own write 
 - `internal/management/dashboard.go`: `dashboard`
 - `internal/management/links.templ`: `linksView`, `linkRows`, `linkItem`, `linkNotice`, `timestamp`
 - `internal/management/students.templ`: `studentsView`, `studentRecords`, `studentDetail`, `billingBlock`
+- `internal/management/addstudents.templ`: `addStudentsView`
 - `internal/management/templates/staff.html`: `navigation`, `brand`, `account`
 - `internal/management/templates/dashboard.html`: `dashboard-content`
-- `internal/management/templates/add-students.html`: `add-students.html`
 - `internal/management/settings.templ`: `settingsView`, `settings.js`
 - `internal/auth/http.go`: `Require`
 - `internal/billing/billing.go`: `providerBudget`, `ErrCancelBlocked`
