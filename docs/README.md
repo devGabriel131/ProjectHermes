@@ -19,7 +19,7 @@ This directory contains the architecture, domain, billing, management, and opera
 | Overview | [architecture.md](architecture.md) | How are packages, routes, and middleware assembled? |
 | Overview | [context-map.md](context-map.md) | Which bounded context owns which tables, and how do contexts talk across seams? |
 | Overview | [data-model.md](data-model.md) | How are tables structured and what rules does the DB enforce? |
-| Overview | [testing.md](testing.md) | How is code verified across unit, integration, and load tests? |
+| Overview | [testing.md](testing.md) | How is code verified across unit, integration, and load tests, and CI? |
 | Overview | [go-live.md](go-live.md) | What gaps and open decisions remain before production? |
 | Overview | [staff-auth.md](staff-auth.md) | How do staff authenticate, manage sessions, and use the CLI? |
 | Overview | [live-updates.md](live-updates.md) | How does the server push live event updates to staff browsers? |

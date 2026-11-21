@@ -18,7 +18,7 @@ stripe listen --forward-to http://127.0.0.1:3000/webhooks/stripe
 
 ## Stack
 
-Go 1.27, PostgreSQL 17 via GORM, Stripe Go SDK v87, Argon2id, and HTMX.
+Go 1.27, PostgreSQL 18 via GORM, Stripe Go SDK v87, Argon2id, and HTMX.
 
 ## Where to look
 
