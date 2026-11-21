@@ -2,19 +2,34 @@
 // database, so they run with the unit tests.
 //
 // TestContextRootsImportNoAdapters reads `go list -deps` for each reshaped context root, so it sees every
-// package a root links, direct or transitive, and nothing about what the root does with it. database/sql
-// and SQL drivers other than pgx are not on the forbidden list. Transitive means a root may not import
-// internal/logging today: logging imports net/http and GORM.
+// package a root links, direct or transitive, and nothing about what the root does with it. SQL drivers
+// other than pgx are not on the forbidden list. Transitive means a root may not import internal/logging
+// today: logging imports net/http and GORM.
 //
-// TestContextsTouchOnlyOwnedTables type-checks each package's production files and applies two matchers:
-//   - SQL: in every string literal, an upper-case FROM, JOIN, UPDATE or INTO followed by a lower-case name,
-//     and each further name in a comma list, is a table. A name followed by "(" (a function) or declared as
-//     "name AS (" in the same literal (a CTE) is skipped. Not seen: lower-case keywords, quoted
-//     identifiers, and table names built at run time.
-//   - GORM: an argument whose type is a model from models(), or a pointer, slice or array of one, uses that
-//     model's table when the call is made on a *gorm.DB or takes one as a parameter. Not seen: rows scanned
-//     into a non-model struct, association fields, Preload or Joins by name. Table("name") with a literal
-//     name is seen; a name built at run time is not.
+// TestContextsTouchOnlyOwnedTables type-checks each package's production files and applies three matchers:
+//   - SQL: in every constant string expression (a literal, a constant, or a concatenation of them; a
+//     constant is charged where it is declared and again where it is used), an upper-case FROM, JOIN,
+//     UPDATE, INTO or USING followed by a lower-case name, with an optional alias, and each further name in
+//     a comma list, is a table. After FROM or JOIN a name followed by "(" is a function, and a name declared
+//     as "name AS (" in the same string is a CTE; both are skipped. IS DISTINCT FROM and EXTRACT(...) are
+//     removed first.
+//   - GORM calls: an argument whose type is a model from models(), or a pointer, slice or array of one, uses
+//     that model's table when the call is made on a *gorm.DB or takes one as a parameter; so does a literal
+//     Table("name").
+//   - GORM associations: a model's type declaration uses the table of every model it has a relationship
+//     with, because Preload, Joins and association auto-save read and write through that field.
+//
+// Not seen, so not enforced:
+//   - SQL built at run time (fmt.Sprintf, += on a variable), lower-case keywords, quoted names, LOCK TABLE,
+//     TRUNCATE, COPY, FROM ONLY, clause.From, Table(variable), and a model passed as any. Schema-qualified
+//     names fail closed: public.students reads as the unknown table "public".
+//   - A table inside a statement whose CTE has the same name.
+//   - SQL outside Go. No package embeds .sql today; sqlc's generated Go holds each query as a constant,
+//     which is scanned, so queries.sql must keep upper-case keywords.
+//   - A second reach into the same table from an allowlisted declaration: entries are per declaration.
+//
+// Known false positives fail loudly as a table with no owner: prose with an upper-case keyword before a
+// lower-case word ("UPDATE contract %d failed"), and a lower-case word after a keyword ("DO UPDATE set").
 //
 // SQL is charged to the package whose source holds it, so a caller reaching another context's table through
 // that context's own helper or scope (links.Usable, links.Enroll) is not a reach; the seams replace those
@@ -27,6 +42,7 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/importer"
 	"go/parser"
 	"go/token"
@@ -37,7 +53,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -50,14 +65,14 @@ import (
 var reshapedRoots = []string{}
 
 // rootForbidden reports why a root may not depend on pkg, or "" when it may. sqlc output is any
-// internal/*/*db package of this module.
+// internal/*/*db package of this module. database/sql/driver stays allowed for Valuer and Scanner types.
 func rootForbidden(module, pkg string) string {
 	switch {
-	case pkg == "net/http":
-		return "net/http belongs in <context>web"
+	case pkg == "net/http", pkg == "html/template":
+		return pkg + " belongs in <context>web"
 	case strings.HasPrefix(pkg, "github.com/a-h/templ"):
 		return "templ belongs in <context>web"
-	case strings.HasPrefix(pkg, "github.com/jackc/pgx"), strings.HasPrefix(pkg, "gorm.io/"):
+	case pkg == "database/sql", strings.HasPrefix(pkg, "github.com/jackc/pgx"), strings.HasPrefix(pkg, "gorm.io/"):
 		return "database access belongs in <context>db"
 	case strings.HasPrefix(pkg, module+"/") && sqlcOutput.MatchString(strings.TrimPrefix(pkg, module+"/")):
 		return "sqlc output belongs in <context>db"
@@ -96,6 +111,7 @@ type reach struct{ file, decl, table string }
 // crossContextAllowlist holds today's Billing → Students reaches. Phase F moves each behind a Students seam
 // (Standing, Enrollment lock & enroll) and deletes its line; F9 leaves the list empty. Never add to it.
 var crossContextAllowlist = map[reach]bool{
+	{"internal/billing/models.go", "Contract", "enrollments"}:              true, // → FK only, association field removed
 	{"internal/billing/billing.go", "contractFor", "students"}:             true, // → Profile
 	{"internal/billing/cancel.go", "CancelEnrollment", "enrollments"}:      true, // → CancelEnrollment
 	{"internal/billing/checkout.go", "beginCheckout", "enrollments"}:       true, // → LockEnrollment
@@ -114,7 +130,7 @@ var crossContextAllowlist = map[reach]bool{
 func TestContextRootsImportNoAdapters(t *testing.T) {
 	if len(reshapedRoots) == 0 {
 		t.Skip("no context root is reshaped yet; each reshape adds its root to reshapedRoots, which must then " +
-			"depend on no net/http, templ, pgx, GORM or <context>db package")
+			"depend on no net/http, html/template, templ, database/sql, pgx, GORM or <context>db package")
 	}
 	module := goModule(t)
 	for _, root := range reshapedRoots {
@@ -128,7 +144,7 @@ func TestContextRootsImportNoAdapters(t *testing.T) {
 
 func TestContextsTouchOnlyOwnedTables(t *testing.T) {
 	module := goModule(t)
-	modelTables := modelTables(t)
+	schemas := modelSchemas(t)
 	exports := map[string]string{}
 	var own []goPackage
 	for _, p := range goList(t, "-deps", "-export", "./...") {
@@ -164,7 +180,7 @@ func TestContextsTouchOnlyOwnedTables(t *testing.T) {
 		for _, f := range files {
 			file := filepath.ToSlash(fset.File(f.Pos()).Name())
 			forEachDecl(f, func(decl string, n ast.Node) {
-				for _, use := range tableUses(n, info, modelTables) {
+				for _, use := range tableUses(n, p.ImportPath, info, schemas) {
 					r := reach{file, decl, use.table}
 					owner, known := tableOwners[use.table]
 					switch {
@@ -197,36 +213,44 @@ type tableUse struct {
 	table string
 }
 
+const tableRef = `[a-z_]\w*(?:\s+(?:AS\s+)?[a-z_]\w*)?` // a name and its optional alias
+
 var (
-	sqlTables = regexp.MustCompile(`\b(?:FROM|JOIN|UPDATE|INTO)\s+([a-z_]\w*(?:\s+[a-z_]\w*)?(?:\s*,\s*[a-z_]\w*(?:\s+[a-z_]\w*)?)*)(\s*\()?`)
-	cteName   = regexp.MustCompile(`\b([a-z_]\w*)\s+AS\s*\(`)
+	sqlTables   = regexp.MustCompile(`\b(FROM|JOIN|UPDATE|INTO|USING)\s+(` + tableRef + `(?:\s*,\s*` + tableRef + `)*)(\s*\()?`)
+	cteName     = regexp.MustCompile(`\b([a-z_]\w*)\s+AS\s*\(`)
+	notTableSQL = regexp.MustCompile(`\bIS\s+(?:NOT\s+)?DISTINCT\s+FROM\b|\bEXTRACT\s*\([^)]*\)`)
 )
 
-// tableUses applies both matchers to one declaration.
-func tableUses(n ast.Node, info *types.Info, modelTables map[string]string) []tableUse {
+// tableUses applies the three matchers to one declaration of package pkg.
+func tableUses(n ast.Node, pkg string, info *types.Info, schemas map[string]model) []tableUse {
 	var uses []tableUse
+	if ts, ok := n.(*ast.TypeSpec); ok {
+		for _, table := range schemas[pkg+"."+ts.Name.Name].related {
+			uses = append(uses, tableUse{ts.Pos(), table})
+		}
+	}
 	ast.Inspect(n, func(n ast.Node) bool {
-		switch n := n.(type) {
-		case *ast.BasicLit:
-			if n.Kind == token.STRING {
-				for _, table := range sqlTableNames(n.Value) {
-					uses = append(uses, tableUse{n.Pos(), table})
+		if e, ok := n.(ast.Expr); ok {
+			if tv := info.Types[e]; tv.Value != nil && tv.Value.Kind() == constant.String {
+				for _, table := range sqlTableNames(constant.StringVal(tv.Value)) {
+					uses = append(uses, tableUse{e.Pos(), table})
 				}
+				return false
 			}
-		case *ast.CallExpr:
-			if !isGORMCall(n, info) {
-				break
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !isGORMCall(call, info) {
+			return true
+		}
+		for _, arg := range call.Args {
+			if m, ok := schemas[modelKey(info.TypeOf(arg))]; ok {
+				uses = append(uses, tableUse{arg.Pos(), m.table})
 			}
-			for _, arg := range n.Args {
-				if table, ok := modelTables[modelKey(info.TypeOf(arg))]; ok {
-					uses = append(uses, tableUse{arg.Pos(), table})
-				}
-			}
-			if sel, ok := n.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Table" && len(n.Args) > 0 {
-				if lit, ok := n.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-					if name, err := strconv.Unquote(lit.Value); err == nil && strings.TrimSpace(name) != "" {
-						uses = append(uses, tableUse{lit.Pos(), strings.Fields(name)[0]})
-					}
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Table" && len(call.Args) > 0 {
+			if tv := info.Types[call.Args[0]]; tv.Value != nil && tv.Value.Kind() == constant.String {
+				if name := strings.Fields(constant.StringVal(tv.Value)); len(name) > 0 {
+					uses = append(uses, tableUse{call.Args[0].Pos(), name[0]})
 				}
 			}
 		}
@@ -235,15 +259,17 @@ func tableUses(n ast.Node, info *types.Info, modelTables map[string]string) []ta
 	return uses
 }
 
-func sqlTableNames(literal string) []string {
+func sqlTableNames(sql string) []string {
+	sql = notTableSQL.ReplaceAllString(sql, " ")
 	ctes := map[string]bool{}
-	for _, m := range cteName.FindAllStringSubmatch(literal, -1) {
+	for _, m := range cteName.FindAllStringSubmatch(sql, -1) {
 		ctes[m[1]] = true
 	}
 	var tables []string
-	for _, m := range sqlTables.FindAllStringSubmatch(literal, -1) {
-		items := strings.Split(m[1], ",")
-		if m[2] != "" { // the last name is a function call
+	for _, m := range sqlTables.FindAllStringSubmatch(sql, -1) {
+		items := strings.Split(m[2], ",")
+		// A set-returning function follows FROM or JOIN; after INTO the "(" opens a column list.
+		if m[3] != "" && (m[1] == "FROM" || m[1] == "JOIN") {
 			items = items[:len(items)-1]
 		}
 		for _, item := range items {
@@ -253,6 +279,25 @@ func sqlTableNames(literal string) []string {
 		}
 	}
 	return tables
+}
+
+func TestSQLTableNames(t *testing.T) {
+	for sql, want := range map[string]string{
+		"INSERT INTO students (name) VALUES (?)":                               "students",
+		"INSERT INTO students(name) VALUES (?)":                                "students",
+		"UPDATE enrollments e SET pin = ? FROM links l, async WHERE e.x":       "enrollments links async",
+		"SELECT 1 FROM billing_contracts AS c, students s":                     "billing_contracts students",
+		"DELETE FROM billing_payments p USING students s":                      "billing_payments students",
+		"SELECT * FROM unnest(?) JOIN links USING (id)":                        "links",
+		"WITH slot AS (UPDATE links SET n = 1) SELECT id FROM slot":            "links",
+		"SELECT a IS NOT DISTINCT FROM b, EXTRACT(YEAR FROM created_at)":       "",
+		"SELECT 1 FROM enrollments WHERE id = ? FOR UPDATE SKIP LOCKED":        "enrollments",
+		"JOIN LATERAL (SELECT state FROM billing_checkout_attempts) a ON true": "billing_checkout_attempts",
+	} {
+		if got := strings.Join(sqlTableNames(sql), " "); got != want {
+			t.Errorf("sqlTableNames(%q) = %q, want %q", sql, got, want)
+		}
+	}
 }
 
 func isGORMCall(call *ast.CallExpr, info *types.Info) bool {
@@ -301,18 +346,28 @@ func modelKey(t types.Type) string {
 	}
 }
 
-// modelTables maps each AutoMigrate model to its table, named as GORM names it.
-func modelTables(t *testing.T) map[string]string {
-	tables := map[string]string{}
+type model struct {
+	table   string
+	related []string // tables of the models its fields associate with
+}
+
+// modelSchemas maps each AutoMigrate model to its table and related tables, as GORM names them.
+func modelSchemas(t *testing.T) map[string]model {
+	schemas := map[string]model{}
+	cache := &sync.Map{}
 	for _, m := range models() {
-		s, err := schema.Parse(m, &sync.Map{}, schema.NamingStrategy{})
+		s, err := schema.Parse(m, cache, schema.NamingStrategy{})
 		if err != nil {
 			t.Fatal(err)
 		}
+		var related []string
+		for _, rel := range s.Relationships.Relations {
+			related = append(related, rel.FieldSchema.Table)
+		}
 		typ := reflect.TypeOf(m).Elem()
-		tables[typ.PkgPath()+"."+typ.Name()] = s.Table
+		schemas[typ.PkgPath()+"."+typ.Name()] = model{s.Table, related}
 	}
-	return tables
+	return schemas
 }
 
 // forEachDecl calls fn with each top-level declaration and the name a reach records for it.
