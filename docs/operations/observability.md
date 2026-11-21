@@ -1,6 +1,6 @@
 # Observability
 
-What the application logs, in what shape, what it reports to Sentry, and what it deliberately never sends anywhere. Logging spans four packages, listed in [Architecture](../architecture.md#packages): `internal/logging` (the format, error attributes and labels, stdlib only), `internal/logging/httplog` (requests and Stripe calls), `internal/logging/dblog` (GORM) and `internal/logging/sentrylog` (Sentry). `httplog.Requests` sits at the outer edge of the middleware chain described there; lifecycle events are explained in [Startup and shutdown](startup-shutdown.md); the billing events are produced by the code in [Worker](../billing/worker.md), [Checkout](../billing/checkout.md), [Webhooks](../billing/webhooks.md) and [Withdrawal](../billing/withdrawal.md).
+What the application logs, in what shape, what it reports to Sentry, and what it deliberately never sends anywhere. Logging spans four packages, listed in [Architecture](../architecture.md#packages): `internal/logging` (the format, error attributes and labels, stdlib only), `internal/logging/httplog` (requests and Stripe calls), `internal/logging/dblog` (the pgx query tracer) and `internal/logging/sentrylog` (Sentry). `httplog.Requests` sits at the outer edge of the middleware chain described there; lifecycle events are explained in [Startup and shutdown](startup-shutdown.md); the billing events are produced by the code in [Worker](../billing/worker.md), [Checkout](../billing/checkout.md), [Webhooks](../billing/webhooks.md) and [Withdrawal](../billing/withdrawal.md).
 
 ## Output format
 
@@ -106,9 +106,8 @@ Every event that reports an error builds it with `logging.ErrorAttrs`. It expose
 | `http_server_error` | error | `kind`: `panic`, `accept`, `response_header` or `other` | net/http wrote to its `ErrorLog` |
 | `request_failed` | warn or error | see above | A request failed |
 | `database_slow_summary` | warn | `operation`, `count`, `worst_duration_ms`, `threshold_ms` | A flush found slow queries for a label |
-| `database_pool_wait` | warn | `count`, `total_wait_ms` | A flush found queries that waited for a pooled connection since the previous flush |
+| `database_pool_wait` | warn | `count`, `total_wait_ms` | A flush found queries that waited for a busy pooled connection since the previous flush |
 | `stripe_call_summary` | info | `operation`, `count`, `avg_duration_ms`, `worst_duration_ms` | A flush found Stripe HTTP attempts for a label |
-| `orm_warning` | warn | none | GORM called the logger's `Warn`; the message is discarded |
 | `session_cleanup_failed` | error | error attrs | The 5-minute expired-session delete failed (not logged once shutdown has cancelled the cleanup) |
 | `stripe_webhook_rejected` | warn | error attrs | Signature or payload verification failed; answered 400. Logged at most once a minute so unsigned POSTs cannot flood the log |
 | `staff_login_failed` | warn | none | A sign-in with an unknown username or wrong password; the username is never logged |
@@ -134,9 +133,9 @@ Every event that reports an error builds it with `logging.ErrorAttrs`. It expose
 
 ## Slow-query summaries
 
-`dblog.Logger` is GORM's logger. It never logs SQL, parameters or errors: `Trace` ignores the SQL callback and counts only successful queries slower than 200 ms (`threshold_ms`), per label. `Flush` swaps the counters out and emits at most one `database_slow_summary` per label, sorted by label, so a slow period costs a handful of lines instead of one per query.
+`dblog.Tracer` is the `pgx.QueryTracer` of the one pgx pool (`internal/db`), so it times every query whichever library issued it: GORM and the SCS session store reach the pool through `database/sql` (`stdlib.OpenDBFromPool`). GORM's own logger is `logger.Discard`. The tracer never reads SQL, arguments or rows and never logs errors: `TraceQueryStart` only stamps the start time on the query's context, and `TraceQueryEnd` counts only successful queries slower than 200 ms (`threshold_ms`), per label. `Flush` swaps the counters out and emits at most one `database_slow_summary` per label, sorted by label, so a slow period costs a handful of lines instead of one per query.
 
-GORM starts a statement's clock before it obtains a pooled connection, so a statement's time includes its pool wait, and an autocommit write's time includes its own WAL flush. `BEGIN` and `COMMIT` are not traced: a slow transaction commit never appears, only the transaction's statements (and their row-lock waits) do.
+A query's clock starts once it holds a connection, so its time excludes the pool wait (reported as `database_pool_wait` below). It runs to the end of the server round trip for an exec, and until the rows are closed for a query, so reading the rows counts; an autocommit write's time includes its own WAL flush. `BEGIN`, `COMMIT` and `ROLLBACK` are traced like any statement, under the transaction's label, so a slow commit appears.
 
 A query's label (`logging.Label`) is its request's route pattern (or `unmatched`), else the background operation set with `logging.WithOperation`, else `other`:
 
@@ -151,13 +150,13 @@ A query's label (`logging.Label`) is its request's route pattern (or `unmatched`
 | `startup_catalog` | The Stripe price list at startup (Stripe calls only) |
 | `sentry_check` | `apollo sentry-check` (Sentry events only) |
 
-Flush points are three distinct moments: right after the startup migration, every 30 s while serving, and at process exit. Session reads and writes through the SCS store use the SQL pool directly rather than GORM, so they are not counted.
+Flush points are three distinct moments: right after the startup migration, every 30 s while serving, and at process exit. The SCS store's session reads and writes are counted too, but its `postgresstore` passes no context to `database/sql`, so they carry the label `other`.
 
 ## Pool waits and Stripe calls
 
 Both ride on the same flushes and labels, and split a request's time into the database's, Stripe's and the app's own.
 
-- **Pool waits.** `Logger.WatchPool(sqlDB.Stats)` makes every flush read the pool's cumulative `WaitCount` and `WaitDuration`. When the count grew, one `database_pool_wait` carries the growth since the previous flush. The pool holds 10 connections (`main.go`), and the count includes the session store's queries.
+- **Pool waits.** `Tracer.WatchPool(pool)` makes every flush read the pool's cumulative counters (`pool.Stat()`). `count` is `EmptyAcquireCount` minus `NewConnsCount`: acquires that found all 10 connections busy and waited for one to be released, the saturation `database/sql`'s `WaitCount` counted before. pgx also counts an acquire that opened a new connection as a wait; the pool opens connections on demand and recycles them (pgx defaults: after an hour, or 30 min idle), and subtracting the openings keeps those silent. `total_wait_ms` is the growth of `EmptyAcquireWaitTime`, which cannot be split, so it also holds the time spent opening connections in the same window. When the count grew, one `database_pool_wait` carries the growth since the previous flush. The pool holds 10 connections (`internal/db`), and the count includes the session store's queries.
 - **Stripe calls.** `httplog.StripeTimer` wraps the Stripe client's HTTP transport and times every attempt, SDK retries and failures included, up to the response headers. `Flush` (the 30 s ticker and process exit) emits one `stripe_call_summary` per label. For `POST /customer/{token}/payments`, the request's latency minus `avg_duration_ms` is the app's own share.
 
 ## Sentry
@@ -200,7 +199,7 @@ railway ssh --project <id> --environment <env> --service ProjectHermes -- /app/o
 ## Privacy rules
 
 - Error text never leaves `ErrorAttrs`: only kind, type and a validated SQLSTATE.
-- SQL is never logged. `LogMode`, `Info` and `Error` on the GORM logger do nothing, and `Warn` logs only its name.
+- SQL is never logged. The pgx tracer never reads a query's SQL, arguments or rows, and GORM's own logger is `logger.Discard`.
 - Routes are logged as mux patterns, so `GET /customer/{token}` appears instead of a path, and no query string, header, cookie, IP address or user agent is logged.
 - Methods outside the nine standard verbs are logged as `OTHER`.
 - `http_server_error` keeps only a fixed class; the standard library's diagnostic text, which can include remote addresses, is dropped.
@@ -221,7 +220,8 @@ railway ssh --project <id> --environment <env> --service ProjectHermes -- /app/o
 
 - `internal/logging/logging.go`: `New`, `ErrorAttrs`, `classifyError`, `RequestLevel`, `WithOperation`, `WithRoute`, `Label`
 - `internal/logging/httplog/http.go`: `Requests`, `Routes`, `RecordError`, `RequestID`, `requestID`, `validRequestID`, `requestMethod`, `statusWriter`, `ServerErrorLog`, `serverErrorWriter`
-- `internal/logging/dblog/database.go`: `Logger`, `slowQueryThreshold`, `Trace`, `Flush`, `WatchPool`, `database_slow_summary`, `database_pool_wait`, `orm_warning`
+- `internal/logging/dblog/database.go`: `Tracer`, `slowQueryThreshold`, `TraceQueryStart`, `TraceQueryEnd`, `Flush`, `WatchPool`, `database_slow_summary`, `database_pool_wait`
+- `internal/db/db.go`: `Open`, `maxConns`
 - `internal/logging/httplog/stripe.go`: `StripeTimer`, `NewStripeTimer`, `RoundTrip`, `Flush`, `stripe_call_summary`
 - `internal/logging/sentrylog/sentrylog.go`: `New`, `Options`, `Reporter`, `Handler`, `Middleware`, `Flush`, `LastEventID`, `scrub`, `flatten`
 - `main.go`: `startup_started`, `startup_failed`, `server_listening`, `shutdown_requested`, `shutdown_completed`, `shutdown_failed`, `server_failed`, `sentry_check`, `newLogger`, `checkSentry`, `RAILWAY_SERVICE_NAME`, `SENTRY_DSN`

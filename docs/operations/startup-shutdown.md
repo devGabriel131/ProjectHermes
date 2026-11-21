@@ -12,11 +12,10 @@ flowchart TD
   reporter["sentrylog.New from SENTRY_DSN\nnil when unset: Sentry off"]
   logger["build logger\nservice, environment, version\noptional deployment_id, replica_id\nerror events also to Sentry when on"]
   check["checkSentry: log sentry_check, flush\nprint event ID, exit 0 or 1"]
-  begin["run: startup_started, server only\ndblog.New, NotifyContext SIGINT and SIGTERM"]
+  begin["run: startup_started, server only\ndblog.New (the query tracer), NotifyContext SIGINT and SIGTERM"]
   dsn{"DATABASE_URL set?"}
-  open["gorm.Open\nno ping"]
-  pool["db.DB\npool 10 open, 10 idle"]
-  ping["PingContext\n10 s budget"]
+  open["db.Open: pgx pool of 10 with the tracer\nGORM and the session store on it through database/sql\nno connection yet"]
+  ping["Pool.Ping\n10 s budget"]
   migrate["AutoMigrate models\nsame 10 s budget, then slow.Flush"]
   branch{"args after the binary name?"}
   cli["auth.RunCLI user command\nexit 0 or 1"]
@@ -38,9 +37,8 @@ flowchart TD
   reporter -.->|"sentry_configuration"| fail
   logger -->|"sentry-check"| check
   dsn -->|"no: configuration"| fail
-  dsn -->|"yes"| open --> pool --> ping --> migrate --> branch
+  dsn -->|"yes"| open --> ping --> migrate --> branch
   open -.->|"database_open"| fail
-  pool -.->|"database_pool"| fail
   ping -.->|"database_connect"| fail
   migrate -.->|"database_migrate"| fail
   branch -->|"user ..."| cli
@@ -86,8 +84,8 @@ Consequences:
 |---|---|---|
 | Ping plus `AutoMigrate` | 10 s, one shared budget | `run` |
 | Stripe catalog load | 15 s; the Stripe HTTP client also times out each call at 5 s with up to 2 retries | `run`, `billing.NewStripeClient` |
-| Pool | 10 open, 10 idle connections; shared with the SCS session store | `run`, `auth.New` |
-| GORM | `SkipDefaultTransaction`, `DisableAutomaticPing`; `Logger` is the slow-query logger | `run` |
+| Pool | One pgx pool of 10 connections, opened on demand, each closed after an hour (pgx default) or 30 min idle; GORM and the SCS session store borrow from it through `database/sql`, which keeps no idle connections of its own | `internal/db` |
+| GORM | `SkipDefaultTransaction`, `DisableAutomaticPing`; `Logger` is `logger.Discard`, the pool's tracer times queries instead | `internal/db` |
 | `ReadHeaderTimeout` | 5 s; there is no `ReadTimeout` | `newServer` |
 | `WriteTimeout` | 10 s; event streams replace it per write ([Live updates](../live-updates.md)) | `newServer` |
 | `IdleTimeout` | 60 s | `newServer` |
@@ -125,7 +123,7 @@ sequenceDiagram
   S->>S: log shutdown_completed or shutdown_failed
   S-->>D: serve returns
   D->>W: cancelWorker, then worker.Wait
-  D->>D: sqlDB.Close
+  D->>D: database.Close: database/sql, then the pool, which waits for borrowed connections
   D->>D: stop signal handling, final stripeTimer.Flush and slow.Flush
   D-->>M: run returns
   M->>M: Sentry Flush, at most 2 s (nothing when Sentry is off)
@@ -134,7 +132,8 @@ sequenceDiagram
 Details:
 
 - `Shutdown` closes the listeners and starts the `feed.Close` hook at its beginning; the drain then waits for active connections up to 10 s. If the deadline passes, `server.Close()` is joined into the error and `shutdown_failed` is logged; the process exits 1.
-- The deferred calls unwind last-in first: worker cancel and `Wait`, the catalog context, the final `stripeTimer.Flush`, the migration context, `sqlDB.Close`, `stop`, then the final `slow.Flush`. Then `main` flushes Sentry, so `shutdown_failed` or `server_failed` reaches it before the process exits.
+- The deferred calls unwind last-in first: worker cancel and `Wait`, the catalog context, the final `stripeTimer.Flush`, the migration context, `database.Close`, `stop`, then the final `slow.Flush`. Then `main` flushes Sentry, so `shutdown_failed` or `server_failed` reaches it before the process exits.
+- The pool closes after the server and the workers have stopped, so no query of theirs meets a closed pool. `Pool.Close` waits for every borrowed connection to come back: after a drain that ran out of time, it waits for the handlers `server.Close` left running to finish their queries.
 - A clean shutdown exits 0. A signal during startup cancels the budgeted contexts, so the step in progress fails under its own stage (`database_connect`, `database_migrate` or `billing_catalog`) and the process exits 1.
 - Worker steps run under leases and resume from stored state. A webhook stored during the drain is only an event record that the next worker picks up ([Worker](../billing/worker.md)).
 
@@ -148,10 +147,12 @@ Details:
 - **`RegisterOnShutdown(feed.Close)`.** Event streams never finish on their own. Without the hook `Shutdown` would wait on them until the 10 s drain expired.
 - **Help dispatch before logger and database.** `--help` works offline and without environment variables.
 - **Worker context from the signal context.** The workers stop at once instead of running Stripe calls or a session delete through the drain; their work is resumable.
+- **One pool under every library.** GORM and the SCS store reach the pgx pool through `stdlib.OpenDBFromPool`, so the 10-connection limit and the tracer cover every query while contexts move from GORM to sqlc on pgx.
 
 ## Source
 
 - `main.go`: `main`, `newLogger`, `checkSentry`, `run`, `newApp`, `serve`, `newServer`, `startupError`, `models`, `signalContext`, `cancelWorker`
+- `internal/db/db.go`: `Open`, `DB.Close`, `maxConns`
 - `internal/logging/sentrylog/sentrylog.go`: `New`, `Reporter.Flush`
 - `internal/auth/http.go`: `New`, `Run`, `deleteExpiredSessions`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`

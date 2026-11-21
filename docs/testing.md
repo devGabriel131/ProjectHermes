@@ -63,9 +63,9 @@ To reproduce locally, set up the test database as in [Commands](#commands) and r
 
 ## `testdb`: one schema per test
 
-`testdb.Open(t, models...)` gives each test an isolated database view on the one `TEST_DATABASE_URL` database:
+`testdb.Open(t, models...)` gives each test an isolated database view on the one `TEST_DATABASE_URL` database. `testdb.OpenTraced(t, tracer, models...)` does the same with a pgx query tracer on the pool, as `main` sets `dblog.Tracer`:
 
-1. It generates a schema name `pwtest_<16 hex digits>` and connects with `search_path` set to it, so every query, including those made through `db.DB()`, lands in that schema.
+1. It generates a schema name `pwtest_<16 hex digits>` and opens the pool through `db.Open`, as `main` does, with `search_path` set to that schema, so every query, including those made through `db.DB()`, lands in it.
 2. It runs `CREATE SCHEMA`, then `AutoMigrate(models...)` within a 10 s budget.
 3. Cleanup runs in reverse registration order: it drops the schema first (`DROP SCHEMA ... CASCADE`, 5 s budget, a failure fails the test), then closes the pool.
 
@@ -115,7 +115,7 @@ The route table itself is documented in [Architecture](architecture.md).
 
 ## Deliberate choices
 
-- **`testdb` repeats the production pool limits** (10 open, 10 idle, as in `main.go`), so concurrency tests run under the same connection pressure as the server.
+- **`testdb` opens the production pool** (`db.Open`: 10 connections, GORM and `database/sql` on it), so concurrency tests run under the same connection pressure as the server.
 - **`billingtest` is untagged but test-only.** Importing it from other packages' integration tests needs no build tag; `deadcode` reports it clean because it runs with the integration tag.
 - **Lock tests wait on database state, not time** (`AwaitBlocked`), so they are neither flaky nor slow.
 - **The webhook route is tested through the real handler**, not just the billing package, so a mounting mistake in `main.go` cannot pass unseen.
