@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"projecthermes/internal/logging"
-	"projecthermes/internal/settings"
+	"apollo/internal/logging"
+	"apollo/internal/settings"
 )
 
 // agreement shows the terms and records their acceptance against the program start date the

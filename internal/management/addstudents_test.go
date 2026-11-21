@@ -9,7 +9,7 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
-	"projecthermes/internal/students"
+	"apollo/internal/students"
 )
 
 func TestReadRosterAndFixWorkbookRoundTrip(t *testing.T) {

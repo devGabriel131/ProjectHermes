@@ -13,8 +13,8 @@ import (
 	"github.com/stripe/stripe-go/v87"
 	"gorm.io/gorm"
 
-	"projecthermes/internal/logging"
-	"projecthermes/internal/students"
+	"apollo/internal/logging"
+	"apollo/internal/students"
 )
 
 const (

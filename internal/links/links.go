@@ -17,9 +17,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"projecthermes/internal/puertorico"
-	"projecthermes/internal/settings"
-	"projecthermes/internal/students"
+	"apollo/internal/puertorico"
+	"apollo/internal/settings"
+	"apollo/internal/students"
 )
 
 // pinIndex names Enrollment.Pin's unique index; the struct tag below cannot reference it.

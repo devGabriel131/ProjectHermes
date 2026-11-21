@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"projecthermes/internal/logging"
+	"apollo/internal/logging"
 )
 
 func TestServeLifecycle(t *testing.T) {

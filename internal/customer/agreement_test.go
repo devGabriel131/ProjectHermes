@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"projecthermes/internal/billing"
-	"projecthermes/internal/links"
-	"projecthermes/internal/payments"
-	"projecthermes/internal/settings"
+	"apollo/internal/billing"
+	"apollo/internal/links"
+	"apollo/internal/payments"
+	"apollo/internal/settings"
 )
 
 const agreementDate = "2027-02-28"

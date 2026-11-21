@@ -6,7 +6,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"projecthermes/internal/links"
+	"apollo/internal/links"
 )
 
 // CancelEnrollment revokes an InProgress or AwaitingPayment enrollment or clears an Expired

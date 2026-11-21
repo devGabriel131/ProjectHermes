@@ -11,7 +11,7 @@ import (
 	"github.com/stripe/stripe-go/v87"
 	"gorm.io/gorm"
 
-	"projecthermes/internal/students"
+	"apollo/internal/students"
 )
 
 // Withdraw ends a funded contract for staff, irreversibly: it records the intent (cancel every

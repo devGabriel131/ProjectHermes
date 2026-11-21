@@ -9,7 +9,7 @@ Staff accounts, sign-in, sessions and the `auth.Require` boundary in front of ev
 | `auth.User` | Staff account row: username, Argon2id hash, `AuthVersion`. Managed only by the CLI. |
 | `auth.Session` | Row shape the scs PostgreSQL store expects (`sessions`). |
 | `auth.Manager` | Session configuration, `login`, `logout`, `Require`, and `Run`, the expired-session cleanup ticker. |
-| `auth.RunCLI` | The `projecthermes user ...` commands. |
+| `auth.RunCLI` | The `apollo user ...` commands. |
 | `auth.Staff` | Returns the username `Require` verified, or `""` outside `Require`. |
 
 `POST /management/login` and `POST /management/logout` are registered on the root mux behind `LoadAndSave` only. Everything under `/management/` sits behind `Require`. Customer pages, static files, the favicon and the Stripe webhook never load a session, and the cookie path is `/management/`, so the browser does not send it to them either. A broken `sessions` table therefore stops staff pages (500, never fail-open) and leaves customer pages untouched (`TestPublicCustomerIgnoresStaffSessions`).
@@ -61,7 +61,7 @@ Every `user` command opens the database, then pings it and runs `AutoMigrate` in
 
 ```mermaid
 flowchart TD
-    A["projecthermes args"] --> B{"first argument"}
+    A["apollo args"] --> B{"first argument"}
     B -->|"none"| S["start the web server"]
     B -->|"--help or -h"| H["print auth.Usage, exit 0"]
     B -->|"user, alone or with --help or -h"| H

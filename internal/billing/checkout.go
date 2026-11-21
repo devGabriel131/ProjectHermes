@@ -15,9 +15,9 @@ import (
 	"github.com/stripe/stripe-go/v87"
 	"gorm.io/gorm"
 
-	"projecthermes/internal/links"
-	"projecthermes/internal/logging"
-	"projecthermes/internal/payments"
+	"apollo/internal/links"
+	"apollo/internal/logging"
+	"apollo/internal/payments"
 )
 
 // integrationIdentifier is Stripe's non-unique grouping label for this integration's Checkout

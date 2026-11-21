@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"apollo/internal/billing"
+	"apollo/internal/billing/billingtest"
 	"github.com/stripe/stripe-go/v87"
-	"projecthermes/internal/billing"
-	"projecthermes/internal/billing/billingtest"
 )
 
 func TestConfigValidation(t *testing.T) {

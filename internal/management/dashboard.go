@@ -4,10 +4,10 @@ import (
 	"net/http"
 	"time"
 
-	"projecthermes/internal/billing"
-	"projecthermes/internal/links"
-	"projecthermes/internal/logging"
-	"projecthermes/internal/students"
+	"apollo/internal/billing"
+	"apollo/internal/links"
+	"apollo/internal/logging"
+	"apollo/internal/students"
 )
 
 // dashboardWindow is how far the dashboard looks back at enrollment and ahead at

@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"projecthermes/internal/billing"
-	"projecthermes/internal/links"
-	"projecthermes/internal/logging"
-	"projecthermes/internal/payments"
-	"projecthermes/internal/puertorico"
-	"projecthermes/internal/settings"
-	"projecthermes/internal/students"
+	"apollo/internal/billing"
+	"apollo/internal/links"
+	"apollo/internal/logging"
+	"apollo/internal/payments"
+	"apollo/internal/puertorico"
+	"apollo/internal/settings"
+	"apollo/internal/students"
 )
 
 //go:embed templates/*.html

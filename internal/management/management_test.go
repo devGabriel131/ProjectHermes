@@ -19,16 +19,16 @@ import (
 	"testing"
 	"time"
 
+	"apollo/internal/auth"
+	"apollo/internal/billing"
+	"apollo/internal/billing/billingtest"
+	"apollo/internal/links"
+	"apollo/internal/logging"
+	"apollo/internal/settings"
+	"apollo/internal/students"
+	"apollo/internal/testdb"
 	"github.com/alexedwards/argon2id"
 	"gorm.io/gorm"
-	"projecthermes/internal/auth"
-	"projecthermes/internal/billing"
-	"projecthermes/internal/billing/billingtest"
-	"projecthermes/internal/links"
-	"projecthermes/internal/logging"
-	"projecthermes/internal/settings"
-	"projecthermes/internal/students"
-	"projecthermes/internal/testdb"
 )
 
 var htmxHeader = http.Header{"Hx-Request": {"true"}}

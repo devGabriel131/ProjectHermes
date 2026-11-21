@@ -14,8 +14,8 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
-	"projecthermes/internal/logging"
-	"projecthermes/internal/students"
+	"apollo/internal/logging"
+	"apollo/internal/students"
 )
 
 // Roster columns by position (Socrative roster export). Later columns are ignored,

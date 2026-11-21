@@ -17,13 +17,13 @@ import (
 	"github.com/alexedwards/argon2id"
 	"gorm.io/gorm"
 
-	"projecthermes/internal/auth"
-	"projecthermes/internal/billing"
-	"projecthermes/internal/billing/billingtest"
-	"projecthermes/internal/links"
-	"projecthermes/internal/live"
-	"projecthermes/internal/logging"
-	"projecthermes/internal/testdb"
+	"apollo/internal/auth"
+	"apollo/internal/billing"
+	"apollo/internal/billing/billingtest"
+	"apollo/internal/links"
+	"apollo/internal/live"
+	"apollo/internal/logging"
+	"apollo/internal/testdb"
 )
 
 // unknownToken has a valid customer-token shape but matches no link.

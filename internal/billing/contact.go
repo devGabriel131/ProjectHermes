@@ -6,8 +6,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"projecthermes/internal/links"
-	"projecthermes/internal/students"
+	"apollo/internal/links"
+	"apollo/internal/students"
 )
 
 // TouchContract marks the funded contract behind enrollmentID due now and wakes the billing worker, so a

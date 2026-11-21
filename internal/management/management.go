@@ -12,12 +12,12 @@ import (
 	"strconv"
 	"time"
 
-	"projecthermes/internal/billing"
-	"projecthermes/internal/links"
-	"projecthermes/internal/logging"
-	"projecthermes/internal/payments"
-	"projecthermes/internal/settings"
-	"projecthermes/internal/students"
+	"apollo/internal/billing"
+	"apollo/internal/links"
+	"apollo/internal/logging"
+	"apollo/internal/payments"
+	"apollo/internal/settings"
+	"apollo/internal/students"
 )
 
 //go:embed templates/*.html

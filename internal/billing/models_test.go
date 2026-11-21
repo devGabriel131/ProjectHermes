@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"projecthermes/internal/billing"
-	"projecthermes/internal/links"
-	"projecthermes/internal/students"
-	"projecthermes/internal/testdb"
+	"apollo/internal/billing"
+	"apollo/internal/links"
+	"apollo/internal/students"
+	"apollo/internal/testdb"
 )
 
 func TestBillingModelsMigration(t *testing.T) {

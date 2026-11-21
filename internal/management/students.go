@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"projecthermes/internal/billing"
-	"projecthermes/internal/logging"
-	"projecthermes/internal/students"
+	"apollo/internal/billing"
+	"apollo/internal/logging"
+	"apollo/internal/students"
 )
 
 type studentFieldView struct {

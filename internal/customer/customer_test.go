@@ -20,15 +20,15 @@ import (
 	"testing"
 	"time"
 
+	"apollo/internal/billing"
+	"apollo/internal/billing/billingtest"
+	"apollo/internal/links"
+	"apollo/internal/logging"
+	"apollo/internal/settings"
+	"apollo/internal/students"
+	"apollo/internal/testdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"projecthermes/internal/billing"
-	"projecthermes/internal/billing/billingtest"
-	"projecthermes/internal/links"
-	"projecthermes/internal/logging"
-	"projecthermes/internal/settings"
-	"projecthermes/internal/students"
-	"projecthermes/internal/testdb"
 )
 
 // later keeps test links usable for any test's duration.

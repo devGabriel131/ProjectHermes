@@ -9,9 +9,9 @@ The repository carries no Dockerfile, `railway.json` or Nixpacks file; its only 
 | Item | Value |
 |---|---|
 | Project | `amused-light` `[EXTERNAL]`; its ID is hard-coded in `user.fish` |
-| Service | `ProjectHermes` (`user.fish`; also the log fallback in `main.go`) |
+| Service | `ProjectHermes`, the name `user.fish` targets; the log field `service` reads it from `RAILWAY_SERVICE_NAME` |
 | Environment | `production`, the `user.fish` default. It is test-only: use no real customer or payment data ([AGENTS.md](../../AGENTS.md#production-ready-false)) |
-| Build | Railpack from GitHub `devGabriel131/ProjectHermes`, branch `master` `[EXTERNAL]` |
+| Build | Railpack from GitHub `devGabriel131/Apollo`, branch `master` `[EXTERNAL]` |
 | Deploy trigger | every push to `master` `[EXTERNAL]`; push only with approval ([AGENTS.md](../../AGENTS.md#railway)) |
 | Binary | `/app/out`, the path `user.fish` runs `[EXTERNAL]` |
 | Database | Railway PostgreSQL service `Postgres`, image `postgres-ssl:18` `[EXTERNAL]` |

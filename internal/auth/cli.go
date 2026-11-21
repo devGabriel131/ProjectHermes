@@ -16,12 +16,12 @@ import (
 // Usage documents every command. Passwords are only read from hidden terminal
 // prompts, never from arguments, environment variables, or piped input.
 const Usage = `Usage:
-  projecthermes                         Start the web server.
-  projecthermes user add <username>     Create a staff account.
-  projecthermes user passwd <username>  Change a password and sign out its sessions.
-  projecthermes user revoke <username>  Sign out every session for an account.
-  projecthermes user remove <username>  Delete an account.
-  projecthermes user list               List account usernames.
+  apollo                         Start the web server.
+  apollo user add <username>     Create a staff account.
+  apollo user passwd <username>  Change a password and sign out its sessions.
+  apollo user revoke <username>  Sign out every session for an account.
+  apollo user remove <username>  Delete an account.
+  apollo user list               List account usernames.
 
 Usernames are 1-64 ASCII letters, digits, ".", "_" or "-" and are case-insensitive.
 Passwords: at least 4 characters, at most 1024 bytes; entered twice at a hidden terminal prompt.

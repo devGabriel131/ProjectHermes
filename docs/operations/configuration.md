@@ -19,7 +19,7 @@ The application never loads a `.env` file itself; locally, Air injects `.env` (`
 | `INSTALLMENT_SPACING` | server only | unset: monthly due dates | Optional. A positive Go duration such as `15m`; refused when `STRIPE_MODE=live`. Sandbox testing only: installment *i* falls due `i × INSTALLMENT_SPACING` after funding instead of on monthly midnights ([Billing overview](../billing/overview.md#due-dates)) | `configuration` |
 | `INSTALLMENT_RETRY_DELAY` | server only | unset: 24 h | Optional. A positive Go duration such as `24h`: how long after a failure, and between retries, the app pays a failed later installment again, at most twice ([Invoices](../billing/invoices.md#retrying-a-failed-installment)) | `billing_configuration` |
 | `TEST_DATABASE_URL` | integration tests only (`-tags=integration`) | none; the test fails | Must parse as a URL with a host and scheme `postgres` or `postgresql`; use a dedicated database | none (test failure) |
-| `RAILWAY_SERVICE_NAME` | server, `user` CLI (log field `service`) | `ProjectHermes` | None | never fails |
+| `RAILWAY_SERVICE_NAME` | server, `user` CLI (log field `service`) | `Apollo` | None | never fails |
 | `RAILWAY_ENVIRONMENT_NAME` | server, `user` CLI (log field `environment`) | `local` | None | never fails |
 | `RAILWAY_GIT_COMMIT_SHA` | server, `user` CLI (log field `version`) | `unknown` | None | never fails |
 | `RAILWAY_DEPLOYMENT_ID` | server, `user` CLI (log field `deployment_id`) | field omitted when unset | None | never fails |

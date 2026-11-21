@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"projecthermes/internal/puertorico"
-	"projecthermes/internal/students"
+	"apollo/internal/puertorico"
+	"apollo/internal/students"
 )
 
 func TestFieldParsersRespectNormalizationAndDraftBoundaries(t *testing.T) {

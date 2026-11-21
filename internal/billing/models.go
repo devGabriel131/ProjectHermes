@@ -3,7 +3,7 @@ package billing
 import (
 	"time"
 
-	"projecthermes/internal/links"
+	"apollo/internal/links"
 )
 
 // TableName overrides for billing models.

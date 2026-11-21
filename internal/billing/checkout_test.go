@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
+	"apollo/internal/billing"
+	"apollo/internal/billing/billingtest"
+	"apollo/internal/links"
+	"apollo/internal/students"
+	"apollo/internal/testdb"
 	"gorm.io/gorm"
-	"projecthermes/internal/billing"
-	"projecthermes/internal/billing/billingtest"
-	"projecthermes/internal/links"
-	"projecthermes/internal/students"
-	"projecthermes/internal/testdb"
 )
 
 type mockStripeServer struct {

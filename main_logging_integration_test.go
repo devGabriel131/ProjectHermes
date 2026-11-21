@@ -19,13 +19,13 @@ import (
 
 	"gorm.io/gorm"
 
-	"projecthermes/internal/auth"
-	"projecthermes/internal/billing/billingtest"
-	"projecthermes/internal/links"
-	"projecthermes/internal/logging"
-	"projecthermes/internal/settings"
-	"projecthermes/internal/students"
-	"projecthermes/internal/testdb"
+	"apollo/internal/auth"
+	"apollo/internal/billing/billingtest"
+	"apollo/internal/links"
+	"apollo/internal/logging"
+	"apollo/internal/settings"
+	"apollo/internal/students"
+	"apollo/internal/testdb"
 )
 
 const (
