@@ -236,6 +236,10 @@ func TestFieldParsersRespectNormalizationAndDraftBoundaries(t *testing.T) {
 			for _, tc := range parser.cases {
 				t.Run(tc.name, func(t *testing.T) {
 					got, err := parser.parse(tc.raw, tc.required)
+					// ParseDateOfBirth reads its own clock; a case that ran past Puerto Rico midnight has stale expectations.
+					if time.Now().In(puertorico.Zone).Format(time.DateOnly) != relative(0, 0) {
+						t.Skip("crossed midnight in Puerto Rico after the cases were built")
+					}
 					if got != tc.want {
 						t.Fatalf("parsed %q, want %q", got, tc.want)
 					}
