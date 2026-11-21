@@ -4,11 +4,12 @@
 package live
 
 import (
-	"apollo/internal/logging/httplog"
 	"io"
 	"net/http"
 	"sync"
 	"time"
+
+	"apollo/internal/logging/httplog"
 )
 
 // heartbeat keeps proxies from closing quiet streams; Railway's cutoff is five

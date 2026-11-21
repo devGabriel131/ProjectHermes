@@ -28,7 +28,6 @@ import (
 	"apollo/internal/settings"
 	"apollo/internal/students"
 	"apollo/internal/testdb"
-
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )

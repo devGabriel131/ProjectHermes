@@ -28,7 +28,6 @@ import (
 	"apollo/internal/settings"
 	"apollo/internal/students"
 	"apollo/internal/testdb"
-
 	"github.com/alexedwards/argon2id"
 	"gorm.io/gorm"
 )

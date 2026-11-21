@@ -3,11 +3,12 @@
 //
 // TestContextRootsImportNoAdapters reads `go list -deps` for each reshaped context root, so it sees every
 // package a root links, direct or transitive, and nothing about what the root does with it. SQL drivers
-// other than pgx are not on the forbidden list. Transitive means a root may not import internal/logging
-// today: its ErrorAttrs matches database/sql's ErrTxDone and ErrConnDone.
+// other than pgx are not on the forbidden list. database/sql is judged by who imports it: internal/logging
+// may, for the sentinels ErrorAttrs matches, so roots can log through it; any other package in the closure
+// that imports database/sql directly fails.
 //
-// TestLoggingCoreImportsNoAdapters holds internal/logging, the one logging package meant for every caller,
-// to the same rule with that one database/sql exception, so net/http and GORM stay in httplog and dblog.
+// TestLoggingCoreImportsNoAdapters holds internal/logging to the root rule, so net/http and GORM stay in
+// httplog and dblog.
 //
 // TestContextsTouchOnlyOwnedTables type-checks each package's production files and applies three matchers:
 //   - SQL: in every constant string expression (a literal, a constant, or a concatenation of them; a
@@ -57,6 +58,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -134,12 +136,20 @@ var crossContextAllowlist = map[reach]bool{
 func TestContextRootsImportNoAdapters(t *testing.T) {
 	if len(reshapedRoots) == 0 {
 		t.Skip("no context root is reshaped yet; each reshape adds its root to reshapedRoots, which must then " +
-			"depend on no net/http, html/template, templ, database/sql, pgx, GORM or <context>db package")
+			"depend on no net/http, html/template, templ, pgx, GORM or <context>db package, and import " +
+			"database/sql nowhere but through internal/logging")
 	}
 	module := goModule(t)
 	for _, root := range reshapedRoots {
 		for _, p := range goList(t, "-deps", "./"+root) {
-			if why := rootForbidden(module, p.ImportPath); why != "" {
+			why := rootForbidden(module, p.ImportPath)
+			if p.ImportPath == "database/sql" {
+				why = "" // linked by internal/logging for its sentinels; a direct import is caught below
+			}
+			if p.ImportPath != module+"/internal/logging" && slices.Contains(p.Imports, "database/sql") {
+				why = "it imports database/sql: database access belongs in <context>db"
+			}
+			if why != "" {
 				t.Errorf("%s depends on %s: %s", root, p.ImportPath, why)
 			}
 		}
@@ -405,13 +415,13 @@ func forEachDecl(f *ast.File, fn func(decl string, n ast.Node)) {
 
 type goPackage struct {
 	ImportPath, Export string
-	GoFiles            []string
+	GoFiles, Imports   []string
 	Module             *struct{ Path string }
 }
 
 func goList(t *testing.T, args ...string) []goPackage {
 	t.Helper()
-	out, err := exec.Command("go", append([]string{"list", "-json=ImportPath,Export,GoFiles,Module"}, args...)...).Output()
+	out, err := exec.Command("go", append([]string{"list", "-json=ImportPath,Export,GoFiles,Module,Imports"}, args...)...).Output()
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {

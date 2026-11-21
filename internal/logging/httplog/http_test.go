@@ -268,7 +268,7 @@ func onlyRequestEvent(t *testing.T, data []byte) map[string]any {
 	return events[0]
 }
 
-const loggingPrivateMarker = "PRIVATE_sql_cookie_password_token@example.invalid"
+const serverLogPrivateMarker = "PRIVATE_sql_cookie_password_token@example.invalid"
 
 func TestServerErrorLogPrivacy(t *testing.T) {
 	t.Parallel()
@@ -277,15 +277,15 @@ func TestServerErrorLogPrivacy(t *testing.T) {
 		record string
 		kind   string
 	}{
-		{name: "panic", record: "http: panic serving 192.0.2.1:4321: " + loggingPrivateMarker + "\ngoroutine 45 [running]:\nprivateHandler()\n\tprivate.go:42\n", kind: "panic"},
-		{name: "accept", record: "http: Accept error: " + loggingPrivateMarker + " 192.0.2.1:4321; retrying in 5ms\nprivate.go:42", kind: "accept"},
-		{name: "superfluous header", record: "http: superfluous response.WriteHeader call from " + loggingPrivateMarker + " (private.go:42)\nprivate stack", kind: "response_header"},
-		{name: "hijacked header", record: "http: response.WriteHeader on hijacked connection from " + loggingPrivateMarker + " (private.go:42)\nprivate stack", kind: "response_header"},
-		{name: "content length", record: "http: invalid Content-Length of " + loggingPrivateMarker + "\nprivate stack", kind: "response_header"},
-		{name: "transfer encoding", record: "http: WriteHeader called with both Transfer-Encoding of " + loggingPrivateMarker + " and a Content-Length of 99\nprivate stack", kind: "response_header"},
-		{name: "TLS", record: "http: TLS handshake error from 192.0.2.1:4321: " + loggingPrivateMarker + "\nprivate.go:42", kind: "other"},
-		{name: "embedded prefix", record: loggingPrivateMarker + "\nhttp: panic serving 192.0.2.1:4321: panic\nprivate.go:42", kind: "other"},
-		{name: "unknown", record: loggingPrivateMarker + "\nprivate.go:42", kind: "other"},
+		{name: "panic", record: "http: panic serving 192.0.2.1:4321: " + serverLogPrivateMarker + "\ngoroutine 45 [running]:\nprivateHandler()\n\tprivate.go:42\n", kind: "panic"},
+		{name: "accept", record: "http: Accept error: " + serverLogPrivateMarker + " 192.0.2.1:4321; retrying in 5ms\nprivate.go:42", kind: "accept"},
+		{name: "superfluous header", record: "http: superfluous response.WriteHeader call from " + serverLogPrivateMarker + " (private.go:42)\nprivate stack", kind: "response_header"},
+		{name: "hijacked header", record: "http: response.WriteHeader on hijacked connection from " + serverLogPrivateMarker + " (private.go:42)\nprivate stack", kind: "response_header"},
+		{name: "content length", record: "http: invalid Content-Length of " + serverLogPrivateMarker + "\nprivate stack", kind: "response_header"},
+		{name: "transfer encoding", record: "http: WriteHeader called with both Transfer-Encoding of " + serverLogPrivateMarker + " and a Content-Length of 99\nprivate stack", kind: "response_header"},
+		{name: "TLS", record: "http: TLS handshake error from 192.0.2.1:4321: " + serverLogPrivateMarker + "\nprivate.go:42", kind: "other"},
+		{name: "embedded prefix", record: serverLogPrivateMarker + "\nhttp: panic serving 192.0.2.1:4321: panic\nprivate.go:42", kind: "other"},
+		{name: "unknown", record: serverLogPrivateMarker + "\nprivate.go:42", kind: "other"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -303,7 +303,7 @@ func TestServerErrorLogPrivacy(t *testing.T) {
 			if len(event) != 4 || event["level"] != "error" || event["message"] != "http_server_error" || event["kind"] != tc.kind {
 				t.Fatalf("unexpected server diagnostic: %v", event)
 			}
-			for _, forbidden := range []string{loggingPrivateMarker, "192.0.2.1", "private.go", "goroutine", "privateHandler", "private stack"} {
+			for _, forbidden := range []string{serverLogPrivateMarker, "192.0.2.1", "private.go", "goroutine", "privateHandler", "private stack"} {
 				if bytes.Contains(out.Bytes(), []byte(forbidden)) {
 					t.Errorf("serialized raw diagnostic content %q", forbidden)
 				}
