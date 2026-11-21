@@ -25,7 +25,7 @@ flowchart LR
         air["go tool air\nenv_files .env"]
         app["tmp/main\n127.0.0.1:3000"]
         listen["stripe listen"]
-        pg[("postgres:17\n127.0.0.1:5432")]
+        pg[("postgres:18\n127.0.0.1:5432")]
     end
     air -->|"builds and runs"| app
     customer -->|"/customer/{token}"| app
@@ -41,7 +41,20 @@ flowchart LR
 
 ## Database
 
-[compose.yaml](../../compose.yaml) runs one `db` service, `postgres:17`, published only on `127.0.0.1:5432` with database `hermes` and user and password `postgres`. Data lives in the named volume `postgres_data`, so it survives `docker compose down`; `docker compose down --volumes` discards it. `--wait` blocks until `pg_isready` passes (checked every 2 s, up to 15 retries).
+[compose.yaml](../../compose.yaml) runs one `db` service, `postgres:18` pinned to the same digest as CI ([Testing](../testing.md#ci)), published only on `127.0.0.1:5432` with database `hermes` and user and password `postgres`. Data lives in the named volume `postgres18_data`, mounted at `/var/lib/postgresql` (Postgres 18 keeps its cluster in the versioned subdirectory `18/docker`), so it survives `docker compose down`; `docker compose down --volumes` discards it. `--wait` blocks until `pg_isready` passes (checked every 2 s, up to 15 retries).
+
+Compose used to run `postgres:17` with the volume `postgres_data`. Postgres 18 cannot start on a 17 data directory, so the 18 service uses a new volume and leaves the old one untouched. Once you no longer need the old data, drop it from the repository root (Compose prefixes the volume with the project name, the lowercased directory name):
+
+```fish
+docker volume rm (string lower (basename $PWD))_postgres_data
+```
+
+The new volume starts empty, holding only `hermes`. If you set up the integration test database before, re-create `hermes_test` on it, or every integration test fails in `testdb.Open` ([Testing](../testing.md#commands)):
+
+```fish
+docker compose up --detach --wait --wait-timeout 90 db
+docker compose exec -T db createdb -U postgres hermes_test
+```
 
 The app creates its own tables: startup runs `AutoMigrate` ([Startup and shutdown](startup-shutdown.md)). Mock data may be dropped freely ([AGENTS.md](../../AGENTS.md#production-ready-false)).
 
@@ -99,7 +112,7 @@ Every open links, Trash, students or dashboard page holds one server-sent-event 
 
 ## Source
 
-- `compose.yaml`: `postgres:17`, `POSTGRES_DB`, `postgres_data`, `pg_isready`
+- `compose.yaml`: `postgres:18@sha256:…`, `POSTGRES_DB`, `postgres18_data`, `pg_isready`
 - `.air.toml`: `env_files`, `entrypoint`, `include_ext`, `exclude_dir`
 - `.env.example`: `DATABASE_URL`, `SESSION_COOKIE_SECURE`, `STRIPE_WEBHOOK_SECRET`, `PUBLIC_BASE_URL`
 - `main.go`: `assets`, `run`, `newServer`, `models`
