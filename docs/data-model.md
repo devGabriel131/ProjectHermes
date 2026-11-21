@@ -160,7 +160,7 @@ A concurrent race between `Submit` and `Enroll` can still see the PIN free under
 
 ## Migrations
 
-goose (`github.com/pressly/goose/v3`, used as a library; production has no goose CLI) owns the schema. The numbered SQL files in `internal/db/migrations/` are embedded in the binary, and `db.Migrate` applies the pending ones at server startup ([Startup and shutdown](operations/startup-shutdown.md)): each in its own transaction, under a session advisory lock keyed by the current schema, recording each version in that schema's `goose_db_version`. goose creates `goose_db_version` before it takes the lock, so the first start of two replicas at once logs a harmless `already exists` error in Postgres, which goose retries. There is no down step: rollback is redeploying the previous binary, so a migration only adds what that binary can ignore, and a drop waits one release.
+goose (`github.com/pressly/goose/v3`, used as a library; production has no goose CLI) owns the schema. The numbered SQL files in `internal/db/migrations/` are embedded in the binary, and `db.Migrate` applies the pending ones at server startup ([Startup and shutdown](operations/startup-shutdown.md)): each in its own transaction, under a session advisory lock keyed by the current schema, recording each version in that schema's `goose_db_version`. goose creates `goose_db_version` before it takes the lock, so the first start of two replicas at once logs harmless errors in Postgres, which goose retries: `duplicate key value violates unique constraint "pg_type_typname_nsp_index"` (or `"pg_class_relname_nsp_index"`), sometimes `relation "goose_db_version" already exists`. There is no down step: rollback is redeploying the previous binary, so a migration only adds what that binary can ignore, and a drop waits one release.
 
 **Version 1 is the baseline.** `00001_baseline.sql` is the schema GORM `AutoMigrate` built before goose: `pg_dump --schema-only --no-owner --no-privileges` of a fresh database, without `SET` lines, comments or the `public.` qualifier, so it creates in the current schema. A Go migration in `migrate.go` runs it instead of goose's SQL runner so that it can adopt a database `AutoMigrate` already built. It checks the twelve baseline tables in the current schema:
 
@@ -177,7 +177,7 @@ Other tables, such as ProjectHephaestus's `hephaestus_*` in the shared productio
 1. Add `internal/db/migrations/<next number, five digits>_<what>.sql` starting with `-- +goose Up`. Never edit a migration that has shipped: goose skips versions it has recorded.
 2. It runs inside the 10 s startup budget it shares with the ping and the lock wait; a slower migration needs its own budget first, or every deploy fails with `database_migrate`.
 3. A GORM model field ships with its migration or after it, never before: integration tests run on the migrated schema (`testdb`), so a field without its column fails CI.
-4. A new table gets its owner in `tableOwners` and [Context map](context-map.md); `TestMigrationTablesHaveOwners` fails on a created table without one. A new GORM model joins `gormModels()` in `architecture_test.go`, or the ownership test cannot see its GORM calls.
+4. A new table, or a table renamed with `ALTER TABLE … RENAME TO`, gets its owner in `tableOwners` and [Context map](context-map.md); `TestMigrationTablesHaveOwners` fails on a created or renamed-to table without one. A new GORM model joins `gormModels()` in `architecture_test.go`, or the ownership test cannot see its GORM calls.
 5. Update the diagram and the table inventory above.
 
 ## Source

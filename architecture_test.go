@@ -29,8 +29,8 @@
 //     names fail closed: public.students reads as the unknown table "public".
 //   - A table inside a statement whose CTE has the same name.
 //   - SQL outside Go. Only internal/db embeds .sql, the migrations, whose DDL no context owns;
-//     TestMigrationTablesHaveOwners holds every table they create to tableOwners. sqlc's generated Go holds
-//     each query as a constant, which is scanned, so queries.sql must keep upper-case keywords.
+//     TestMigrationTablesHaveOwners holds every table they create or rename to tableOwners. sqlc's generated
+//     Go holds each query as a constant, which is scanned, so queries.sql must keep upper-case keywords.
 //   - A second reach into the same table from an allowlisted declaration: entries are per declaration.
 //   - GORM many-to-many join tables: a relationship charges only the related model's table. None exist today.
 //
@@ -331,22 +331,30 @@ func TestSQLTableNames(t *testing.T) {
 	}
 }
 
-// TestMigrationTablesHaveOwners fails on a table a migration creates that no context owns, so the ownership
-// test can charge every reach into it. Schema-qualified names fail closed, as in the SQL matcher.
+// TestMigrationTablesHaveOwners fails on a table a migration creates (CREATE TABLE) or renames to (ALTER TABLE
+// ... RENAME TO) that no context owns, so the ownership test can charge every reach into it. Comments are
+// skipped, unquoted names fold to lower case as Postgres folds them, and schema-qualified names fail closed,
+// as in the SQL matcher.
 func TestMigrationTablesHaveOwners(t *testing.T) {
 	files, err := filepath.Glob("internal/db/migrations/*.sql")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no migrations found: %v", err)
 	}
-	createTable := regexp.MustCompile(`(?i)\bCREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)`)
+	comments := regexp.MustCompile(`(?s)/\*.*?\*/|--[^\n]*`)
+	tableName := regexp.MustCompile(`(?i)\b(?:CREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?|` +
+		`ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?[\w."]+\s+RENAME\s+TO\s+)("?)(\w+)`)
 	for _, file := range files {
 		sql, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, m := range createTable.FindAllSubmatch(sql, -1) {
-			if _, owned := tableOwners[string(m[1])]; !owned {
-				t.Errorf("%s: table %q has no owner; add it to the table-ownership map in docs/context-map.md and tableOwners", file, m[1])
+		for _, m := range tableName.FindAllSubmatch(comments.ReplaceAll(sql, nil), -1) {
+			name := string(m[2])
+			if len(m[1]) == 0 {
+				name = strings.ToLower(name)
+			}
+			if _, owned := tableOwners[name]; !owned {
+				t.Errorf("%s: table %q has no owner; add it to the table-ownership map in docs/context-map.md and tableOwners", file, name)
 			}
 		}
 	}
