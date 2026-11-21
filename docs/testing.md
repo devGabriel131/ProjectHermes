@@ -1,6 +1,6 @@
 # Testing
 
-How the app is verified: the automated layers and their commands, the helpers that isolate them (`testdb`, `billingtest`), what stays manual, and what no test covers today. Load scripts are documented in [loadtest/README.md](../loadtest/README.md); local setup is in [Local development](operations/local-development.md).
+How the app is verified: the automated layers and their commands, the [CI](#ci) workflow that runs them on every push, the helpers that isolate them (`testdb`, `billingtest`), what stays manual, and what no test covers today. Load scripts are documented in [loadtest/README.md](../loadtest/README.md); local setup is in [Local development](operations/local-development.md).
 
 ## Layers
 
@@ -45,6 +45,21 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 - With `TEST_DATABASE_URL` unset or not a PostgreSQL URL, an integration test **fails** (`testdb.Open` calls `t.Fatal`); it never silently skips.
 - `deadcode` runs with `-test -tags=integration` so helpers used only by integration tests (`billingtest`, `testdb`) count as used.
 - The `@latest` tools are fetched on first run.
+
+## CI
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs one job on every pull request and every push to `master`, on the Go version from `go.mod` with a `postgres:18` service container (production's major version, [Railway](operations/railway.md)) holding `hermes_test` (the `TEST_DATABASE_URL` above). Steps, in order; each fails the run except `gosec`, and the two scanners run even after an earlier step fails:
+
+| Step | Command |
+|---|---|
+| Format | `gofmt -l .` must print nothing |
+| Vet | `go vet -tags=integration ./...` |
+| Build | `go build ./...` |
+| Tests | `go test -race -tags=integration -count=1 ./...` |
+| Vulnerabilities | `go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 -tags=integration -test ./...` |
+| SAST, report only | `go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 -quiet -tags=integration ./...`; findings appear in the step log and as a warning on the run page, and are triaged by hand |
+
+To reproduce locally, set up the test database as in [Commands](#commands) and run the same commands; Compose still runs `postgres:17`, so only CI tests against 18. The workflow reads only repository contents (`permissions: contents: read`), uses no secrets, pins its actions to commit SHAs and its Postgres image to a digest, and cancels a pull request's run when a newer push to that pull request supersedes it; each `master` commit runs in its own concurrency group, so none is cancelled. Whether a red run blocks a merge or a Railway deploy is set outside the repository `[EXTERNAL]`: branch protection on `master` and Railway's "Wait for CI".
 
 ## `testdb`: one schema per test
 
@@ -141,3 +156,4 @@ Tests do not prove randomness statistically. No test proves these browser checks
 - `internal/students/students_test.go`: `Filter`
 - `loadtest/lib.js`: `BASE_URL`, `BASE`
 - `compose.yaml`: `POSTGRES_DB`
+- `.github/workflows/ci.yml`: `check`, `TEST_DATABASE_URL`
