@@ -1,4 +1,6 @@
-package logging
+// Package dblog is GORM's logger: slow-query and pool-wait summaries in the shared format of
+// internal/logging, never SQL. See docs/operations/observability.md.
+package dblog
 
 import (
 	"context"
@@ -10,6 +12,8 @@ import (
 	"time"
 
 	"gorm.io/gorm/logger"
+
+	"apollo/internal/logging"
 )
 
 const slowQueryThreshold = 200 * time.Millisecond
@@ -19,9 +23,9 @@ type slowQueryBucket struct {
 	worst time.Duration
 }
 
-// DBLogger reports bounded slow-success summaries without evaluating SQL callbacks and, once WatchPool
+// Logger reports bounded slow-success summaries without evaluating SQL callbacks and, once WatchPool
 // is set, the connection pool waits since the previous Flush. A statement's time includes its pool wait.
-type DBLogger struct {
+type Logger struct {
 	log     *slog.Logger
 	mu      sync.Mutex
 	buckets map[string]slowQueryBucket
@@ -31,36 +35,36 @@ type DBLogger struct {
 	poolWaited time.Duration
 }
 
-var _ logger.Interface = (*DBLogger)(nil)
+var _ logger.Interface = (*Logger)(nil)
 
-func NewDBLogger(log *slog.Logger) *DBLogger {
-	return &DBLogger{log: log, buckets: map[string]slowQueryBucket{}}
+func New(log *slog.Logger) *Logger {
+	return &Logger{log: log, buckets: map[string]slowQueryBucket{}}
 }
 
 // WatchPool makes Flush report pool waits read from stats, normally (*sql.DB).Stats.
-func (l *DBLogger) WatchPool(stats func() sql.DBStats) {
+func (l *Logger) WatchPool(stats func() sql.DBStats) {
 	l.mu.Lock()
 	l.pool = stats
 	l.mu.Unlock()
 }
 
 // LogMode ignores levels: SQL is never logged.
-func (l *DBLogger) LogMode(logger.LogLevel) logger.Interface { return l }
+func (l *Logger) LogMode(logger.LogLevel) logger.Interface { return l }
 
-func (l *DBLogger) Info(context.Context, string, ...any)  {}
-func (l *DBLogger) Error(context.Context, string, ...any) {}
+func (l *Logger) Info(context.Context, string, ...any)  {}
+func (l *Logger) Error(context.Context, string, ...any) {}
 
-func (l *DBLogger) Warn(ctx context.Context, _ string, _ ...any) {
+func (l *Logger) Warn(ctx context.Context, _ string, _ ...any) {
 	l.log.WarnContext(ctx, "orm_warning")
 }
 
 // Trace counts slow successful queries per label; failed ones are reported by their callers.
-func (l *DBLogger) Trace(ctx context.Context, begin time.Time, _ func() (string, int64), err error) {
+func (l *Logger) Trace(ctx context.Context, begin time.Time, _ func() (string, int64), err error) {
 	elapsed := time.Since(begin)
 	if err != nil || elapsed <= slowQueryThreshold {
 		return
 	}
-	label := labelFromContext(ctx)
+	label := logging.Label(ctx)
 	l.mu.Lock()
 	bucket := l.buckets[label]
 	bucket.count++
@@ -70,7 +74,7 @@ func (l *DBLogger) Trace(ctx context.Context, begin time.Time, _ func() (string,
 }
 
 // Flush atomically takes all counters, then emits at most one warning per label and one for pool waits.
-func (l *DBLogger) Flush() {
+func (l *Logger) Flush() {
 	l.mu.Lock()
 	buckets := l.buckets
 	l.buckets = map[string]slowQueryBucket{}

@@ -1,6 +1,6 @@
 # Observability
 
-What the application logs, in what shape, and what it deliberately never logs. The logging package sits at the outer edge of the middleware chain described in [Architecture](../architecture.md); lifecycle events are explained in [Startup and shutdown](startup-shutdown.md); the billing events are produced by the code in [Worker](../billing/worker.md), [Checkout](../billing/checkout.md), [Webhooks](../billing/webhooks.md) and [Withdrawal](../billing/withdrawal.md).
+What the application logs, in what shape, and what it deliberately never logs. Logging spans three packages, listed in [Architecture](../architecture.md#packages): `internal/logging` (the format, error attributes and labels, stdlib only), `internal/logging/httplog` (requests and Stripe calls) and `internal/logging/dblog` (GORM). `httplog.Requests` sits at the outer edge of the middleware chain described there; lifecycle events are explained in [Startup and shutdown](startup-shutdown.md); the billing events are produced by the code in [Worker](../billing/worker.md), [Checkout](../billing/checkout.md), [Webhooks](../billing/webhooks.md) and [Withdrawal](../billing/withdrawal.md).
 
 ## Output format
 
@@ -20,7 +20,7 @@ The variables are listed in [Configuration](configuration.md). There is no acces
 
 ## Request IDs
 
-`logging.Requests` assigns every request an ID and returns it in the `X-Request-ID` response header.
+`httplog.Requests` assigns every request an ID and returns it in the `X-Request-ID` response header.
 
 - The ID is taken from the request header `X-Railway-Request-Id` only when exactly one value is present, it is 1 to 128 characters, and every character is `A-Z a-z 0-9 . _ -`.
 - Otherwise the ID is a fresh `rand.Text()` value.
@@ -29,7 +29,7 @@ The variables are listed in [Configuration](configuration.md). There is no acces
 
 ## `request_failed`
 
-At most one event per request, emitted after the whole handler stack returns normally. A handler reports a failure with `logging.RecordError(r, stage, err)`, which stores the first failure and its stage and emits nothing itself; later reports for the same request are dropped. The state is shared through the request context, so a late report from a request-copying middleware (for example the SCS session commit) still reaches the same request.
+At most one event per request, emitted after the whole handler stack returns normally. A handler reports a failure with `httplog.RecordError(r, stage, err)`, which stores the first failure and its stage and emits nothing itself; later reports for the same request are dropped. The state is shared through the request context, so a late report from a request-copying middleware (for example the SCS session commit) still reaches the same request.
 
 ```mermaid
 flowchart TD
@@ -133,11 +133,11 @@ Every event that reports an error builds it with `logging.ErrorAttrs`. It expose
 
 ## Slow-query summaries
 
-`logging.DBLogger` is GORM's logger. It never logs SQL, parameters or errors: `Trace` ignores the SQL callback and counts only successful queries slower than 200 ms (`threshold_ms`), per label. `Flush` swaps the counters out and emits at most one `database_slow_summary` per label, sorted by label, so a slow period costs a handful of lines instead of one per query.
+`dblog.Logger` is GORM's logger. It never logs SQL, parameters or errors: `Trace` ignores the SQL callback and counts only successful queries slower than 200 ms (`threshold_ms`), per label. `Flush` swaps the counters out and emits at most one `database_slow_summary` per label, sorted by label, so a slow period costs a handful of lines instead of one per query.
 
 GORM starts a statement's clock before it obtains a pooled connection, so a statement's time includes its pool wait, and an autocommit write's time includes its own WAL flush. `BEGIN` and `COMMIT` are not traced: a slow transaction commit never appears, only the transaction's statements (and their row-lock waits) do.
 
-A query's label is its request's route pattern (or `unmatched`), else the background operation set with `logging.WithOperation`, else `other`:
+A query's label (`logging.Label`) is its request's route pattern (or `unmatched`), else the background operation set with `logging.WithOperation`, else `other`:
 
 | Label | Source |
 |---|---|
@@ -155,8 +155,8 @@ Flush points are three distinct moments: right after the startup migration, ever
 
 Both ride on the same flushes and labels, and split a request's time into the database's, Stripe's and the app's own.
 
-- **Pool waits.** `DBLogger.WatchPool(sqlDB.Stats)` makes every flush read the pool's cumulative `WaitCount` and `WaitDuration`. When the count grew, one `database_pool_wait` carries the growth since the previous flush. The pool holds 10 connections (`main.go`), and the count includes the session store's queries.
-- **Stripe calls.** `logging.StripeTimer` wraps the Stripe client's HTTP transport and times every attempt, SDK retries and failures included, up to the response headers. `Flush` (the 30 s ticker and process exit) emits one `stripe_call_summary` per label. For `POST /customer/{token}/payments`, the request's latency minus `avg_duration_ms` is the app's own share.
+- **Pool waits.** `Logger.WatchPool(sqlDB.Stats)` makes every flush read the pool's cumulative `WaitCount` and `WaitDuration`. When the count grew, one `database_pool_wait` carries the growth since the previous flush. The pool holds 10 connections (`main.go`), and the count includes the session store's queries.
+- **Stripe calls.** `httplog.StripeTimer` wraps the Stripe client's HTTP transport and times every attempt, SDK retries and failures included, up to the response headers. `Flush` (the 30 s ticker and process exit) emits one `stripe_call_summary` per label. For `POST /customer/{token}/payments`, the request's latency minus `avg_duration_ms` is the app's own share.
 
 ## Privacy rules
 
@@ -177,10 +177,10 @@ Both ride on the same flushes and labels, and split a request's time into the da
 
 ## Source
 
-- `internal/logging/logging.go`: `New`, `ErrorAttrs`, `classifyError`, `requestLevel`, `ServerErrorLog`, `serverErrorWriter`
-- `internal/logging/http.go`: `Requests`, `Routes`, `RecordError`, `WithOperation`, `labelFromContext`, `requestID`, `validRequestID`, `requestMethod`, `statusWriter`
-- `internal/logging/database.go`: `DBLogger`, `slowQueryThreshold`, `Trace`, `Flush`, `WatchPool`, `database_slow_summary`, `database_pool_wait`, `orm_warning`
-- `internal/logging/stripe.go`: `StripeTimer`, `NewStripeTimer`, `RoundTrip`, `Flush`, `stripe_call_summary`
+- `internal/logging/logging.go`: `New`, `ErrorAttrs`, `classifyError`, `RequestLevel`, `WithOperation`, `WithRoute`, `Label`
+- `internal/logging/httplog/http.go`: `Requests`, `Routes`, `RecordError`, `requestID`, `validRequestID`, `requestMethod`, `statusWriter`, `ServerErrorLog`, `serverErrorWriter`
+- `internal/logging/dblog/database.go`: `Logger`, `slowQueryThreshold`, `Trace`, `Flush`, `WatchPool`, `database_slow_summary`, `database_pool_wait`, `orm_warning`
+- `internal/logging/httplog/stripe.go`: `StripeTimer`, `NewStripeTimer`, `RoundTrip`, `Flush`, `stripe_call_summary`
 - `main.go`: `startup_started`, `startup_failed`, `server_listening`, `shutdown_requested`, `shutdown_completed`, `shutdown_failed`, `server_failed`, `RAILWAY_SERVICE_NAME`
 - `internal/auth/http.go`: `session_cleanup_failed`, `deleteExpiredSessions`, `staff_login_failed`, `staff_login_throttled`
 - `internal/billing/webhook.go`: `stripe_webhook_rejected`, `stripe_webhook_store_failed`

@@ -57,18 +57,21 @@ flowchart LR
   main --> links
   main --> live
   main --> logging
+  main --> dblog
+  main --> httplog
   main --> management
   main --> payments
   main --> settings
   main --> students
   auth --> logging
+  auth --> httplog
   billing --> links
   billing --> logging
   billing --> payments
   billing --> students
   customer --> billing
   customer --> links
-  customer --> logging
+  customer --> httplog
   customer --> payments
   customer --> puertorico
   customer --> settings
@@ -76,19 +79,21 @@ flowchart LR
   links --> puertorico
   links --> settings
   links --> students
-  live --> logging
+  live --> httplog
   management --> billing
   management --> links
-  management --> logging
+  management --> httplog
   management --> payments
   management --> settings
   management --> students
+  httplog --> logging
+  dblog --> logging
   payments --> puertorico
   students --> puertorico
   billingtest --> billing
 ```
 
-`logging`, `puertorico` and `settings` import no other module package; `payments` and `students` import only `puertorico`. `management` does not import `auth`: staff identity arrives as a function argument (see Wiring).
+`logging`, `logtest`, `puertorico` and `settings` import no other module package; `payments` and `students` import only `puertorico`, and `httplog` and `dblog` only `logging`. `management` does not import `auth`: staff identity arrives as a function argument (see Wiring).
 
 | Path | Responsibility |
 |---|---|
@@ -99,7 +104,10 @@ flowchart LR
 | `internal/customer` | Private `/customer/{token}` pages and the payment return page ([Customer flow](domain/customer-flow.md)) |
 | `internal/links` | Customer links by token digest; `Enroll` turns a paid link into a Student ([Links](domain/links.md)) |
 | `internal/live` | In-process server-sent-event fan-out ([Live updates](live-updates.md)) |
-| `internal/logging` | JSON events, request correlation, slow-query summaries ([Observability](operations/observability.md)) |
+| `internal/logging` | Shared logging conventions, stdlib only: the JSON event format, `ErrorAttrs`, request levels, call labels ([Observability](operations/observability.md)) |
+| `internal/logging/httplog` | HTTP instrumentation: request IDs, `request_failed`, route labels, the server error log, Stripe call timing |
+| `internal/logging/dblog` | GORM's logger: slow-query and pool-wait summaries |
+| `internal/logging/logtest` | Decodes logged JSON events, for the logging packages' tests |
 | `internal/management` | Staff pages and fragments ([Management overview](management/overview.md)) |
 | `internal/payments` | Plans, integer-cent installments, due-date schedules, money formatting |
 | `internal/puertorico` | The Puerto Rico civil time zone (`Zone`, UTC-4, no daylight saving time) |
@@ -124,7 +132,7 @@ All GET patterns also answer HEAD (`ServeMux` behavior). On the outer mux, a met
 | `GET /{$}` | 302 to `/management/` | main | Public |
 | `POST /management/login` | SCS `LoadAndSave` | `auth` | Public, rate-limited |
 | `POST /management/logout` | SCS `LoadAndSave` | `auth` | Session optional; answers 303 to `/management/` |
-| `/management/` (any method) | `auth.Require`, then `logging.Routes(managementMux)` | `auth` guards, `management` serves | Signed-in staff |
+| `/management/` (any method) | `auth.Require`, then `httplog.Routes(managementMux)` | `auth` guards, `management` serves | Signed-in staff |
 | `GET /customer/{token}`, `POST /customer/{token}/start`, `GET /customer/{token}/forms`, `POST /customer/{token}` | `withHeaders` | `customer` | Bearer token in the URL |
 | `POST /customer/{token}/draft/{field}`, `POST /customer/{token}/pin` | `withHeaders` | `customer` | Bearer token |
 | `GET`/`POST /customer/{token}/edit`, `/agreement`, `/payments` | `withHeaders` | `customer` | Bearer token |
@@ -163,15 +171,15 @@ Session lifetime, auth-version revocation and the limiter are in [Staff authenti
 ```mermaid
 flowchart TD
   conn["http.Server\nReadHeaderTimeout 5 s, WriteTimeout 10 s, IdleTimeout 60 s\nErrorLog becomes http_server_error"]
-  req["logging.Requests\nrequest ID, status capture, one request_failed"]
+  req["httplog.Requests\nrequest ID, status capture, one request_failed"]
   sec["secureHeaders\nsite CSP, HSTS, nosniff, noindex"]
   cop["http.CrossOriginProtection\n403 for cross-origin writes"]
-  outer["logging.Routes(mux)\nlabel = matched pattern"]
+  outer["httplog.Routes(mux)\nlabel = matched pattern"]
   mux{"outer mux"}
   static["static, favicon, root redirect"]
   authh["login and logout\nSCS LoadAndSave"]
   require["auth.Require\nLoadAndSave + account and auth-version check"]
-  inner["logging.Routes(managementMux)\nlabel = leaf pattern"]
+  inner["httplog.Routes(managementMux)\nlabel = leaf pattern"]
   mgmt["management handlers"]
   feed["live.Feed\nGET /management/events"]
   hdr["withHeaders\nno-store, no-referrer, Vary HX-Request"]
@@ -204,7 +212,7 @@ The 403 from `CrossOriginProtection` fires for non-safe methods (such as POST) w
 
 ## Deliberate choices
 
-- **`logging.Routes` is applied twice** (outer mux and `managementMux`). `Require` and `LoadAndSave` hand the next handler a copy of the request, so the outer mux cannot see which leaf pattern matched; the inner `Routes` records it. The outer one still labels auth failures with `/management/`.
+- **`httplog.Routes` is applied twice** (outer mux and `managementMux`). `Require` and `LoadAndSave` hand the next handler a copy of the request, so the outer mux cannot see which leaf pattern matched; the inner `Routes` records it. The outer one still labels auth failures with `/management/`.
 - **`startupError` carries a stage** and is returned from `newServer` as well as `run`, so route-registration failures are logged with the same `startup_failed` shape ([Configuration](operations/configuration.md) lists the stages).
 - **Air is a `tool` line in `go.mod`.** It pins the dev server per project, at the price of Hugo, Sass and other modules in the indirect requirements; no module package imports them.
 - **`billingtest` is untagged but test-only.** Untagged tests such as `internal/billing/stripe_test.go` import it, so it cannot carry the `integration` build tag.
@@ -215,7 +223,7 @@ The 403 from `CrossOriginProtection` fires for non-safe methods (such as POST) w
 - `main.go`: `newApp`, `newServer`, `secureHeaders`, `sitePolicy`, `serve`, `run`, `models`, `startupError`, `assets`
 - `go.mod`: `github.com/air-verse/air`, `github.com/nyaruka/phonenumbers/v2`, `github.com/stripe/stripe-go/v87`, `gorm.io/gorm`, `gorm.io/driver/postgres`
 - `internal/auth/http.go`: `Manager.RegisterRoutes`, `Require`, `Staff`
-- `internal/logging/http.go`: `Requests`, `Routes`, `RecordError`
+- `internal/logging/httplog/http.go`: `Requests`, `Routes`, `RecordError`
 - `internal/customer/customer.go`: `RegisterRoutes`, `withHeaders`
 - `internal/management/management.go`: `RegisterRoutes`
 - `internal/billing/webhook.go`: `Service.Webhook`, `maxWebhookBody`

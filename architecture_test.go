@@ -4,7 +4,10 @@
 // TestContextRootsImportNoAdapters reads `go list -deps` for each reshaped context root, so it sees every
 // package a root links, direct or transitive, and nothing about what the root does with it. SQL drivers
 // other than pgx are not on the forbidden list. Transitive means a root may not import internal/logging
-// today: logging imports net/http and GORM.
+// today: its ErrorAttrs matches database/sql's ErrTxDone and ErrConnDone.
+//
+// TestLoggingCoreImportsNoAdapters holds internal/logging, the one logging package meant for every caller,
+// to the same rule with that one database/sql exception, so net/http and GORM stay in httplog and dblog.
 //
 // TestContextsTouchOnlyOwnedTables type-checks each package's production files and applies three matchers:
 //   - SQL: in every constant string expression (a literal, a constant, or a concatenation of them; a
@@ -139,6 +142,15 @@ func TestContextRootsImportNoAdapters(t *testing.T) {
 			if why := rootForbidden(module, p.ImportPath); why != "" {
 				t.Errorf("%s depends on %s: %s", root, p.ImportPath, why)
 			}
+		}
+	}
+}
+
+func TestLoggingCoreImportsNoAdapters(t *testing.T) {
+	module := goModule(t)
+	for _, p := range goList(t, "-deps", "./internal/logging") {
+		if why := rootForbidden(module, p.ImportPath); why != "" && p.ImportPath != "database/sql" {
+			t.Errorf("internal/logging depends on %s: %s; move it to httplog or dblog", p.ImportPath, why)
 		}
 	}
 }

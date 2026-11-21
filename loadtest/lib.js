@@ -119,7 +119,7 @@ export const target = (res) => hdr(res, 'Location') || hdr(res, 'HX-Redirect');
 export const has = (text) => (r) => typeof r.body === 'string' && r.body.includes(text);
 export const hdrEnds = (name, suffix) => (r) => hdr(r, name).endsWith(suffix);
 
-// withHeaders (customer.go) on every customer outcome + X-Request-ID from logging.Requests.
+// withHeaders (customer.go) on every customer outcome + X-Request-ID from httplog.Requests.
 export function customerHeaderChecks(res, label) {
   return check(res, {
     [`${label}: Cache-Control no-store`]: (r) => hdr(r, 'Cache-Control').includes('no-store'),

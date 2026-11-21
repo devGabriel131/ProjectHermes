@@ -10,7 +10,7 @@ flowchart TD
   help["print auth.Usage\nexit 0"]
   unknown["stderr: unknown command\nexit 1"]
   logger["build logger\nservice, environment, version\noptional deployment_id, replica_id"]
-  begin["run: startup_started, server only\nNewDBLogger, NotifyContext SIGINT and SIGTERM"]
+  begin["run: startup_started, server only\ndblog.New, NotifyContext SIGINT and SIGTERM"]
   dsn{"DATABASE_URL set?"}
   open["gorm.Open\nno ping"]
   pool["db.DB\npool 10 open, 10 idle"]

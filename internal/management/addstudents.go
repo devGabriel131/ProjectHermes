@@ -14,7 +14,7 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
-	"apollo/internal/logging"
+	"apollo/internal/logging/httplog"
 	"apollo/internal/students"
 )
 
@@ -190,7 +190,7 @@ func (s *site) addStudentsPage(w http.ResponseWriter, r *http.Request) {
 		if id, err := strconv.ParseUint(rawID, 10, 63); err == nil {
 			data.Added, err = s.roster.Get(r.Context(), id)
 			if err != nil {
-				logging.RecordError(r, "load", err)
+				httplog.RecordError(r, "load", err)
 				http.Error(w, "Could not load student. Please try again.", http.StatusInternalServerError)
 				return
 			}
@@ -222,7 +222,7 @@ func (s *site) addStudent(w http.ResponseWriter, r *http.Request) {
 		data.AddError = valErr.Message
 		s.render(w, r, http.StatusConflict, "add-students.html", data)
 	case err != nil:
-		logging.RecordError(r, "save", err)
+		httplog.RecordError(r, "save", err)
 		http.Error(w, "Could not add the student. Please try again.", http.StatusInternalServerError)
 	case len(rejected) > 0:
 		data.Errors = rejected[0]
@@ -283,7 +283,7 @@ func (s *site) importStudents(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusConflict, valErr.Message)
 		return
 	case err != nil:
-		logging.RecordError(r, "save", err)
+		httplog.RecordError(r, "save", err)
 		http.Error(w, "Could not import students. Please try again.", http.StatusInternalServerError)
 		return
 	}
@@ -301,7 +301,7 @@ func (s *site) importStudents(w http.ResponseWriter, r *http.Request) {
 	if len(report.Rejected) > 0 {
 		fixBytes, err := fixWorkbook(head, report.Rejected)
 		if err != nil {
-			logging.RecordError(r, "export", err)
+			httplog.RecordError(r, "export", err)
 			http.Error(w, "Could not build the rows-to-fix file. Please try again.", http.StatusInternalServerError)
 			return
 		}

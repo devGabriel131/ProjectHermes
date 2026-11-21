@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"apollo/internal/billing"
-	"apollo/internal/logging"
+	"apollo/internal/logging/httplog"
 	"apollo/internal/payments"
 )
 
@@ -64,7 +64,7 @@ func (s *site) payments(w http.ResponseWriter, r *http.Request) {
 					status = http.StatusConflict
 					data.Error = "Tu plan de pago ya está confirmado y no se puede cambiar."
 				case err != nil:
-					logging.RecordError(r, "checkout", err)
+					httplog.RecordError(r, "checkout", err)
 					status = http.StatusInternalServerError
 					data.Error = "No pudimos iniciar el pago seguro. Intenta de nuevo."
 				case result.URL != "":
@@ -85,7 +85,7 @@ func (s *site) payments(w http.ResponseWriter, r *http.Request) {
 	defer cancelSummary()
 	summary, err := s.billing.ForEnrollment(summaryCtx, enrollment.ID)
 	if err != nil {
-		logging.RecordError(r, "load", err)
+		httplog.RecordError(r, "load", err)
 		status = http.StatusInternalServerError
 		data.Error = "No pudimos cargar tu información de pago. Intenta de nuevo."
 	} else {
@@ -135,7 +135,7 @@ func (s *site) paymentReturn(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, billing.ErrUnavailable):
 		status = http.StatusNotFound
 	case err != nil:
-		logging.RecordError(r, "load", err)
+		httplog.RecordError(r, "load", err)
 		data.Error = "No pudimos confirmar el estado de tu pago. Intenta de nuevo."
 		status = http.StatusInternalServerError
 	default:

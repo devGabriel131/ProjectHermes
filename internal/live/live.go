@@ -4,12 +4,11 @@
 package live
 
 import (
+	"apollo/internal/logging/httplog"
 	"io"
 	"net/http"
 	"sync"
 	"time"
-
-	"apollo/internal/logging"
 )
 
 // heartbeat keeps proxies from closing quiet streams; Railway's cutoff is five
@@ -67,7 +66,7 @@ func (f *Feed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	response := http.NewResponseController(w)
 	// Bound each send, not the stream's lifetime, replacing the server deadline.
 	if err := response.SetWriteDeadline(time.Time{}); err != nil {
-		logging.RecordError(r, "stream", err)
+		httplog.RecordError(r, "stream", err)
 		http.Error(w, "Live updates are unavailable.", http.StatusInternalServerError)
 		return
 	}

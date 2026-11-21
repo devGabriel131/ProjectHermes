@@ -14,7 +14,7 @@ import (
 
 	"apollo/internal/billing"
 	"apollo/internal/links"
-	"apollo/internal/logging"
+	"apollo/internal/logging/httplog"
 	"apollo/internal/payments"
 	"apollo/internal/puertorico"
 	"apollo/internal/settings"
@@ -165,7 +165,7 @@ func (s *site) render(w http.ResponseWriter, r *http.Request, name string, data 
 		return
 	}
 	if err := s.page.ExecuteTemplate(w, name, data); err != nil {
-		logging.RecordError(r, "render", err)
+		httplog.RecordError(r, "render", err)
 	}
 }
 
@@ -177,7 +177,7 @@ func (s *site) resolveSession(w http.ResponseWriter, r *http.Request, name strin
 	enrollment, canStart, err := s.links.LookupSession(ctx, token, readSessionCookie(r))
 	switch {
 	case err != nil:
-		logging.RecordError(r, "lookup", err)
+		httplog.RecordError(r, "lookup", err)
 		data.Error = openFailedMessage
 		s.render(w, r, name, *data, http.StatusInternalServerError)
 		return nil, false
@@ -213,7 +213,7 @@ func (s *site) welcome(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK
 	switch {
 	case err != nil:
-		logging.RecordError(r, "lookup", err)
+		httplog.RecordError(r, "lookup", err)
 		data.Error = openFailedMessage
 		status = http.StatusInternalServerError
 	case enrollment == nil:
@@ -244,7 +244,7 @@ func (s *site) start(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	enrollment, newCookie, err := s.links.StartEnrollment(ctx, token, readSessionCookie(r))
 	if err != nil {
-		logging.RecordError(r, "start", err)
+		httplog.RecordError(r, "start", err)
 		data.Error = openFailedMessage
 		s.render(w, r, "index.html", data, http.StatusInternalServerError)
 		return
@@ -304,7 +304,7 @@ func (s *site) submit(w http.ResponseWriter, r *http.Request) {
 		result, err := s.links.Submit(ctx, token, cookieToken, parsed, pin)
 		switch {
 		case err != nil:
-			logging.RecordError(r, "save", err)
+			httplog.RecordError(r, "save", err)
 			data.Error = saveFailedMessage
 			s.render(w, r, name, data, http.StatusInternalServerError)
 			return
@@ -372,7 +372,7 @@ func (s *site) draft(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case err != nil:
-		logging.RecordError(r, stage, err)
+		httplog.RecordError(r, stage, err)
 		s.render(w, r, "save-status", pageData{Error: failure}, http.StatusInternalServerError)
 	case result == links.Unavailable:
 		s.render(w, r, "save-status", data, http.StatusNotFound)
@@ -409,7 +409,7 @@ func (s *site) edit(w http.ResponseWriter, r *http.Request) {
 	}
 	editable, err := s.billing.ContactEditable(ctx, enrollment)
 	if err != nil {
-		logging.RecordError(r, "load", err)
+		httplog.RecordError(r, "load", err)
 		data.Error = openFailedMessage
 		s.render(w, r, "index.html", data, http.StatusInternalServerError)
 		return
@@ -439,7 +439,7 @@ func (s *site) edit(w http.ResponseWriter, r *http.Request) {
 				s.render(w, r, "index.html", data, http.StatusNotFound)
 				return
 			case err != nil:
-				logging.RecordError(r, "save", err)
+				httplog.RecordError(r, "save", err)
 				data.Error = saveFailedMessage
 				status = http.StatusInternalServerError
 			default:
@@ -538,7 +538,7 @@ func (s *site) checkPin(w http.ResponseWriter, r *http.Request) {
 		}
 		switch {
 		case err != nil:
-			logging.RecordError(r, "lookup", err)
+			httplog.RecordError(r, "lookup", err)
 			s.render(w, r, "pin-status", pageData{Error: "No pudimos verificar el PIN. Intenta de nuevo."}, http.StatusInternalServerError)
 			return
 		case spent:
@@ -556,7 +556,7 @@ func (s *site) checkPin(w http.ResponseWriter, r *http.Request) {
 	state, err := s.links.FormState(ctx, token, cookieToken)
 	switch {
 	case err != nil:
-		logging.RecordError(r, "lookup", err)
+		httplog.RecordError(r, "lookup", err)
 		s.render(w, r, "pin-status", pageData{Error: openFailedMessage}, http.StatusInternalServerError)
 	case state == links.Unavailable:
 		s.render(w, r, "pin-status", data, http.StatusNotFound)

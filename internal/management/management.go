@@ -14,7 +14,7 @@ import (
 
 	"apollo/internal/billing"
 	"apollo/internal/links"
-	"apollo/internal/logging"
+	"apollo/internal/logging/httplog"
 	"apollo/internal/payments"
 	"apollo/internal/settings"
 	"apollo/internal/students"
@@ -130,7 +130,7 @@ func (s *site) render(w http.ResponseWriter, r *http.Request, status int, name s
 	w.Header().Set("Vary", "HX-Request")
 	w.WriteHeader(status)
 	if err := s.page.ExecuteTemplate(w, name, data); err != nil {
-		logging.RecordError(r, "render", err)
+		httplog.RecordError(r, "render", err)
 	}
 }
 
@@ -171,14 +171,14 @@ func (s *site) list(w http.ResponseWriter, r *http.Request, status int, data pag
 	ctx := r.Context()
 	groups, err := s.links.ListGroups(ctx)
 	if err != nil {
-		logging.RecordError(r, "list", err)
+		httplog.RecordError(r, "list", err)
 		http.Error(w, "Could not load links. Please try again.", http.StatusInternalServerError)
 		return
 	}
 	var declined map[uint64]bool
 	if !data.Trash { // Trash holds no Awaiting payment rows, the only ones with the badge
 		if declined, err = s.billing.DeclinedEnrollments(ctx); err != nil {
-			logging.RecordError(r, "list", err)
+			httplog.RecordError(r, "list", err)
 			http.Error(w, "Could not load links. Please try again.", http.StatusInternalServerError)
 			return
 		}
@@ -201,7 +201,7 @@ func (s *site) list(w http.ResponseWriter, r *http.Request, status int, data pag
 		if !data.Trash {
 			current, err := s.settings.Current(ctx)
 			if err != nil {
-				logging.RecordError(r, "load", err)
+				httplog.RecordError(r, "load", err)
 				http.Error(w, "Could not load settings. Please try again.", http.StatusInternalServerError)
 				return
 			}
@@ -254,7 +254,7 @@ func (s *site) setProgramStartDate(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, settings.ErrDate):
 		s.list(w, r, http.StatusUnprocessableEntity, pageData{ProgramStartDate: date, ProgramStartError: "Ingresa una fecha válida en formato AAAA-MM-DD."})
 	default:
-		logging.RecordError(r, "save", err)
+		httplog.RecordError(r, "save", err)
 		http.Error(w, "Could not save the program start date. Please try again.", http.StatusInternalServerError)
 	}
 }
@@ -266,7 +266,7 @@ func (s *site) createLink(w http.ResponseWriter, r *http.Request) {
 		_, err = s.links.CreateLink(ctx, s.staff(ctx), "", time.Now().Add(current.LinkLifetime()))
 	}
 	if err != nil {
-		logging.RecordError(r, "create", err)
+		httplog.RecordError(r, "create", err)
 		http.Error(w, "Could not generate a link. Please try again.", http.StatusInternalServerError)
 		return
 	}
@@ -288,7 +288,7 @@ func (s *site) renameLink(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, links.ErrInvalidLinkName):
 		s.answer(w, r, http.StatusUnprocessableEntity, "Enter a link name (up to 100 characters).", true)
 	case err != nil:
-		logging.RecordError(r, "rename", err)
+		httplog.RecordError(r, "rename", err)
 		http.Error(w, "Could not rename this link. Please try again.", http.StatusInternalServerError)
 	case renamed == nil:
 		s.answer(w, r, http.StatusOK, "Link can no longer be renamed.", false)
@@ -304,7 +304,7 @@ func (s *site) cancelLink(w http.ResponseWriter, r *http.Request) {
 		canceled, err = s.links.CancelLink(r.Context(), id, s.staff(r.Context()))
 	}
 	if err != nil {
-		logging.RecordError(r, "cancel", err)
+		httplog.RecordError(r, "cancel", err)
 		http.Error(w, "Could not cancel this link. Please try again.", http.StatusInternalServerError)
 		return
 	}
@@ -333,7 +333,7 @@ func (s *site) cancelEnrollment(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, billing.ErrCancelBlocked):
 		s.answer(w, r, http.StatusConflict, "Cannot cancel while a payment is in progress.", true)
 	case err != nil:
-		logging.RecordError(r, "cancel", err)
+		httplog.RecordError(r, "cancel", err)
 		http.Error(w, "Could not cancel this enrollment. Please try again.", http.StatusInternalServerError)
 	default:
 		s.answer(w, r, http.StatusOK, cancelEnrollmentNotice(canceled, changed), canceled != nil)
@@ -355,7 +355,7 @@ func cancelEnrollmentNotice(canceled *links.EnrollmentEntry, changed bool) strin
 func (s *site) showSettings(w http.ResponseWriter, r *http.Request, status int, data settingsData) {
 	var err error
 	if data.Current, err = s.settings.Current(r.Context()); err != nil {
-		logging.RecordError(r, "load", err)
+		httplog.RecordError(r, "load", err)
 		http.Error(w, "Could not load settings. Please try again.", http.StatusInternalServerError)
 		return
 	}
@@ -390,7 +390,7 @@ func (s *site) setBootcampDate(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, settings.ErrDate):
 		s.showSettings(w, r, http.StatusUnprocessableEntity, settingsData{BootcampDate: date, BootcampError: "Enter a valid date (YYYY-MM-DD)."})
 	default:
-		logging.RecordError(r, "save", err)
+		httplog.RecordError(r, "save", err)
 		http.Error(w, "Could not save the bootcamp date. Please try again.", http.StatusInternalServerError)
 	}
 }
@@ -411,7 +411,7 @@ func (s *site) setLinkLifetime(w http.ResponseWriter, r *http.Request) {
 			Error: fmt.Sprintf("Choose between %d and %d days.", settings.MinLinkLifetimeDays, settings.MaxLinkLifetimeDays),
 		})
 	default:
-		logging.RecordError(r, "save", err)
+		httplog.RecordError(r, "save", err)
 		http.Error(w, "Could not save settings. Please try again.", http.StatusInternalServerError)
 	}
 }

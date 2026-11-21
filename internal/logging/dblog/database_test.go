@@ -1,4 +1,4 @@
-package logging
+package dblog
 
 import (
 	"bytes"
@@ -6,6 +6,9 @@ import (
 	"database/sql"
 	"testing"
 	"time"
+
+	"apollo/internal/logging"
+	"apollo/internal/logging/logtest"
 )
 
 type databasePrivateData struct{}
@@ -21,9 +24,9 @@ var (
 	maxWorst  = time.Duration(1<<63 - 1)
 )
 
-func TestDBLoggerTraceCountsOnlySlowSuccessAndNeverEvaluatesSQL(t *testing.T) {
+func TestLoggerTraceCountsOnlySlowSuccessAndNeverEvaluatesSQL(t *testing.T) {
 	var out bytes.Buffer
-	db := NewDBLogger(New(&out))
+	db := New(logging.New(&out))
 	ctx := context.Background()
 	// A nil callback panics if Trace evaluates SQL; the error type panics if formatted.
 	db.Trace(ctx, slowBegin, nil, nil)
@@ -31,18 +34,18 @@ func TestDBLoggerTraceCountsOnlySlowSuccessAndNeverEvaluatesSQL(t *testing.T) {
 	db.Trace(ctx, fastBegin, nil, nil)
 	db.Flush()
 
-	events := decodeEvents(t, out.Bytes())
+	events := logtest.Events(t, out.Bytes())
 	if len(events) != 1 {
 		t.Fatalf("events = %d, want 1", len(events))
 	}
 	assertDatabaseSummary(t, events[0], "other", 1, maxWorst)
 }
 
-func TestDBLoggerFlushBoundsAndResets(t *testing.T) {
+func TestLoggerFlushBoundsAndResets(t *testing.T) {
 	var out bytes.Buffer
-	db := NewDBLogger(New(&out))
-	a := WithOperation(context.Background(), "a")
-	b := WithOperation(context.Background(), "b")
+	db := New(logging.New(&out))
+	a := logging.WithOperation(context.Background(), "a")
+	b := logging.WithOperation(context.Background(), "b")
 	for i := range 1000 {
 		ctx := a
 		if i%2 == 1 {
@@ -54,7 +57,7 @@ func TestDBLoggerFlushBoundsAndResets(t *testing.T) {
 		t.Fatal("slow traces emitted before Flush")
 	}
 	db.Flush()
-	events := decodeEvents(t, out.Bytes())
+	events := logtest.Events(t, out.Bytes())
 	if len(events) != 2 {
 		t.Fatalf("summary events = %d, want 2", len(events))
 	}
@@ -68,9 +71,9 @@ func TestDBLoggerFlushBoundsAndResets(t *testing.T) {
 	}
 }
 
-func TestDBLoggerFlushReportsPoolWaitGrowth(t *testing.T) {
+func TestLoggerFlushReportsPoolWaitGrowth(t *testing.T) {
 	var out bytes.Buffer
-	db := NewDBLogger(New(&out))
+	db := New(logging.New(&out))
 	stats := sql.DBStats{WaitCount: 3, WaitDuration: 30 * time.Millisecond}
 	db.WatchPool(func() sql.DBStats { return stats })
 	db.Flush()
@@ -78,7 +81,7 @@ func TestDBLoggerFlushReportsPoolWaitGrowth(t *testing.T) {
 	db.Flush()
 	db.Flush() // no new waits: silent
 
-	events := decodeEvents(t, out.Bytes())
+	events := logtest.Events(t, out.Bytes())
 	if len(events) != 2 {
 		t.Fatalf("events = %d, want 2", len(events))
 	}

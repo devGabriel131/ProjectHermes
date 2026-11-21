@@ -1,4 +1,4 @@
-package logging
+package httplog
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"apollo/internal/logging"
 )
 
 // StripeTimer times every Stripe HTTP attempt (SDK retries included, up to response headers) per request route
@@ -33,7 +35,7 @@ func (t *StripeTimer) RoundTrip(r *http.Request) (*http.Response, error) {
 	begin := time.Now()
 	response, err := t.next.RoundTrip(r)
 	elapsed := time.Since(begin)
-	label := labelFromContext(r.Context())
+	label := logging.Label(r.Context())
 	t.mu.Lock()
 	bucket := t.buckets[label]
 	bucket.count++

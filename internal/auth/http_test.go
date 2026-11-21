@@ -18,6 +18,8 @@ import (
 	"gorm.io/gorm"
 
 	"apollo/internal/logging"
+	"apollo/internal/logging/dblog"
+	"apollo/internal/logging/httplog"
 	"apollo/internal/testdb"
 )
 
@@ -158,7 +160,7 @@ func TestSessionCleanupDeletesOnlyExpired(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	log := logging.New(&out)
-	db := testdb.Open(t, &Session{}).Session(&gorm.Session{Logger: logging.NewDBLogger(log)})
+	db := testdb.Open(t, &Session{}).Session(&gorm.Session{Logger: dblog.New(log)})
 	manager := &Manager{db: db, log: log}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	sessions := []Session{
@@ -243,7 +245,7 @@ func newApp(t *testing.T, db *gorm.DB) (http.Handler, *Manager) {
 	mux.Handle("/management/", manager.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "staff:"+Staff(r.Context()))
 	})))
-	return logging.Requests(log, mux), manager
+	return httplog.Requests(log, mux), manager
 }
 
 func newRequest(t *testing.T, method, path string) *http.Request {

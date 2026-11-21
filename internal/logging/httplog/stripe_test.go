@@ -1,4 +1,4 @@
-package logging
+package httplog
 
 import (
 	"bytes"
@@ -6,6 +6,9 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+
+	"apollo/internal/logging"
+	"apollo/internal/logging/logtest"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -15,9 +18,9 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 func TestStripeTimerFlushSummarizesEveryAttemptPerLabel(t *testing.T) {
 	var out bytes.Buffer
 	failure := errors.New("stripe unreachable")
-	timer := NewStripeTimer(New(&out), roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, failure }))
+	timer := NewStripeTimer(logging.New(&out), roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, failure }))
 	background := context.Background()
-	for _, ctx := range []context.Context{WithOperation(background, "b"), WithOperation(background, "a"), WithOperation(background, "b"), background} {
+	for _, ctx := range []context.Context{logging.WithOperation(background, "b"), logging.WithOperation(background, "a"), logging.WithOperation(background, "b"), background} {
 		r, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.stripe.com/v1/prices", nil)
 		if err != nil {
 			t.Fatal(err)
@@ -31,7 +34,7 @@ func TestStripeTimerFlushSummarizesEveryAttemptPerLabel(t *testing.T) {
 	}
 	timer.Flush()
 
-	events := decodeEvents(t, out.Bytes())
+	events := logtest.Events(t, out.Bytes())
 	want := []struct {
 		operation string
 		count     float64

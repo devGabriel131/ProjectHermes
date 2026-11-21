@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"apollo/internal/billing"
-	"apollo/internal/logging"
+	"apollo/internal/logging/httplog"
 	"apollo/internal/students"
 )
 
@@ -94,7 +94,7 @@ func billingFailure(w http.ResponseWriter, r *http.Request, err error) {
 			return
 		}
 	}
-	logging.RecordError(r, "billing", err)
+	httplog.RecordError(r, "billing", err)
 	http.Error(w, "Could not complete the billing request. Please try again.", http.StatusInternalServerError)
 }
 
@@ -111,7 +111,7 @@ func (s *site) load(w http.ResponseWriter, r *http.Request) *students.Student {
 	}
 	record, err := s.roster.Get(r.Context(), id)
 	if err != nil {
-		logging.RecordError(r, "load", err)
+		httplog.RecordError(r, "load", err)
 		http.Error(w, "Could not load student. Please try again.", http.StatusInternalServerError)
 		return nil
 	}
@@ -125,7 +125,7 @@ func (s *site) load(w http.ResponseWriter, r *http.Request) *students.Student {
 func (s *site) withBilling(w http.ResponseWriter, r *http.Request, data *studentPageData) bool {
 	summary, err := s.billing.ForStudent(r.Context(), data.Student.ID)
 	if err != nil {
-		logging.RecordError(r, "billing", err)
+		httplog.RecordError(r, "billing", err)
 		http.Error(w, "Could not load billing. Please try again.", http.StatusInternalServerError)
 		return false
 	}
@@ -137,7 +137,7 @@ func (s *site) studentList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cohorts, err := s.roster.Cohorts(ctx)
 	if err != nil {
-		logging.RecordError(r, "list", err)
+		httplog.RecordError(r, "list", err)
 		http.Error(w, "Could not load students. Please try again.", http.StatusInternalServerError)
 		return
 	}
@@ -166,7 +166,7 @@ func (s *site) studentList(w http.ResponseWriter, r *http.Request) {
 	}
 	records, err := s.roster.List(ctx, filter)
 	if err != nil {
-		logging.RecordError(r, "list", err)
+		httplog.RecordError(r, "list", err)
 		http.Error(w, "Could not load students. Please try again.", http.StatusInternalServerError)
 		return
 	}
@@ -240,7 +240,7 @@ func (s *site) studentField(w http.ResponseWriter, r *http.Request) {
 		case errors.As(err, &invalid):
 			status, editing, validation = http.StatusUnprocessableEntity, true, invalid.Message
 		case err != nil:
-			logging.RecordError(r, "save", err)
+			httplog.RecordError(r, "save", err)
 			http.Error(w, "Could not save this field. Please try again.", http.StatusInternalServerError)
 			return
 		case updated == nil:

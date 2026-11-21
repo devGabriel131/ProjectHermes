@@ -1,15 +1,21 @@
-package logging
+// Package httplog instruments HTTP: request IDs, the one request_failed event, route labels, the server's
+// error log and Stripe call timing, in the shared format of internal/logging. Requests must be the
+// outermost wrapper; Routes and RecordError panic without it. See docs/operations/observability.md.
+package httplog
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"log"
 	"log/slog"
 	"net/http"
 	"time"
+
+	"apollo/internal/logging"
 )
 
 type requestContextKey struct{}
-type operationContextKey struct{}
 
 // Request handlers share this state through context copies, never across goroutines.
 type requestState struct {
@@ -26,7 +32,8 @@ type requestState struct {
 func Requests(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		state := &requestState{started: time.Now(), requestID: requestID(r.Header)}
-		r = r.WithContext(context.WithValue(r.Context(), requestContextKey{}, state))
+		ctx := logging.WithRoute(r.Context(), &state.route)
+		r = r.WithContext(context.WithValue(ctx, requestContextKey{}, state))
 		w.Header().Set("X-Request-ID", state.requestID)
 		next.ServeHTTP(&statusWriter{ResponseWriter: w, state: state}, r)
 
@@ -45,7 +52,7 @@ func Requests(log *slog.Logger, next http.Handler) http.Handler {
 		attrs = append(attrs,
 			slog.String("request_id", state.requestID),
 			slog.String("method", requestMethod(r.Method)),
-			slog.String("route", state.label()),
+			slog.String("route", logging.Label(r.Context())),
 			slog.String("stage", stage),
 			slog.Int("status", state.status),
 			slog.Float64("duration_ms", float64(time.Since(state.started))/float64(time.Millisecond)),
@@ -53,9 +60,9 @@ func Requests(log *slog.Logger, next http.Handler) http.Handler {
 		if state.failure == nil {
 			attrs = append(attrs, slog.String("error_kind", "unknown"))
 		} else {
-			attrs = append(attrs, ErrorAttrs(state.failure)...)
+			attrs = append(attrs, logging.ErrorAttrs(state.failure)...)
 		}
-		log.LogAttrs(r.Context(), requestLevel(stage, state.failure), "request_failed", attrs...)
+		log.LogAttrs(r.Context(), logging.RequestLevel(stage, state.failure), "request_failed", attrs...)
 	})
 }
 
@@ -70,13 +77,6 @@ func Routes(mux *http.ServeMux) http.Handler {
 	})
 }
 
-func (state *requestState) label() string {
-	if state.route != "" {
-		return state.route
-	}
-	return "unmatched"
-}
-
 // RecordError freezes the first failure and its stage; it emits nothing.
 func RecordError(r *http.Request, stage string, err error) {
 	state := stateFromContext(r.Context())
@@ -87,28 +87,11 @@ func RecordError(r *http.Request, stage string, err error) {
 	state.failureStage = stage
 }
 
-// WithOperation labels immutable startup/background contexts for database and Stripe summaries.
-func WithOperation(ctx context.Context, name string) context.Context {
-	return context.WithValue(ctx, operationContextKey{}, name)
-}
-
-// labelFromContext names what a database or Stripe call belongs to: its request's route, else its
-// background operation.
-func labelFromContext(ctx context.Context) string {
-	if state, ok := ctx.Value(requestContextKey{}).(*requestState); ok {
-		return state.label()
-	}
-	if name, ok := ctx.Value(operationContextKey{}).(string); ok {
-		return name
-	}
-	return "other"
-}
-
 func stateFromContext(ctx context.Context) *requestState {
 	if state, ok := ctx.Value(requestContextKey{}).(*requestState); ok {
 		return state
 	}
-	panic("logging: Requests middleware is required for Routes and RecordError")
+	panic("httplog: Requests middleware is required for Routes and RecordError")
 }
 
 func requestID(header http.Header) string {
@@ -166,4 +149,30 @@ func (w *statusWriter) Write(body []byte) (int, error) {
 
 func (w *statusWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
+}
+
+// ServerErrorLog drops stdlib diagnostic bytes, preserving only a fixed prefix class.
+func ServerErrorLog(logger *slog.Logger) *log.Logger {
+	return log.New(serverErrorWriter{logger: logger}, "", 0)
+}
+
+type serverErrorWriter struct {
+	logger *slog.Logger
+}
+
+func (w serverErrorWriter) Write(p []byte) (int, error) {
+	kind := "other"
+	switch {
+	case bytes.HasPrefix(p, []byte("http: panic serving ")):
+		kind = "panic"
+	case bytes.HasPrefix(p, []byte("http: Accept error: ")):
+		kind = "accept"
+	case bytes.HasPrefix(p, []byte("http: response.WriteHeader on hijacked connection from ")),
+		bytes.HasPrefix(p, []byte("http: superfluous response.WriteHeader call from ")),
+		bytes.HasPrefix(p, []byte("http: invalid Content-Length of ")),
+		bytes.HasPrefix(p, []byte("http: WriteHeader called with both Transfer-Encoding of ")):
+		kind = "response_header"
+	}
+	w.logger.Error("http_server_error", slog.String("kind", kind))
+	return len(p), nil
 }

@@ -24,9 +24,11 @@ import (
 	"apollo/internal/billing/billingtest"
 	"apollo/internal/links"
 	"apollo/internal/logging"
+	"apollo/internal/logging/httplog"
 	"apollo/internal/settings"
 	"apollo/internal/students"
 	"apollo/internal/testdb"
+
 	"github.com/alexedwards/argon2id"
 	"gorm.io/gorm"
 )
@@ -123,7 +125,7 @@ func newApp(t *testing.T) *app {
 	root := http.NewServeMux()
 	manager.RegisterRoutes(root)
 	root.Handle("/management/", manager.Require(child))
-	server := httptest.NewServer(logging.Requests(log, root))
+	server := httptest.NewServer(httplog.Requests(log, root))
 	t.Cleanup(server.Close)
 	return &app{url: server.URL, db: db, store: store}
 }
@@ -837,7 +839,7 @@ func TestStoreFailuresAreServerErrors(t *testing.T) {
 	if err := RegisterRoutes(mux, links.New(failed, nil), students.New(failed, nil), settings.New(failed), staff, newBiller(t, db)); err != nil {
 		t.Fatal(err)
 	}
-	handler := logging.Requests(logging.New(io.Discard), mux)
+	handler := httplog.Requests(logging.New(io.Discard), mux)
 
 	cancel := "/management/links/" + unknownID + "/cancel" // Well-formed, so it reaches the database.
 	for _, tc := range []struct {
@@ -1083,7 +1085,7 @@ func TestRegistryLoadsProgramSettingsOnlyForFullMainPage(t *testing.T) {
 	if err := RegisterRoutes(mux, a.store, students.New(a.db, nil), settings.New(failed), func(context.Context) string { return "staff" }, newBiller(t, a.db)); err != nil {
 		t.Fatal(err)
 	}
-	handler := logging.Requests(logging.New(io.Discard), mux)
+	handler := httplog.Requests(logging.New(io.Discard), mux)
 	for _, tc := range []struct {
 		name, path string
 		header     http.Header

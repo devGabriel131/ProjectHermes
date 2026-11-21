@@ -1,4 +1,4 @@
-package logging
+package httplog
 
 import (
 	"bytes"
@@ -12,6 +12,9 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"apollo/internal/logging"
+	"apollo/internal/logging/logtest"
 )
 
 type httpTestContextKey struct{}
@@ -46,7 +49,7 @@ func TestRequestsNestedMuxFreezesFirstFailure(t *testing.T) {
 	r.AddCookie(&http.Cookie{Name: "staff", Value: "PRIVATE-COOKIE"})
 	rec := httptest.NewRecorder()
 	rec.Header().Set("X-Railway-Request-Id", "upstream-response-id")
-	Requests(New(&out), root).ServeHTTP(rec, r)
+	Requests(logging.New(&out), root).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want committed 500 rather than intended 303", rec.Code)
@@ -97,7 +100,7 @@ func TestRequestsRequestIDs(t *testing.T) {
 			r.Header.Set("X-Request-ID", "PRIVATE-CLIENT-FALLBACK")
 			rec := httptest.NewRecorder()
 			rec.Header().Set("X-Railway-Request-Id", "preserve-upstream")
-			Requests(New(&out), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			Requests(logging.New(&out), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusServiceUnavailable)
 			})).ServeHTTP(rec, r)
 			id := rec.Header().Get("X-Request-ID")
@@ -148,7 +151,7 @@ func TestRequestsActualStatus(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
 			rec := &headerRecorder{ResponseRecorder: httptest.NewRecorder()}
-			Requests(New(&out), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			Requests(logging.New(&out), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				tc.write(w)
 				RecordError(r, "render", errors.New("PRIVATE-STATUS-ERROR"))
 			})).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
@@ -179,7 +182,7 @@ func (rec *headerRecorder) WriteHeader(status int) {
 func TestRequestsRenderFailureAfter200(t *testing.T) {
 	var out bytes.Buffer
 	rec := httptest.NewRecorder()
-	Requests(New(&out), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	Requests(logging.New(&out), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("already rendered"))
 		RecordError(r, "render", fmt.Errorf("PRIVATE-RENDER-WRITE: %w", syscall.EPIPE))
 	})).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/customer/PRIVATE-RENDER-TOKEN", nil))
@@ -197,7 +200,7 @@ func TestRequestsSuccessfulAndExpectedResponsesAreSilent(t *testing.T) {
 		t.Run(fmt.Sprintf("status_%d", status), func(t *testing.T) {
 			var out bytes.Buffer
 			rec := httptest.NewRecorder()
-			Requests(New(&out), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			Requests(logging.New(&out), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				RecordError(r, "lookup", nil)
 				if status != 0 {
 					w.WriteHeader(status)
@@ -207,7 +210,7 @@ func TestRequestsSuccessfulAndExpectedResponsesAreSilent(t *testing.T) {
 			if want == 0 {
 				want = 200
 			}
-			if rec.Code != want || len(decodeEvents(t, out.Bytes())) != 0 {
+			if rec.Code != want || len(logtest.Events(t, out.Bytes())) != 0 {
 				t.Fatalf("status %d, events %s; want status %d and silence", rec.Code, out.String(), want)
 			}
 		})
@@ -216,7 +219,7 @@ func TestRequestsSuccessfulAndExpectedResponsesAreSilent(t *testing.T) {
 
 func TestRequestsBare5xxAndRouteFallback(t *testing.T) {
 	var out bytes.Buffer
-	Requests(New(&out), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	Requests(logging.New(&out), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/customer/PRIVATE-BARE-TOKEN?value=PRIVATE-BARE-QUERY", nil))
 	event := onlyRequestEvent(t, out.Bytes())
@@ -235,7 +238,7 @@ func TestRequestsMethodNormalizationAndUnmatchedRoute(t *testing.T) {
 	for _, method := range []string{http.MethodGet, "PRIVATE-METHOD"} {
 		t.Run(method, func(t *testing.T) {
 			var out bytes.Buffer
-			Requests(New(&out), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			Requests(logging.New(&out), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusServiceUnavailable)
 			})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), method, "/PRIVATE-UNMATCHED?value=PRIVATE-QUERY", nil))
 			want := method
@@ -255,7 +258,7 @@ func TestRequestsMethodNormalizationAndUnmatchedRoute(t *testing.T) {
 
 func onlyRequestEvent(t *testing.T, data []byte) map[string]any {
 	t.Helper()
-	events := decodeEvents(t, data)
+	events := logtest.Events(t, data)
 	if len(events) != 1 {
 		t.Fatalf("got %d events, want one: %s", len(events), data)
 	}
@@ -263,4 +266,48 @@ func onlyRequestEvent(t *testing.T, data []byte) map[string]any {
 		t.Fatalf("event message = %v, want request_failed", events[0]["message"])
 	}
 	return events[0]
+}
+
+const loggingPrivateMarker = "PRIVATE_sql_cookie_password_token@example.invalid"
+
+func TestServerErrorLogPrivacy(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		record string
+		kind   string
+	}{
+		{name: "panic", record: "http: panic serving 192.0.2.1:4321: " + loggingPrivateMarker + "\ngoroutine 45 [running]:\nprivateHandler()\n\tprivate.go:42\n", kind: "panic"},
+		{name: "accept", record: "http: Accept error: " + loggingPrivateMarker + " 192.0.2.1:4321; retrying in 5ms\nprivate.go:42", kind: "accept"},
+		{name: "superfluous header", record: "http: superfluous response.WriteHeader call from " + loggingPrivateMarker + " (private.go:42)\nprivate stack", kind: "response_header"},
+		{name: "hijacked header", record: "http: response.WriteHeader on hijacked connection from " + loggingPrivateMarker + " (private.go:42)\nprivate stack", kind: "response_header"},
+		{name: "content length", record: "http: invalid Content-Length of " + loggingPrivateMarker + "\nprivate stack", kind: "response_header"},
+		{name: "transfer encoding", record: "http: WriteHeader called with both Transfer-Encoding of " + loggingPrivateMarker + " and a Content-Length of 99\nprivate stack", kind: "response_header"},
+		{name: "TLS", record: "http: TLS handshake error from 192.0.2.1:4321: " + loggingPrivateMarker + "\nprivate.go:42", kind: "other"},
+		{name: "embedded prefix", record: loggingPrivateMarker + "\nhttp: panic serving 192.0.2.1:4321: panic\nprivate.go:42", kind: "other"},
+		{name: "unknown", record: loggingPrivateMarker + "\nprivate.go:42", kind: "other"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			serverLog := ServerErrorLog(logging.New(&out))
+			if serverLog.Prefix() != "" || serverLog.Flags() != 0 {
+				t.Fatal("stdlib logger must add no prefix or flags")
+			}
+			serverLog.Print(tc.record)
+			events := logtest.Events(t, out.Bytes())
+			if len(events) != 1 || !bytes.HasSuffix(out.Bytes(), []byte{'\n'}) {
+				t.Fatal("one stdlib record must emit one JSON line")
+			}
+			event := events[0]
+			if len(event) != 4 || event["level"] != "error" || event["message"] != "http_server_error" || event["kind"] != tc.kind {
+				t.Fatalf("unexpected server diagnostic: %v", event)
+			}
+			for _, forbidden := range []string{loggingPrivateMarker, "192.0.2.1", "private.go", "goroutine", "privateHandler", "private stack"} {
+				if bytes.Contains(out.Bytes(), []byte(forbidden)) {
+					t.Errorf("serialized raw diagnostic content %q", forbidden)
+				}
+			}
+		})
+	}
 }

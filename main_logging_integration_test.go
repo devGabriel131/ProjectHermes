@@ -23,6 +23,7 @@ import (
 	"apollo/internal/billing/billingtest"
 	"apollo/internal/links"
 	"apollo/internal/logging"
+	"apollo/internal/logging/dblog"
 	"apollo/internal/settings"
 	"apollo/internal/students"
 	"apollo/internal/testdb"
@@ -261,7 +262,7 @@ func newHTTPLoggingFixture(t *testing.T) *httpLoggingFixture {
 	t.Helper()
 	fixture := &httpLoggingFixture{}
 	fixture.log = logging.New(&fixture.out)
-	fixture.db = testdb.Open(t, models()...).Session(&gorm.Session{Logger: logging.NewDBLogger(fixture.log)})
+	fixture.db = testdb.Open(t, models()...).Session(&gorm.Session{Logger: dblog.New(fixture.log)})
 	fixture.store = links.New(fixture.db, nil)
 	return fixture
 }
