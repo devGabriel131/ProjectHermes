@@ -17,7 +17,7 @@ Versions are the ones pinned in `go.mod`.
 | Phone validation | `github.com/nyaruka/phonenumbers/v2` | v2.0.15 | Root package only, imported by `internal/students/fields.go`; offline validation and E.164 formatting |
 | Browser script | HTMX | 2.0.11 from jsDelivr, pinned with an `integrity` hash | Plus small page scripts in `static/`; no frontend build step. See [Frontend](frontend.md) |
 | Dev server | Air (`tool github.com/air-verse/air`) | v1.67.4 | Run as `go tool air`. See [Local development](operations/local-development.md) |
-| Local database | `postgres:17` image in `compose.yaml` | 17 | |
+| Local database | `postgres:18` image in `compose.yaml`, same digest as CI | 18 | |
 | Host | Railway | n/a | [EXTERNAL] see [Railway](operations/railway.md) |
 
 There is no CSRF-token library. Cross-site writes are refused by the standard library's `http.CrossOriginProtection`, which sits in the global middleware chain below.
@@ -42,7 +42,7 @@ flowchart LR
   customer -.->|"redirected to hosted Checkout"| stripe
   railway -.->|"runs, health check GET /management/"| app
   local -.->|"builds and runs"| app
-  local -.->|"postgres:17"| pg
+  local -.->|"postgres:18"| pg
 ```
 
 ## Packages

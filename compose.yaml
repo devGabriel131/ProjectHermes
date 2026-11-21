@@ -1,6 +1,7 @@
 services:
   db:
-    image: postgres:17
+    # Same reference as the CI service container (.github/workflows/ci.yml); change both together.
+    image: postgres:18@sha256:eb63372c1e05c755f55fa30cbd07aecc443676fc6c0fa90b9002d01537841e1a
     environment:
       POSTGRES_DB: hermes
       POSTGRES_USER: postgres
@@ -8,7 +9,8 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # Postgres 18 keeps its data in /var/lib/postgresql/18/docker; a Postgres 17 volume cannot start here.
+      - postgres18_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d hermes"]
       interval: 2s
@@ -16,4 +18,4 @@ services:
       retries: 15
 
 volumes:
-  postgres_data:
+  postgres18_data:
