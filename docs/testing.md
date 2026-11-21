@@ -56,10 +56,10 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 | Vet | `go vet -tags=integration ./...` |
 | Build | `go build ./...` |
 | Tests | `go test -race -tags=integration -count=1 ./...` |
-| Vulnerabilities | `go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...` |
-| SAST, report only | `go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 ./...`; findings appear in the job log and are triaged by hand |
+| Vulnerabilities | `go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 -tags=integration -test ./...` |
+| SAST, report only | `go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 -quiet -tags=integration ./...`; findings appear in the step log and as a warning on the run page, and are triaged by hand |
 
-To reproduce locally, set up the test database as in [Commands](#commands) and run the same commands; Compose still runs `postgres:17`, so only CI tests against 18. The workflow reads only repository contents (`permissions: contents: read`), uses no secrets, pins its actions to commit SHAs and its Postgres image to a digest, and cancels a run superseded by a newer push to the same ref. Whether a red run blocks a merge or a Railway deploy is set outside the repository `[EXTERNAL]`: branch protection on `master` and Railway's "Wait for CI".
+To reproduce locally, set up the test database as in [Commands](#commands) and run the same commands; Compose still runs `postgres:17`, so only CI tests against 18. The workflow reads only repository contents (`permissions: contents: read`), uses no secrets, pins its actions to commit SHAs and its Postgres image to a digest, and cancels a pull request's run when a newer push to that pull request supersedes it; each `master` commit runs in its own concurrency group, so none is cancelled. Whether a red run blocks a merge or a Railway deploy is set outside the repository `[EXTERNAL]`: branch protection on `master` and Railway's "Wait for CI".
 
 ## `testdb`: one schema per test
 

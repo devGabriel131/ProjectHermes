@@ -9,9 +9,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels its older run. Master pushes get one group per commit, because a shared
+# group would still cancel a pending run; so every merged commit gets a verdict.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -64,10 +66,12 @@ jobs:
       # The scanners run even after an earlier step fails, so every run reports them.
       - name: govulncheck
         if: ${{ !cancelled() }}
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 -tags=integration -test ./...
 
-      # Report only: findings are triaged by hand, so they never fail the run.
+      # Report only: findings are triaged by hand, so they never fail the run; a warning puts them on the run page.
       - name: gosec (report only)
         if: ${{ !cancelled() }}
-        continue-on-error: true
-        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 ./...
+        run: |
+          if ! go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 -quiet -tags=integration ./...; then
+            echo "::warning title=gosec::gosec reported findings (or failed); see the gosec step log"
+          fi
