@@ -4,6 +4,7 @@ package management
 
 import (
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -418,8 +419,8 @@ func TestStudentHTMXFragmentsModalAndEscaping(t *testing.T) {
 	requireStudentRow(t, body, other)
 	res, body = a.send(t, staff, http.MethodGet, "/management/", nil, htmxHeader)
 	requireRefresh(t, res, body, a.list(t))
-	if strings.Contains(body, escapedHTML(expected.Name)) || strings.Contains(body, escapedHTML(expected.Phone)) ||
-		!strings.Contains(body, escapedHTML(source.Name)) || !strings.Contains(body, escapedHTML(source.Phone)) {
+	if strings.Contains(body, html.EscapeString(expected.Name)) || strings.Contains(body, html.EscapeString(expected.Phone)) ||
+		!strings.Contains(body, html.EscapeString(source.Name)) || !strings.Contains(body, html.EscapeString(source.Phone)) {
 		t.Fatalf("canonical edits changed registry snapshot: %s", body)
 	}
 	requireRegistryPrivacy(t, body, source.Details)

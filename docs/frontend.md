@@ -4,7 +4,7 @@ The browser side of the site: server-rendered templates, htmx 2.0.11 and six sma
 
 ## Assets
 
-`static/` is embedded in the binary (`//go:embed static`, `assets`) and served by `GET /static/` and `GET /favicon.ico`, so a CSS or script change needs a rebuild ([Local development](operations/local-development.md)). There is no bundler. htmx comes from jsDelivr (`htmx.org@2.0.11`) with an SRI `integrity` hash, `crossorigin="anonymous"` and `defer`; the tag is repeated in each template that uses it. Fonts come from Google Fonts stylesheets (no SRI).
+`static/` is embedded in the binary (`//go:embed static`, `assets`) and served by `GET /static/` and `GET /favicon.ico`, so a CSS or script change needs a rebuild ([Local development](operations/local-development.md)). There is no bundler. htmx comes from jsDelivr (`htmx.org@2.0.11`) with an SRI `integrity` hash, `crossorigin="anonymous"` and `defer`; the tag is repeated in each `html/template` page that uses it, and `ui.Staff` renders it for templ staff pages that ask for htmx. Fonts come from Google Fonts stylesheets (no SRI).
 
 | File | Used by |
 |---|---|
@@ -53,7 +53,7 @@ sequenceDiagram
     S-->>L: data: change
     L->>H: htmx.trigger(body, management-changed)
     H->>A: GET the region URL with HX-Request
-    A-->>H: fragment such as link-rows or student-records
+    A-->>H: fragment such as linkRows or student-records
     Note over L,S: each new connection also receives one event to catch up
     alt stream CLOSED after a 502 or a sign-out
         L->>H: trigger management-changed once
@@ -108,7 +108,7 @@ The two sheets are standalone; customer pages never load `styles.css`.
 
 | Directive | Consequence |
 |---|---|
-| `script-src 'self' https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js` | No inline script, `on*` attribute or `hx-on`. Behavior lives in `/static/*.js`; the one pinned htmx file loads from jsDelivr under SRI, so an htmx upgrade changes the template URL and `sitePolicy` together. |
+| `script-src 'self' https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js` | No inline script, `on*` attribute or `hx-on`. Behavior lives in `/static/*.js`; the one pinned htmx file loads from jsDelivr under SRI, so an htmx upgrade changes the template URLs, `internal/ui/staff.templ` and `sitePolicy` together. |
 | `style-src 'self' https://fonts.googleapis.com` | No inline `<style>` or `style=` attribute. htmx would inject indicator styles, so every page that loads it sets `includeIndicatorStyles: false` in its `htmx-config` meta. |
 | `font-src https://fonts.gstatic.com` | Font files only from Google Fonts. |
 | `connect-src 'self'` | Autosave, PIN check, live events and payment polling talk only to this origin. |
@@ -149,7 +149,7 @@ The same middleware sends `Strict-Transport-Security: max-age=31536000` (no `inc
 
 - **`includeIndicatorStyles: false`.** Removing it makes htmx inject inline styles that the site CSP blocks.
 - **Clipboard write started inside the click.** Moving it after the response breaks Safari's user-activation rule.
-- **The htmx tag repeated per template.** The management pages (`index.html`, `students.html`, `dashboard.html`) and the customer `index.html` each define their own complete HTML documents rather than sharing a global layout template. Pages moved to templ share one layout instead: login and settings use `internal/ui`'s staff document, and the rest follow in their Phase C steps.
+- **The htmx tag repeated per template.** The `html/template` management pages (`students.html`, `dashboard.html`) and the customer `index.html` each define their own complete HTML documents rather than sharing a global layout template. Pages moved to templ share one layout instead: login, settings and links use `internal/ui`'s staff document, and the rest follow in their Phase C steps.
 
 ## Source
 
@@ -161,11 +161,11 @@ The same middleware sends `Strict-Transport-Security: max-age=31536000` (no `inc
 - `static/customer.js`: `setCustomValidity`, `reconcileEmails`, `syncDateDraft`, `ignoreDetachedDraft`
 - `static/styles.css`: `color-scheme`, `management-workspace`, `management-sidebar`, `prefers-reduced-motion`, `copy-toast`
 - `static/customer.css`: `color-scheme`, `--column`, `prefers-reduced-motion`
-- `internal/management/templates/index.html`: `copy-toast`, `hx-confirm`, `management-skip-link`
+- `internal/management/links.templ`: `copy-toast`, `hx-confirm`
 - `internal/management/templates/students.html`: `student-dialog`, `noscript`
 - `internal/management/settings.templ`: `settings.js`
 - `internal/customer/templates/index.html`: `htmx-config`, `includeIndicatorStyles`, `hx-trigger`, `customer.js`
 - `internal/customer/templates/payment-return.html`: `noscript`, `hx-trigger`
 - `internal/customer/templates/icons.html`: `focusable`
-- `internal/ui/staff.templ`: `management-skip-link`, `Staff`, `SignIn`
+- `internal/ui/staff.templ`: `management-skip-link`, `Staff`, `SignIn`, `htmx-config`
 - `internal/customer/customer.go`: `withHeaders`

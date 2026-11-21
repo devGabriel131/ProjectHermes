@@ -26,13 +26,14 @@ flowchart TD
 
 | Route | Full page (no HTMX) | HTMX answer | Notes |
 |---|---|---|---|
-| `GET /management/{$}` | `index.html` | `link-rows` | Links tab. Hides trashed links without active enrollments and enrollments paid more than 24 h ago; also shows the program start date form. `?program-start-date-saved` adds the notice "Fecha de comienzo guardada." |
-| `GET /management/trash` | `index.html` (Trash) | `link-rows` | Canceled and expired links and enrollments. |
-| `POST /management/program-start-date` | 303 to `/management/?program-start-date-saved`, or 422 `index.html` | none | Ordinary form post. Semantics in [Agreement](../domain/agreement.md). |
-| `POST /management/links` | `index.html`, new link's URL on its row | `result` + `HX-Trigger` | Notice "Link created." |
-| `POST /management/links/{id}/rename` | `index.html` | `result` + `HX-Trigger`; 204 when the ID names no link | Trims whitespace, rejects empty/over-100-rune/control names with 422; no-op preserves existing row and notice "Link renamed." |
-| `POST /management/links/{id}/cancel` | `index.html` | `result` + `HX-Trigger`; 204 when the ID names no link | Notice "Link canceled." or "Link can no longer be canceled." |
-| `POST /management/enrollments/{id}/cancel` | `index.html` | `result` + `HX-Trigger`; 409 on `ErrCancelBlocked`; 204 when the ID names no enrollment | Delegates to `billing.Service.CancelEnrollment`; notices "Enrollment canceled.", "Expired PIN cleared.", or "Enrollment can no longer be canceled." |
+| `GET /management/{$}` | `linksView` | `linkRows` | Links tab. Hides trashed links without active enrollments and enrollments paid more than 24 h ago; also shows the program start date form. `?program-start-date-saved` adds the notice "Fecha de comienzo guardada." |
+| `GET /management/trash` | `linksView` (Trash) | `linkRows` | Canceled and expired links and enrollments. |
+| `POST /management/program-start-date` | 303 to `/management/?program-start-date-saved`, or 422 `linksView` | none | Ordinary form post. Semantics in [Agreement](../domain/agreement.md). |
+| `POST /management/links` | `linksView`, new link's URL on its row | `linkNotice` + `HX-Trigger` | Notice "Link created." |
+| `POST /management/links/{id}/rename` | `linksView` | `linkNotice` + `HX-Trigger`; 204 when the ID names no link | Trims whitespace, rejects empty/over-100-rune/control names with 422; no-op preserves existing row and notice "Link renamed." |
+| `POST /management/links/{id}/cancel` | `linksView` | `linkNotice` + `HX-Trigger`; 204 when the ID names no link | Notice "Link canceled." or "Link can no longer be canceled." |
+| `POST /management/enrollments/{id}/cancel` | `linksView` | `linkNotice` + `HX-Trigger`; 409 on `ErrCancelBlocked`; 204 when the ID names no enrollment | Delegates to `billing.Service.CancelEnrollment`; notices "Enrollment canceled.", "Expired PIN cleared.", or "Enrollment can no longer be canceled." |
+| `GET /management/settings` | `settingsView` | none | Link lifetime and bootcamp date. `?saved` and `?bootcamp-date-saved` add the notice "Saved." to their form. |
 | `POST /management/settings` | 303 to `/management/settings?saved`, or 422 `settingsView` | none | Ordinary form post; the link lifetime only. |
 | `POST /management/bootcamp-date` | 303 to `/management/settings?bootcamp-date-saved`, or 422 `settingsView` "Enter a valid date (YYYY-MM-DD)." | none | Ordinary form post. Saves `settings.bootcamp_date`, the next Bootcamp Militarizado, which ProjectHephaestus prints on its employer letter and treats as over once the day has passed. |
 | `GET /management/dashboard` | `dashboard.html` | `dashboard-content` | [Dashboard](dashboard.md). |
@@ -50,18 +51,20 @@ flowchart TD
 | `GET /management/students/{id}/billing/invoices/{obligation}` | none | none | 303 to the Stripe hosted invoice URL, `Cache-Control: no-store`. |
 | `GET /management/events` | `text/event-stream` | n/a | Mounted in `main.go`, not in this package. |
 
-`list` renders `index.html` instead of `link-rows` whenever the status is not 200, even for an HTMX request, so an error page is never a fragment. A signed-in request to an unknown path under `/management/` gets the mux's plain 404 after `Require`.
+`list` renders `linksView` instead of `linkRows` whenever the status is not 200, even for an HTMX request, so an error page is never a fragment. A signed-in request to an unknown path under `/management/` gets the mux's plain 404 after `Require`.
 
 On the links page `list` also loads `DeclinedEnrollments` (skipped for Trash, which holds no `Awaiting payment` rows) and each `linkRow` carries it, so an `Awaiting payment` enrollment whose first payment was declined shows a "Payment declined" badge next to its status. Billing's change signal refreshes it live ([Live updates](../live-updates.md)).
 
-The settings page is a templ view, `settingsView` in `settings.templ`, inside the `ui.Staff` layout ([Architecture](../architecture.md)). The other staff templates are parsed together from `templates/*.html`, so `brand`, `account`, `navigation`, `time`, `link-icon` and `trash-icon` defined in `index.html` serve every one of them; `ui.Staff` renders the same brand, navigation and account until each page moves to templ in its Phase C step.
+The links and Trash page (`linksView`, `linkRows`, `linkNotice` in `links.templ`) and the settings page (`settingsView` in `settings.templ`) are templ views inside the `ui.Staff` layout ([Architecture](../architecture.md)). The other staff templates are parsed together from `templates/*.html`, so `brand`, `account`, `navigation`, `time`, `link-icon` and `trash-icon` defined in `staff.html` serve every one of them; `ui.Staff` renders the same brand, navigation and account until each page moves to templ in its Phase C step.
 
 | File | Defines |
 |---|---|
-| `index.html` | `index.html`, `link`, `link-rows`, `result`, `brand`, `account`, `time`, `navigation`, `link-icon`, `trash-icon` |
-| `students.html` | `students.html`, `student-records`, `student-row`, `student-detail`, `student-field`, `student-save`, `student-billing`, `student-billing-portal` |
-| `add-students.html` | `add-students.html` |
-| `dashboard.html` | `dashboard.html`, `dashboard-content` |
+| `links.templ` | `linksView`, `programStart`, `linkRows`, `linkItem`, `enrollmentItem`, `linkNotice`, `timestamp` |
+| `settings.templ` | `settingsView` |
+| `templates/staff.html` | `brand`, `account`, `time`, `navigation`, `link-icon`, `trash-icon` |
+| `templates/students.html` | `students.html`, `student-records`, `student-row`, `student-detail`, `student-field`, `student-save`, `student-billing`, `student-billing-portal` |
+| `templates/add-students.html` | `add-students.html` |
+| `templates/dashboard.html` | `dashboard.html`, `dashboard-content` |
 
 ## Response headers
 
@@ -75,13 +78,13 @@ Every live region re-fetches itself on the `management-changed` event, which com
 
 | Region | Element | Request on `management-changed` | Fragment | Swap |
 |---|---|---|---|---|
-| Link rows | `#generated-links` | `GET /management/` or `/management/trash` | `link-rows` | inner |
+| Link rows | `#generated-links` | `GET /management/` or `/management/trash` | `linkRows` | inner |
 | Student records | `#student-records` (includes `#student-filter`, `hx-sync` replace) | `GET /management/students` | `student-records` + `HX-Replace-Url` | inner |
 | Student billing | `#student-billing-{id}` | `GET /management/students/{id}/billing` | `student-billing` | outer |
 | Dashboard | `.dashboard` | `GET /management/dashboard` | `dashboard-content` | inner |
 
-- **One answer for link and enrollment actions.** Create, rename and both cancels report through `answer`. A browser gets `index.html` with the notice, at the action's status. htmx gets a refusal (any status but 200) as plain text, 204 when the ID names nothing, and otherwise `result` with `HX-Trigger: management-changed`. The forms use `hx-swap="none"`, and the list is replaced only by a GET, so a slower, older render never overwrites a newer one.
-- **Create.** `POST /management/links` answers `result` (an out-of-band swap filling `#link-status`) with `HX-Trigger: management-changed`; the refreshed rows render each link's permanent `/customer/{token}` URL and Copy link button directly.
+- **One answer for link and enrollment actions.** Create, rename and both cancels report through `answer`. A browser gets `linksView` with the notice, at the action's status. htmx gets a refusal (any status but 200) as plain text, 204 when the ID names nothing, and otherwise `linkNotice` with `HX-Trigger: management-changed`. The forms use `hx-swap="none"`, and the list is replaced only by a GET, so a slower, older render never overwrites a newer one.
+- **Create.** `POST /management/links` answers `linkNotice` (an out-of-band swap filling `#link-status`) with `HX-Trigger: management-changed`; the refreshed rows render each link's permanent `/customer/{token}` URL and Copy link button directly.
 - **Dialogs.** A student row link loads `student-detail` into `#student-dialog-content` and `students.js` opens the `<dialog>`; see [Students](students.md).
 - **Signed out.** An HTMX request without a valid session gets 401 and `HX-Redirect: /management/`, which sends the whole window to the login page rather than swapping a login form into a fragment. `HX-Refresh` is customer-only; management 404s and 500s are plain text, and staff pages do not swap 4xx or 5xx responses (`management.js` shows the server text in a status element; `students.js` shows plain-text server replies for billing actions and fixed client messages for field or roster failures).
 
@@ -120,7 +123,8 @@ Other POST handlers read no body. `GET /management/events` clears its own write 
 - `internal/management/students.go`: `pathID`, `billingFailure`, `act`, `withdraw`
 - `internal/management/addstudents.go`: `addStudentsPage`, `addStudent`, `importStudents`, `readRoster`, `maxRosterRows`, `fixWorkbook`
 - `internal/management/dashboard.go`: `dashboard`
-- `internal/management/templates/index.html`: `link-rows`, `link`, `result`, `navigation`, `brand`, `account`, `time`
+- `internal/management/links.templ`: `linksView`, `linkRows`, `linkItem`, `linkNotice`, `timestamp`
+- `internal/management/templates/staff.html`: `navigation`, `brand`, `account`, `time`
 - `internal/management/templates/students.html`: `student-records`, `student-detail`, `student-billing`
 - `internal/management/templates/dashboard.html`: `dashboard-content`
 - `internal/management/templates/add-students.html`: `add-students.html`
