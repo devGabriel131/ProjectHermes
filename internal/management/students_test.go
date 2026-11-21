@@ -103,9 +103,9 @@ func requireStudentRow(t *testing.T, body string, record students.Student) {
 	}
 	previous := -1
 	for i, field := range students.StaffFields() {
-		cell := "<td>" + escapedHTML(field.Value(record)) + "</td>"
+		cell := "<td>" + html.EscapeString(field.Value(record)) + "</td>"
 		if i == 0 {
-			cell = ">" + escapedHTML(record.Name) + "</a>"
+			cell = ">" + html.EscapeString(record.Name) + "</a>"
 		}
 		at := strings.Index(row, cell)
 		if at < 0 || at <= previous {
@@ -120,7 +120,7 @@ func requireStudentDetails(t *testing.T, body string, details students.Details) 
 	for _, field := range students.Fields() {
 		_, section, found := strings.Cut(body, "<h2>"+field.Label+"</h2>")
 		section, _, _ = strings.Cut(section, `<div class="student-field"`)
-		if !found || !strings.Contains(section, `<p class="student-field-value">`+escapedHTML(valueOf(field, details))+`</p>`) {
+		if !found || !strings.Contains(section, `<p class="student-field-value">`+html.EscapeString(valueOf(field, details))+`</p>`) {
 			t.Fatalf("details omitted or misplaced canonical %s: %s", field.Key, body)
 		}
 	}
@@ -140,7 +140,7 @@ func requireStudentEditor(t *testing.T, body string, id uint64, key, value strin
 		t.Fatalf("missing labeled %s editor: %s", key, body)
 	}
 	if len(field.Options) == 0 {
-		if !strings.Contains(body, `<input id="`+inputID+`" name="value" type="`+field.InputType+`" value="`+escapedHTML(value)+`" required`) {
+		if !strings.Contains(body, `<input id="`+inputID+`" name="value" type="`+field.InputType+`" value="`+html.EscapeString(value)+`" required`) {
 			t.Fatalf("input lost %s value or required state: %s", key, body)
 		}
 		return
@@ -152,11 +152,11 @@ func requireStudentEditor(t *testing.T, body string, id uint64, key, value strin
 	if !strings.Contains(body, `<select id="`+inputID+`" name="value" required`) ||
 		strings.Contains(body, `<input id="`+inputID+`"`) ||
 		!strings.Contains(body, `<option value=""`) || !strings.Contains(body, ">Select an option</option>") ||
-		!strings.Contains(body, `<option value="`+escapedHTML(selected)+`" selected>`) ||
+		!strings.Contains(body, `<option value="`+html.EscapeString(selected)+`" selected>`) ||
 		strings.Count(body, " selected") != 1 || strings.Count(body, "<option ") != len(field.Options)+1 {
 		t.Fatalf("native select lost stored/attempted selection: %s", body)
 	}
-	if selected == "" && value != "" && strings.Contains(body, `<option value="`+escapedHTML(value)+`"`) {
+	if selected == "" && value != "" && strings.Contains(body, `<option value="`+html.EscapeString(value)+`"`) {
 		t.Fatalf("native select forged an option for %q: %s", value, body)
 	}
 }
@@ -312,7 +312,7 @@ func TestStudentValidationPreservesAttemptedValues(t *testing.T) {
 				}
 				if !partial {
 					for _, field := range students.Fields() {
-						if field.Key != tc.key && !strings.Contains(body, `<p class="student-field-value">`+escapedHTML(field.Value(original))+`</p>`) {
+						if field.Key != tc.key && !strings.Contains(body, `<p class="student-field-value">`+html.EscapeString(field.Value(original))+`</p>`) {
 							t.Fatalf("invalid %s lost canonical %s: %s", tc.key, field.Key, body)
 						}
 					}
@@ -361,7 +361,7 @@ func TestStudentHTMXFragmentsModalAndEscaping(t *testing.T) {
 				requireStudentEditor(t, body, original.ID, edit.key, valueOf(field, expected))
 				res, body = a.send(t, staff, http.MethodGet, cancel, nil, htmxHeader)
 				if res.StatusCode != http.StatusOK || !strings.Contains(body, fieldID) ||
-					!strings.Contains(body, `<p class="student-field-value">`+escapedHTML(valueOf(field, expected))+`</p>`) ||
+					!strings.Contains(body, `<p class="student-field-value">`+html.EscapeString(valueOf(field, expected))+`</p>`) ||
 					strings.Contains(body, "student-field-editor") || strings.Contains(body, "hx-swap-oob") || strings.Contains(body, "student-heading") {
 					t.Fatalf("cancel field modal=%t: status = %d: %s", modal, res.StatusCode, body)
 				}
@@ -375,7 +375,7 @@ func TestStudentHTMXFragmentsModalAndEscaping(t *testing.T) {
 				}
 				res, body = a.send(t, staff, http.MethodPost, fieldPath+query, form, htmxHeader)
 				if res.StatusCode != http.StatusOK || !strings.Contains(body, fieldID) ||
-					!strings.Contains(body, `<p class="student-field-value">`+escapedHTML(valueOf(field, edit.want))+`</p>`) ||
+					!strings.Contains(body, `<p class="student-field-value">`+html.EscapeString(valueOf(field, edit.want))+`</p>`) ||
 					!strings.Contains(body, `role="status">Saved.`) || strings.Contains(body, "<!doctype html>") ||
 					strings.Contains(body, "student-heading") || strings.Contains(body, "student-field-editor") {
 					t.Fatalf("HTMX save modal=%t: status = %d: %s", modal, res.StatusCode, body)
@@ -441,7 +441,7 @@ func TestStudentEscapesPersistedHostileName(t *testing.T) {
 	path := fmt.Sprintf("/management/students/%d", original.ID)
 	for _, reload := range []string{path, "/management/students", path + "/fields/name?edit=1"} {
 		res, body := a.send(t, staff, http.MethodGet, reload, nil, nil)
-		if res.StatusCode != http.StatusOK || !strings.Contains(body, escapedHTML(hostile)) || strings.Contains(body, `<script>alert`) {
+		if res.StatusCode != http.StatusOK || !strings.Contains(body, html.EscapeString(hostile)) || strings.Contains(body, `<script>alert`) {
 			t.Fatalf("escaped persisted value on %s: status = %d: %s", reload, res.StatusCode, body)
 		}
 	}

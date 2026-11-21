@@ -37,17 +37,17 @@ flowchart TD
 | `POST /management/settings` | 303 to `/management/settings?saved`, or 422 `settingsView` | none | Ordinary form post; the link lifetime only. |
 | `POST /management/bootcamp-date` | 303 to `/management/settings?bootcamp-date-saved`, or 422 `settingsView` "Enter a valid date (YYYY-MM-DD)." | none | Ordinary form post. Saves `settings.bootcamp_date`, the next Bootcamp Militarizado, which ProjectHephaestus prints on its employer letter and treats as over once the day has passed. |
 | `GET /management/dashboard` | `dashboard.html` | `dashboard-content` | [Dashboard](dashboard.md). |
-| `GET /management/students` | `students.html` | `student-records` + `HX-Replace-Url` | Filters in [Students](students.md). |
+| `GET /management/students` | `studentsView` | `studentRecords` + `HX-Replace-Url` | Filters in [Students](students.md). |
 | `GET /management/students/new` | `add-students.html` | none | Add students: one form for a single student and a roster import. `?added={id}` confirms the student just added. |
 | `POST /management/students` | 303 to `/management/students/new?added={id}`, or `add-students.html`: 422 for an invalid group or field, 409 when a PIN was just taken | none | Ordinary form post; adds one staff-added student through `students.Store.Add`. |
 | `POST /management/students/import` | `add-students.html` with the import report, or with the reason: 413 over 2 MB, 422 for a missing or unreadable file or an invalid group, 409 when a PIN was just taken | none | Multipart `.xlsx` or `.csv` roster (`readRoster`), at most 1000 student rows (`maxRosterRows`); rows `Add` refuses come back as a downloadable rows-to-fix workbook (`fixWorkbook`). |
-| `GET /management/students/{id}` | `students.html` (details page) | `student-detail` (dialog) | |
-| `GET`, `POST /management/students/{id}/fields/{field}` | `students.html` | `student-field`, or `student-save` after a save | Non-HTMX save answers 303 to `?saved={field}`. |
-| `GET /management/students/{id}/billing` | same fragment | `student-billing` | Read-only; never calls Stripe. |
-| `POST /management/students/{id}/billing/reconcile` | same fragment | `student-billing` | Staff billing action. |
-| `POST /management/students/{id}/billing/reinstatement` | same fragment | `student-billing` | Staff billing action. |
-| `POST /management/students/{id}/billing/withdraw` | same fragment | `student-billing` | Staff billing action; irreversible ([Withdrawal](../billing/withdrawal.md)). |
-| `POST /management/students/{id}/billing/portal` | same fragment | `student-billing-portal` | One-off Stripe portal link. |
+| `GET /management/students/{id}` | `studentsView` (details page) | `studentDetail` (dialog) | |
+| `GET`, `POST /management/students/{id}/fields/{field}` | `studentsView` | `studentField`, or `studentSave` after a save | Non-HTMX save answers 303 to `?saved={field}`. |
+| `GET /management/students/{id}/billing` | same fragment | `billingBlock` | Read-only; never calls Stripe. |
+| `POST /management/students/{id}/billing/reconcile` | same fragment | `billingBlock` | Staff billing action. |
+| `POST /management/students/{id}/billing/reinstatement` | same fragment | `billingBlock` | Staff billing action. |
+| `POST /management/students/{id}/billing/withdraw` | same fragment | `billingBlock` | Staff billing action; irreversible ([Withdrawal](../billing/withdrawal.md)). |
+| `POST /management/students/{id}/billing/portal` | same fragment | `billingPortal` | One-off Stripe portal link. |
 | `GET /management/students/{id}/billing/invoices/{obligation}` | none | none | 303 to the Stripe hosted invoice URL, `Cache-Control: no-store`. |
 | `GET /management/events` | `text/event-stream` | n/a | Mounted in `main.go`, not in this package. |
 
@@ -55,14 +55,14 @@ flowchart TD
 
 On the links page `list` also loads `DeclinedEnrollments` (skipped for Trash, which holds no `Awaiting payment` rows) and each `linkRow` carries it, so an `Awaiting payment` enrollment whose first payment was declined shows a "Payment declined" badge next to its status. Billing's change signal refreshes it live ([Live updates](../live-updates.md)).
 
-The links and Trash page (`linksView`, `linkRows`, `linkNotice` in `links.templ`) and the settings page (`settingsView` in `settings.templ`) are templ views inside the `ui.Staff` layout ([Architecture](../architecture.md)). The other staff templates are parsed together from `templates/*.html`, so `brand`, `account`, `navigation`, `time`, `link-icon` and `trash-icon` defined in `staff.html` serve every one of them; `ui.Staff` renders the same brand, navigation and account until each page moves to templ in its Phase C step.
+The links and Trash page (`linksView`, `linkRows`, `linkNotice` in `links.templ`), the Students page (`studentsView` in `students.templ`) and the settings page (`settingsView` in `settings.templ`) are templ views inside the `ui.Staff` layout ([Architecture](../architecture.md)). The other staff templates are parsed together from `templates/*.html`, so `brand`, `account`, `navigation`, `link-icon` and `trash-icon` defined in `staff.html` serve every one of them; `ui.Staff` renders the same brand, navigation and account until each page moves to templ in its Phase C step.
 
 | File | Defines |
 |---|---|
 | `links.templ` | `linksView`, `programStart`, `linkRows`, `linkItem`, `enrollmentItem`, `linkNotice`, `timestamp` |
+| `students.templ` | `studentsView`, `studentFilter`, `statusOption`, `studentRecords`, `studentRow`, `studentDetail`, `studentField`, `studentSave`, `billingBlock`, `billingPortal` |
 | `settings.templ` | `settingsView` |
-| `templates/staff.html` | `brand`, `account`, `time`, `navigation`, `link-icon`, `trash-icon` |
-| `templates/students.html` | `students.html`, `student-records`, `student-row`, `student-detail`, `student-field`, `student-save`, `student-billing`, `student-billing-portal` |
+| `templates/staff.html` | `brand`, `account`, `navigation`, `link-icon`, `trash-icon` |
 | `templates/add-students.html` | `add-students.html` |
 | `templates/dashboard.html` | `dashboard.html`, `dashboard-content` |
 
@@ -79,13 +79,13 @@ Every live region re-fetches itself on the `management-changed` event, which com
 | Region | Element | Request on `management-changed` | Fragment | Swap |
 |---|---|---|---|---|
 | Link rows | `#generated-links` | `GET /management/` or `/management/trash` | `linkRows` | inner |
-| Student records | `#student-records` (includes `#student-filter`, `hx-sync` replace) | `GET /management/students` | `student-records` + `HX-Replace-Url` | inner |
-| Student billing | `#student-billing-{id}` | `GET /management/students/{id}/billing` | `student-billing` | outer |
+| Student records | `#student-records` (includes `#student-filter`, `hx-sync` replace) | `GET /management/students` | `studentRecords` + `HX-Replace-Url` | inner |
+| Student billing | `#student-billing-{id}` | `GET /management/students/{id}/billing` | `billingBlock` | outer |
 | Dashboard | `.dashboard` | `GET /management/dashboard` | `dashboard-content` | inner |
 
 - **One answer for link and enrollment actions.** Create, rename and both cancels report through `answer`. A browser gets `linksView` with the notice, at the action's status. htmx gets a refusal (any status but 200) as plain text, 204 when the ID names nothing, and otherwise `linkNotice` with `HX-Trigger: management-changed`. The forms use `hx-swap="none"`, and the list is replaced only by a GET, so a slower, older render never overwrites a newer one.
 - **Create.** `POST /management/links` answers `linkNotice` (an out-of-band swap filling `#link-status`) with `HX-Trigger: management-changed`; the refreshed rows render each link's permanent `/customer/{token}` URL and Copy link button directly.
-- **Dialogs.** A student row link loads `student-detail` into `#student-dialog-content` and `students.js` opens the `<dialog>`; see [Students](students.md).
+- **Dialogs.** A student row link loads `studentDetail` into `#student-dialog-content` and `students.js` opens the `<dialog>`; see [Students](students.md).
 - **Signed out.** An HTMX request without a valid session gets 401 and `HX-Redirect: /management/`, which sends the whole window to the login page rather than swapping a login form into a fragment. `HX-Refresh` is customer-only; management 404s and 500s are plain text, and staff pages do not swap 4xx or 5xx responses (`management.js` shows the server text in a status element; `students.js` shows plain-text server replies for billing actions and fixed client messages for field or roster failures).
 
 ## Limits and timeouts
@@ -124,8 +124,8 @@ Other POST handlers read no body. `GET /management/events` clears its own write 
 - `internal/management/addstudents.go`: `addStudentsPage`, `addStudent`, `importStudents`, `readRoster`, `maxRosterRows`, `fixWorkbook`
 - `internal/management/dashboard.go`: `dashboard`
 - `internal/management/links.templ`: `linksView`, `linkRows`, `linkItem`, `linkNotice`, `timestamp`
-- `internal/management/templates/staff.html`: `navigation`, `brand`, `account`, `time`
-- `internal/management/templates/students.html`: `student-records`, `student-detail`, `student-billing`
+- `internal/management/students.templ`: `studentsView`, `studentRecords`, `studentDetail`, `billingBlock`
+- `internal/management/templates/staff.html`: `navigation`, `brand`, `account`
 - `internal/management/templates/dashboard.html`: `dashboard-content`
 - `internal/management/templates/add-students.html`: `add-students.html`
 - `internal/management/settings.templ`: `settingsView`, `settings.js`

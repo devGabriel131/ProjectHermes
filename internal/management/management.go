@@ -78,9 +78,8 @@ func plural(n int, one, many string) string {
 // biller supplies each student's billing summary and the staff billing actions.
 func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Store, config *settings.Store, staff func(context.Context) string, biller *billing.Service) error {
 	page, err := template.New("management").Funcs(template.FuncMap{
-		"money":       payments.Money,
-		"plural":      plural,
-		"cohortLabel": students.CohortLabel,
+		"money":  payments.Money,
+		"plural": plural,
 	}).ParseFS(templates, "templates/*.html")
 	if err != nil {
 		return err
