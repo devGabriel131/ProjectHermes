@@ -149,7 +149,7 @@ The same middleware sends `Strict-Transport-Security: max-age=31536000` (no `inc
 
 - **`includeIndicatorStyles: false`.** Removing it makes htmx inject inline styles that the site CSP blocks.
 - **Clipboard write started inside the click.** Moving it after the response breaks Safari's user-activation rule.
-- **The htmx tag repeated per template.** The management pages (`index.html`, `students.html`, `dashboard.html`) and the customer `index.html` each define their own complete HTML documents rather than sharing a global layout template.
+- **The htmx tag repeated per template.** The management pages (`index.html`, `students.html`, `dashboard.html`) and the customer `index.html` each define their own complete HTML documents rather than sharing a global layout template. Pages moved to templ share one layout instead: login and settings use `internal/ui`'s staff document, and the rest follow in their Phase C steps.
 
 ## Source
 
@@ -163,9 +163,9 @@ The same middleware sends `Strict-Transport-Security: max-age=31536000` (no `inc
 - `static/customer.css`: `color-scheme`, `--column`, `prefers-reduced-motion`
 - `internal/management/templates/index.html`: `copy-toast`, `hx-confirm`, `management-skip-link`
 - `internal/management/templates/students.html`: `student-dialog`, `noscript`
-- `internal/management/templates/settings.html`: `settings.js`
+- `internal/management/settings.templ`: `settings.js`
 - `internal/customer/templates/index.html`: `htmx-config`, `includeIndicatorStyles`, `hx-trigger`, `customer.js`
 - `internal/customer/templates/payment-return.html`: `noscript`, `hx-trigger`
 - `internal/customer/templates/icons.html`: `focusable`
-- `internal/auth/templates/login.html`: `management-skip-link`
+- `internal/ui/staff.templ`: `management-skip-link`, `Staff`, `SignIn`
 - `internal/customer/customer.go`: `withHeaders`

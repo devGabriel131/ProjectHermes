@@ -8,7 +8,8 @@ Versions are the ones pinned in `go.mod`.
 
 | Layer | Choice | Version | Notes |
 |---|---|---|---|
-| Language | Go | `1.27.4` (`go` directive; no `toolchain` line) | `net/http` `ServeMux` with method and path patterns, `html/template` |
+| Language | Go | `1.27.4` (`go` directive; no `toolchain` line) | `net/http` `ServeMux` with method and path patterns |
+| Views | templ (`tool github.com/a-h/templ/cmd/templ`), MIT | v0.3.1118 | `.templ` files compile to committed `*_templ.go`; run as `go tool templ`. The staff login and settings pages so far; the other pages stay on `html/template` until their Phase C step. See [Local development](operations/local-development.md#templ) |
 | Database | PostgreSQL through one pgx pool, with GORM on it | `github.com/jackc/pgx/v5` v5.10.0, `gorm.io/gorm` v1.31.2, `gorm.io/driver/postgres` v1.6.3 | `internal/db` opens the pool; GORM and the session store reach it through `database/sql`. Schema comes from `AutoMigrate(models()...)`; there are no migration files |
 | Payments | `github.com/stripe/stripe-go/v87` | v87.0.0 | Used by `internal/billing` only |
 | Staff passwords | `github.com/alexedwards/argon2id` | v1.0.0 | |
@@ -67,6 +68,7 @@ flowchart LR
   main --> students
   auth --> logging
   auth --> httplog
+  auth --> ui
   billing --> links
   billing --> logging
   billing --> payments
@@ -88,6 +90,7 @@ flowchart LR
   management --> payments
   management --> settings
   management --> students
+  management --> ui
   httplog --> logging
   dblog --> logging
   sentrylog --> logging
@@ -97,7 +100,7 @@ flowchart LR
   billingtest --> billing
 ```
 
-`db`, `logging`, `logtest`, `puertorico` and `settings` import no other module package; `payments` and `students` import only `puertorico`, `httplog` and `dblog` only `logging`, and `sentrylog` only `logging` and `httplog`. `management` does not import `auth`: staff identity arrives as a function argument (see Wiring).
+`db`, `logging`, `logtest`, `puertorico`, `settings` and `ui` import no other module package; `payments` and `students` import only `puertorico`, `httplog` and `dblog` only `logging`, and `sentrylog` only `logging` and `httplog`. `management` does not import `auth`: staff identity arrives as a function argument (see Wiring).
 
 | Path | Responsibility |
 |---|---|
@@ -120,6 +123,7 @@ flowchart LR
 | `internal/settings` | The single settings row: link lifetime, program start date ([Agreement](domain/agreement.md)), bootcamp date |
 | `internal/students` | Student record, contact-field registry, municipalities ([Students](domain/students.md)) |
 | `internal/testdb` | One PostgreSQL schema per integration test ([Testing](testing.md)) |
+| `internal/ui` | Shared page layouts, platform: the staff document (`SignIn`, `Staff`: head, skip link, rail with brand, navigation and account, and `main`). Pages pass only their main content |
 | `static/` | Embedded scripts, stylesheets, images, favicon (`//go:embed static`) |
 | `compose.yaml`, `.air.toml`, `.env.example` | Local database and dev server ([Local development](operations/local-development.md)) |
 | `user.fish` | Railway wrapper for the `user` CLI ([Railway](operations/railway.md)) |
@@ -223,12 +227,14 @@ The 403 from `CrossOriginProtection` fires for non-safe methods (such as POST) w
 - **`startupError` carries a stage** and is returned from `newServer` as well as `run`, so route-registration failures are logged with the same `startup_failed` shape ([Configuration](operations/configuration.md) lists the stages).
 - **Air is a `tool` line in `go.mod`.** It pins the dev server per project, at the price of Hugo, Sass and other modules in the indirect requirements; no module package imports them.
 - **`billingtest` is untagged but test-only.** Untagged tests such as `internal/billing/stripe_test.go` import it, so it cannot carry the `integration` build tag.
+- **Generated templ code is committed.** `*_templ.go` builds with a plain `go build`, so neither Railway's build nor `go test` needs a generate step; CI regenerates with the pinned templ and fails on any diff ([Testing](testing.md#ci)).
 - **The login limiter is shared across clients.** An accepted tradeoff, argued in [Staff authentication](staff-auth.md).
 
 ## Source
 
 - `main.go`: `newApp`, `newServer`, `secureHeaders`, `sitePolicy`, `serve`, `run`, `models`, `startupError`, `assets`
-- `go.mod`: `github.com/air-verse/air`, `github.com/getsentry/sentry-go`, `github.com/nyaruka/phonenumbers/v2`, `github.com/stripe/stripe-go/v87`, `gorm.io/gorm`, `gorm.io/driver/postgres`
+- `go.mod`: `github.com/a-h/templ`, `github.com/air-verse/air`, `github.com/getsentry/sentry-go`, `github.com/nyaruka/phonenumbers/v2`, `github.com/stripe/stripe-go/v87`, `gorm.io/gorm`, `gorm.io/driver/postgres`
+- `internal/ui/staff.templ`: `SignIn`, `Staff`, `Nav`
 - `internal/auth/http.go`: `Manager.RegisterRoutes`, `Require`, `Staff`
 - `internal/logging/httplog/http.go`: `Requests`, `Routes`, `RecordError`
 - `internal/customer/customer.go`: `RegisterRoutes`, `withHeaders`

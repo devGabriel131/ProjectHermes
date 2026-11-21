@@ -1,0 +1,83 @@
+package management
+
+import (
+	"apollo/internal/ui"
+	"strconv"
+)
+
+templ settingsView(data settingsData) {
+	@ui.Staff("Settings", ui.NavSettings, data.Staff, "/static/settings.js") {
+		<div class="management-page-heading">
+			<div>
+				<h1>Settings</h1>
+				<p class="management-page-description">Choose how long new, unfinished customer forms stay open, and when the next bootcamp is.</p>
+			</div>
+		</div>
+		<section class="management-panel management-settings-panel" aria-labelledby="link-lifetime-heading">
+			<div class="management-panel-heading">
+				<h2 id="link-lifetime-heading">Link lifetime</h2>
+			</div>
+			<form class="management-settings-form" method="post" action="/management/settings">
+				<label for="lifetime">Initial customer link access</label>
+				<div class="management-slider">
+					<input
+						id="lifetime"
+						name="lifetime"
+						type="range"
+						min={ strconv.Itoa(data.Min) }
+						max={ strconv.Itoa(data.Max) }
+						step="1"
+						value={ strconv.Itoa(data.Current.LinkLifetimeDays) }
+						if data.Error != "" {
+							aria-describedby="lifetime-scope lifetime-error"
+							aria-invalid="true"
+						} else {
+							aria-describedby="lifetime-scope"
+						}
+					/>
+					<span><output name="lifetime_days" for="lifetime">{ strconv.Itoa(data.Current.LinkLifetimeDays) }</output> days</span>
+				</div>
+				<p id="lifetime-scope">Applies to initial access for links created from now on. Existing unfinished links keep their expiry date. Completing a form replaces that deadline with seven days of continued enrollment access from completion.</p>
+				if data.Error != "" {
+					<p id="lifetime-error" role="alert">{ data.Error }</p>
+				}
+				<button type="submit" class="management-button-primary">Save</button>
+			</form>
+			<div class="management-settings-footer">
+				<p role="status">{ data.Notice }</p>
+				if data.Current.UpdatedBy != "" {
+					<p>Last changed by { data.Current.UpdatedBy } on { data.Current.UpdatedAt.UTC().Format("Jan 2, 2006 15:04 UTC") }.</p>
+				}
+			</div>
+		</section>
+		<section class="management-panel management-settings-panel" aria-labelledby="bootcamp-heading">
+			<div class="management-panel-heading">
+				<h2 id="bootcamp-heading">Bootcamp date</h2>
+			</div>
+			<form class="management-settings-form" method="post" action="/management/bootcamp-date">
+				<label for="bootcamp-date">Next Bootcamp Militarizado</label>
+				<input
+					id="bootcamp-date"
+					name="bootcamp_date"
+					type="date"
+					value={ data.BootcampDate }
+					required
+					if data.BootcampError != "" {
+						aria-describedby="bootcamp-scope bootcamp-error"
+						aria-invalid="true"
+					} else {
+						aria-describedby="bootcamp-scope"
+					}
+				/>
+				<p id="bootcamp-scope">Printed on the employer letter students download from Hephaestus. Once this date passes, students can't make the letter until a new date is saved.</p>
+				if data.BootcampError != "" {
+					<p id="bootcamp-error" role="alert">{ data.BootcampError }</p>
+				}
+				<button type="submit" class="management-button-primary">Save</button>
+			</form>
+			<div class="management-settings-footer">
+				<p role="status">{ data.BootcampNotice }</p>
+			</div>
+		</section>
+	}
+}

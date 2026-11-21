@@ -59,7 +59,7 @@ A startup failure logs `startup_failed` with a `stage` field, then the process e
 | `billing_configuration` | `billing.LoadConfigFromEnv` | Any Stripe variable above; `INSTALLMENT_RETRY_DELAY` not a positive duration |
 | `billing_catalog` | `billing.LoadCatalog` | Price missing, duplicated, inactive, wrong mode, currency, billing scheme, type or amount; Stripe unreachable within 15 s |
 | `billing_initialize` | `billing.New` | Repeats the `Config.Validate` that `LoadConfigFromEnv` already passed, so it cannot fail after `billing_configuration` succeeds |
-| `auth_initialize` | `auth.New` | Login template parse, Argon2 dummy-hash creation, or `db.DB()` |
+| `auth_initialize` | `auth.New` | Argon2 dummy-hash creation or `db.DB()`; the login page is templ, checked at compile time |
 | `management_routes` | `management.RegisterRoutes` | Template parse error |
 | `customer_routes` | `customer.RegisterRoutes` | Template parse error |
 | `listen` | `net.Listen` | Port in use or invalid `PORT` |
