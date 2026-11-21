@@ -1,0 +1,400 @@
+package management
+
+import (
+	"apollo/internal/billing"
+	"apollo/internal/payments"
+	"apollo/internal/students"
+	"apollo/internal/ui"
+	"slices"
+	"strconv"
+	"time"
+)
+
+// studentsView is the Students page: the roster, or one student's details when data.Student is set. A filter change
+// or a pause in typing swaps just the records, so focus stays put and live refreshes keep the filters; the form still
+// submits without JavaScript, and hx-history="false" keeps student records out of htmx's history snapshots.
+templ studentsView(data studentPageData) {
+	{{ title := "Students" }}
+	if data.Student.ID != 0 {
+		{{ title = "Student details" }}
+	}
+	@ui.Staff(title, ui.NavStudents, data.Staff, true, "/static/management-time.js", "/static/management-live.js", "/static/students.js") {
+		if data.Student.ID != 0 {
+			<p class="student-back-link"><a class="management-back-link" href="/management/students">Back to students</a></p>
+			<section class="management-panel" aria-labelledby="student-heading">
+				@studentDetail(data)
+			</section>
+		} else {
+			<div class="management-page-heading">
+				<div>
+					<h1>Students</h1>
+					<p class="management-page-description">Paid enrollments and students added by staff.</p>
+				</div>
+			</div>
+			<p class="student-request-error" role="alert" hidden></p>
+			<section class="management-panel" aria-labelledby="student-table-heading">
+				<h2 id="student-table-heading" class="visually-hidden">Student records</h2>
+				<form id="student-filter" class="student-filter" action="/management/students" method="get" autocomplete="off" aria-label="Filter students" hx-get="/management/students" hx-target="#student-records" hx-trigger="change, submit, input from:#student-search delay:300ms" hx-sync="this:replace" hx-history="false">
+					<div class="student-filter-status" role="radiogroup" aria-label="Status">
+						<label><input type="radio" name="status" value="" checked?={ data.Status == "" }/>All</label>
+						<label><input type="radio" name="status" value="active" checked?={ data.Status == "active" }/>Active</label>
+						<label><input type="radio" name="status" value="suspended" checked?={ data.Status == "suspended" }/>Suspended</label>
+						<label><input type="radio" name="status" value="withdrawn" checked?={ data.Status == "withdrawn" }/>Withdrawn</label>
+					</div>
+					<div class="student-filter-selects">
+						<label>Search <input id="student-search" type="search" name="name" value={ data.Name } placeholder="Student name"/></label>
+						<label>
+							Cohort
+							<select name="cohort">
+								<option value="">All cohorts</option>
+								for _, cohort := range data.Cohorts {
+									<option value={ cohort } selected?={ cohort == data.Cohort }>{ students.CohortLabel(cohort) }</option>
+								}
+							</select>
+						</label>
+						<label>
+							Group
+							<select name="group">
+								<option value="">All groups</option>
+								for _, group := range data.Groups {
+									<option value={ group } selected?={ group == data.Group }>{ group }</option>
+								}
+							</select>
+						</label>
+						<noscript><button type="submit">Apply</button></noscript>
+					</div>
+				</form>
+				<div id="student-records" class="student-records" hx-get="/management/students" hx-include="#student-filter" hx-trigger="management-changed from:body" hx-sync="#student-filter:replace">
+					@studentRecords(data)
+				</div>
+			</section>
+			<dialog id="student-dialog" class="management-panel" aria-labelledby="student-heading"><div id="student-dialog-content"></div></dialog>
+		}
+	}
+}
+
+// studentRecords is the inside of #student-records: the page's roster, and its htmx refresh.
+templ studentRecords(data studentPageData) {
+	if len(data.Students) > 0 {
+		<div class="student-table-scroll">
+			<table class="student-table" aria-labelledby="student-table-heading">
+				<thead>
+					<tr>
+						for i, field := range data.Fields {
+							<th scope="col">{ field.Label }</th>
+							if i == 0 {
+								<th scope="col">Status</th>
+							}
+						}
+						<th scope="col">Cohort</th>
+						<th scope="col">Enrolled</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, student := range data.Students {
+						@studentRow(student)
+					}
+				</tbody>
+			</table>
+		</div>
+	} else if data.Status != "" || data.Cohort != "" || data.Group != "" || data.Name != "" {
+		<div class="student-empty">
+			<h3>No matching students</h3>
+			<p>No students match these filters. <a href="/management/students">Show all students</a></p>
+		</div>
+	} else {
+		<div class="student-empty">
+			<h3>No students yet</h3>
+			<p>Paid enrollments and students added by staff appear here.</p>
+		</div>
+	}
+}
+
+// studentRow is one roster row, whose first link opens the dialog. OOB lets a modal save replace it.
+templ studentRow(student studentView) {
+	{{ id := strconv.FormatUint(student.ID, 10) }}
+	<tr
+		id={ "student-row-" + id }
+		data-student-id={ id }
+		if student.OOB {
+			hx-swap-oob="outerHTML"
+		}
+	>
+		for i, field := range student.Fields {
+			if i == 0 {
+				<td><a id={ "student-link-" + id } data-student-link href={ "/management/students/" + id } hx-get={ "/management/students/" + id } hx-target="#student-dialog-content" hx-swap="innerHTML">{ field.Value }</a></td>
+				<td>
+					if student.WithdrawnAt != nil {
+						<span class="status-badge">Withdrawn</span>
+					} else if student.IsActive {
+						<span class="status-badge" data-tone="ok">Active</span>
+					} else {
+						<span class="status-badge" data-tone="danger">Suspended</span>
+					}
+				</td>
+			} else {
+				<td>{ field.Value }</td>
+			}
+		}
+		<td>{ students.CohortLabel(student.Cohort) }</td>
+		<td>@timestamp(student.CreatedAt)</td>
+	</tr>
+}
+
+// studentDetail is a student's details: the standalone page's panel, and the dialog's content when data.Modal.
+templ studentDetail(data studentPageData) {
+	{{ id := strconv.FormatUint(data.Student.ID, 10) }}
+	<div class="student-details" hx-sync="closest .student-details:queue all">
+		<h1 id="student-heading">Student details</h1>
+		<p class="student-submitted">
+			Enrolled @timestamp(data.Student.CreatedAt)
+			if data.Student.Cohort != "" {
+				{ " in the " + students.CohortLabel(data.Student.Cohort) + " cohort" }
+			}
+		</p>
+		for _, field := range data.Student.Fields {
+			@studentField(field)
+		}
+		@billingBlock(data.Student.ID, data.Billing)
+		<p id={ "student-billing-" + id + "-error" } class="student-request-error" role="alert" hidden></p>
+		<div id={ "student-billing-portal-" + id } class="student-billing-portal" role="status"></div>
+		if data.Modal {
+			<form method="dialog" class="student-dialog-actions"><button type="submit">Close</button></form>
+		}
+	</div>
+}
+
+// studentField is one field, shown or in its editor, replaced whole by its htmx answers; Modal keeps the dialog's row in sync.
+templ studentField(field studentFieldView) {
+	{{ id := strconv.FormatUint(field.StudentID, 10) + "-" + field.Key }}
+	{{ path := "/management/students/" + strconv.FormatUint(field.StudentID, 10) + "/fields/" + field.Key }}
+	{{ cancel, edit := path, path+"?edit=1" }}
+	if field.Modal {
+		{{ cancel += "?modal=1" }}
+		{{ edit += "&modal=1" }}
+	}
+	<div class="student-field" id={ "student-field-" + id }>
+		if field.Editing {
+			<form class="student-field-editor" method="post" action={ path } hx-post={ path } hx-target="closest .student-field" hx-swap="outerHTML" hx-disabled-elt="find button">
+				<label for={ "student-input-" + id }>{ field.Label }</label>
+				if len(field.Options) > 0 {
+					<select
+						id={ "student-input-" + id }
+						name="value"
+						required
+						if field.Error != "" {
+							aria-invalid="true"
+							aria-describedby={ "student-error-" + id }
+						}
+					>
+						<option value="" selected?={ !slices.Contains(field.Options, field.Value) }>Select an option</option>
+						for _, option := range field.Options {
+							<option value={ option } selected?={ option == field.Value }>{ option }</option>
+						}
+					</select>
+				} else {
+					<input
+						id={ "student-input-" + id }
+						name="value"
+						type={ field.InputType }
+						value={ field.Value }
+						required
+						if field.Error != "" {
+							aria-invalid="true"
+							aria-describedby={ "student-error-" + id }
+						}
+					/>
+				}
+				if field.Modal {
+					<input type="hidden" name="modal" value="1"/>
+				}
+				if field.Error != "" {
+					<p class="student-validation-error" id={ "student-error-" + id } role="alert">{ field.Error }</p>
+				}
+				<div class="student-field-actions">
+					<button type="submit" class="management-button-primary">Save</button>
+					<a class="management-back-link" href={ cancel } hx-get={ cancel } hx-target="closest .student-field" hx-swap="outerHTML">Cancel</a>
+				</div>
+			</form>
+		} else {
+			<div class="student-field-heading">
+				<h2>{ field.Label }</h2>
+				<a class="student-edit-link" aria-label={ "Edit " + field.Label } href={ edit } hx-get={ edit } hx-target="closest .student-field" hx-swap="outerHTML">
+					<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 5 5-13 13H3v-5L16 3Z"></path><path d="m14 5 5 5"></path></svg>
+				</a>
+			</div>
+			<p class="student-field-value">{ field.Value }</p>
+			if field.Saved {
+				<p class="student-saved" role="status">Saved.</p>
+			}
+		}
+		<p class="student-request-error" role="alert" hidden></p>
+	</div>
+}
+
+// studentSave answers an htmx save: the field, and in the dialog the row out of band, in a <template> so it parses outside a table.
+templ studentSave(data studentPageData) {
+	@studentField(*data.Field)
+	if data.Modal {
+		<template>@studentRow(data.Student)</template>
+	}
+}
+
+// billingBlock is a student's billing, b nil without a contract. It refreshes itself on management-changed, and each billing action answers with it.
+templ billingBlock(studentID uint64, b *billing.Summary) {
+	{{ id := strconv.FormatUint(studentID, 10) }}
+	{{ path := "/management/students/" + id + "/billing" }}
+	<div id={ "student-billing-" + id } class="student-billing" hx-get={ path } hx-trigger="management-changed from:body" hx-swap="outerHTML">
+		<h2>Billing</h2>
+		if b != nil {
+			<dl class="student-billing-summary">
+				<div>
+					<dt>Funding</dt>
+					if b.Funded {
+						<dd>{ "Funded" }@timeOr(" ", b.FundedAt, "")</dd>
+					} else {
+						<dd>Not funded</dd>
+					}
+				</div>
+				<div><dt>Plan</dt><dd>{ b.PlanName }</dd></div>
+				<div><dt>Tuition total</dt><dd>{ payments.Money(b.TotalCents) }</dd></div>
+				<div><dt>Tuition paid</dt><dd>{ payments.Money(b.TuitionPaidCents) }</dd></div>
+				<div><dt>Stripe cash paid</dt><dd>{ payments.Money(b.CashPaidCents) }</dd></div>
+				<div><dt>Other settlement</dt><dd>{ payments.Money(b.OtherSettlementCents) }</dd></div>
+				<div><dt>Remaining tuition</dt><dd>{ payments.Money(b.RemainingTuitionCents) }</dd></div>
+				<div><dt>Overdue tuition</dt><dd>{ payments.Money(b.OverdueTuitionCents) }</dd></div>
+				<div><dt>Reinstatement fee remaining</dt><dd>{ payments.Money(b.ReinstatementFeeRemainingCents) }</dd></div>
+				<div>
+					<dt>Status</dt>
+					if b.WithdrawnAt != nil {
+						<dd>
+							Withdrawn @timestamp(*b.WithdrawnAt)
+							if b.WithdrawnBy != "" {
+								{ " by " + b.WithdrawnBy }
+							}
+						</dd>
+					} else if b.IsSuspended {
+						<dd>Billing-suspended</dd>
+					} else {
+						<dd>Active</dd>
+					}
+				</div>
+				<div><dt>Last synced</dt><dd>@timeOr("", b.LastSyncedAt, "Never")</dd></div>
+			</dl>
+			if len(b.ReviewReasons) > 0 {
+				<p class="student-billing-review">
+					<strong>Needs review:</strong>
+					for i, reason := range b.ReviewReasons {
+						if i > 0 {
+							,
+						}
+						<code>{ reason }</code>
+					}
+				</p>
+			}
+			if b.WithdrawnAt != nil && b.RefundableCents > 0 {
+				<p class="student-billing-review"><strong>Refund pending:</strong> { payments.Money(b.RefundableCents) }, retried automatically; Reconcile retries now.</p>
+			}
+			if len(b.Installments) > 0 {
+				<table class="student-billing-installments">
+					<caption>Installments</caption>
+					<thead>
+						<tr><th scope="col">No.</th><th scope="col">Due</th><th scope="col">Amount</th><th scope="col">Status</th><th scope="col">Invoice</th></tr>
+					</thead>
+					<tbody>
+						for _, installment := range b.Installments {
+							<tr>
+								<td>{ strconv.Itoa(installment.Number) }</td>
+								<td>@timeOr("", installment.DueAt, "Set when funded")</td>
+								<td>{ payments.Money(installment.AmountCents) }</td>
+								<td>
+									switch installment.Status {
+										case "paid":
+											<span class="status-badge" data-tone="ok">Paid</span>@timeOr(" ", installment.PaidAt, "")
+										case "overdue":
+											<span class="status-badge" data-tone="danger">Overdue</span>
+										case "action_required":
+											<span class="status-badge" data-tone="warn">Action required</span>
+										case "cancelled":
+											<span class="status-badge">Cancelled</span>
+										default:
+											<span class="status-badge">Scheduled</span>
+									}
+								</td>
+								<td>
+									if installment.InvoiceReady {
+										<a href={ path + "/invoices/" + strconv.FormatUint(installment.ID, 10) } target="_blank" rel="noopener noreferrer">View invoice</a>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+			if len(b.Payments) > 0 {
+				<table class="student-billing-installments">
+					<caption>Payments</caption>
+					<thead>
+						<tr><th scope="col">Paid</th><th scope="col">Amount</th><th scope="col">Refunded</th><th scope="col">Note</th><th scope="col">Stripe</th></tr>
+					</thead>
+					<tbody>
+						for _, payment := range b.Payments {
+							<tr>
+								<td>@timestamp(payment.PaidAt)</td>
+								<td>{ payments.Money(payment.AmountCents) }</td>
+								<td>{ payments.Money(payment.RefundedCents) }</td>
+								<td>
+									if payment.Review != "" {
+										<code>{ payment.Review }</code>
+									}
+								</td>
+								<td><a href={ payment.DashboardURL } target="_blank" rel="noopener noreferrer">Open in Stripe</a></td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+			if b.ReinstatementFeeID != 0 {
+				<p class="student-billing-fee">
+					Reinstatement fee: { reinstatementFee(b.ReinstatementFeeRemainingCents) }.
+					if b.ReinstatementInvoiceReady {
+						<a href={ path + "/invoices/" + strconv.FormatUint(b.ReinstatementFeeID, 10) } target="_blank" rel="noopener noreferrer">View fee invoice</a>
+					}
+				</p>
+			}
+			<div class="student-billing-actions">
+				<button type="button" hx-post={ path + "/reconcile" } hx-target="closest .student-billing" hx-swap="outerHTML" hx-disabled-elt="this">Reconcile</button>
+				if b.IsSuspended {
+					<button type="button" hx-post={ path + "/reinstatement" } hx-target="closest .student-billing" hx-swap="outerHTML" hx-disabled-elt="this">Request Reinstatement</button>
+				}
+				<button type="button" hx-post={ path + "/portal" } hx-target={ "#student-billing-portal-" + id } hx-swap="innerHTML" hx-disabled-elt="this">Customer Portal</button>
+				if b.Funded && b.WithdrawnAt == nil {
+					<button type="button" hx-post={ path + "/withdraw" } hx-confirm={ "Withdraw this student and refund " + payments.Money(b.RefundableCents) + "? Unpaid installments are cancelled and the student is deactivated. This cannot be undone." } hx-target="closest .student-billing" hx-swap="outerHTML" hx-disabled-elt="this">Withdraw and refund</button>
+				}
+			</div>
+		} else {
+			<p class="student-billing-empty">No billing record for this student.</p>
+		}
+	</div>
+}
+
+// billingPortal is the payer's portal link, a bearer credential, for #student-billing-portal-{id}.
+templ billingPortal(url string) {
+	<p>Customer portal link, short-lived. Share it only with the student's payer: <a href={ url } target="_blank" rel="noopener noreferrer">{ url }</a></p>
+}
+
+// timeOr is prefix and t as a timestamp, or fallback when t is nil.
+templ timeOr(prefix string, t *time.Time, fallback string) {
+	if t != nil {
+		{ prefix }@timestamp(*t)
+	} else {
+		{ fallback }
+	}
+}
+
+func reinstatementFee(remainingCents int64) string {
+	if remainingCents > 0 {
+		return payments.Money(remainingCents) + " remaining"
+	}
+	return "settled"
+}

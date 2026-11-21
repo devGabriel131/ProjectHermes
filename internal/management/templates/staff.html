@@ -1,4 +1,4 @@
-{{/* What the html/template staff pages share: brand, account, navigation and the icons (copies of internal/ui/staff.templ), and time (timestamp in links.templ). Each page stops using it as it moves to templ; C6 deletes this file. */}}
+{{/* What the html/template staff pages share: brand, account, navigation and the icons (copies of internal/ui/staff.templ). Each page stops using it as it moves to templ; C6 deletes this file. */}}
 {{define "brand"}}
 <div class="management-brand" translate="no">
   <img src="/static/logo-mark.webp" alt="" width="320" height="314">
@@ -14,8 +14,6 @@
   </form>
 </div>
 {{end}}
-
-{{define "time"}}<time datetime="{{.UTC.Format "2006-01-02T15:04:05Z"}}">{{.UTC.Format "Jan 2, 2006 15:04 UTC"}}</time>{{end}}
 
 {{define "navigation"}}
 <nav class="management-menu" aria-label="Management">

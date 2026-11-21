@@ -30,8 +30,8 @@ flowchart TD
     ClearGroup --> List
     Name --> List
     List --> Htmx{"HX-Request: true?"}
-    Htmx -->|"no"| Full["students.html"]
-    Htmx -->|"yes"| Rows["student-records + HX-Replace-Url with the non-empty values"]
+    Htmx -->|"no"| Full["studentsView"]
+    Htmx -->|"yes"| Rows["studentRecords + HX-Replace-Url with the non-empty values"]
 ```
 
 - `status` selects, in `List`: `active` is `is_active`; `suspended` is not active and never withdrawn (`withdrawn_at` NULL); `withdrawn` is `withdrawn_at` set ([Withdrawal](../billing/withdrawal.md)). The three never overlap.
@@ -43,7 +43,7 @@ flowchart TD
 
 ## Student dialog and field edit
 
-Clicking a row (not a control inside it) opens its link: `GET /management/students/{id}` with `HX-Request` returns `student-detail` with `Modal` set, into `#student-dialog-content`; `students.js` then calls `showModal()`. Without HTMX the same URL is a full "Student details" page with a back link.
+Clicking a row (not a control inside it) opens its link: `GET /management/students/{id}` with `HX-Request` returns `studentDetail` with `Modal` set, into `#student-dialog-content`; `students.js` then calls `showModal()`. Without HTMX the same URL is a full "Student details" page with a back link.
 
 ```mermaid
 sequenceDiagram
@@ -56,17 +56,17 @@ sequenceDiagram
     JS->>H: click the row's data-student-link anchor
     H->>A: GET /management/students/{id} with HX-Request
     A->>DB: roster.Get, then biller.ForStudent
-    A-->>H: student-detail fragment, Modal true
+    A-->>H: studentDetail fragment, Modal true
     H->>JS: htmx:afterSwap on student-dialog-content
     JS->>Staff: showModal, focus the first control
     Staff->>H: click Edit on a field
     H->>A: GET /fields/{field}?edit=1&modal=1
-    A-->>H: student-field editor
+    A-->>H: studentField editor
     Staff->>H: Save
     H->>A: POST /fields/{field} with value
     A->>DB: UpdateField, row lock, compare, write
     A->>A: TouchContract marks the contract due
-    A-->>H: 200 student-save, field plus out-of-band row
+    A-->>H: 200 studentSave, field plus out-of-band row
     Staff->>JS: Close
     JS->>Staff: focus returns to the opening row link
 ```
@@ -75,9 +75,9 @@ One field saves at a time, with the same handler for GET (read or editor) and PO
 
 | Request | Result |
 |---|---|
-| `GET .../fields/{field}` | The read-only `student-field`. `?edit=1` returns the editor; `?modal=1` keeps dialog form fields. |
-| `POST`, value rejected by the field's parser or the PIN check | 422 `student-field` editor with the attempted value and a `role="alert"` message. `students.js` forces htmx to swap this one 4xx. |
-| `POST`, value saved or unchanged after normalizing | 200 `student-save`: the field with "Saved." (`role="status"`). In the dialog, an out-of-band `<template>` also replaces `#student-row-{id}`, so the table behind the dialog updates. |
+| `GET .../fields/{field}` | The read-only `studentField`. `?edit=1` returns the editor; `?modal=1` keeps dialog form fields. |
+| `POST`, value rejected by the field's parser or the PIN check | 422 `studentField` editor with the attempted value and a `role="alert"` message. `students.js` forces htmx to swap this one 4xx. |
+| `POST`, value saved or unchanged after normalizing | 200 `studentSave`: the field with "Saved." (`role="status"`). In the dialog, an out-of-band `<template>` also replaces `#student-row-{id}`, so the table behind the dialog updates. |
 | `POST`, body unreadable or over 4 KiB | 400 or 413 plain text. |
 | Unknown field key, malformed ID or missing student | 404 "Student or field not found." |
 | Database failure | 500 "Could not save this field. Please try again." |
@@ -96,7 +96,7 @@ Staff edits are not locked by funding, a payment in flight or the contract lease
 
 ## Billing block
 
-`student-billing` is rendered inside the dialog and the details page, and re-fetches itself (`GET .../billing`, outer swap) on `management-changed`. A student whose contract is missing shows "No billing record for this student." The block reads local data only; it never calls Stripe.
+`billingBlock` is rendered inside the dialog and the details page, and re-fetches itself (`GET .../billing`, outer swap) on `management-changed`. A student whose contract is missing shows "No billing record for this student." The block reads local data only; it never calls Stripe.
 
 | Row | Source in `billing.Summary` |
 |---|---|
@@ -166,7 +166,7 @@ htmx does not swap 4xx or 5xx on staff pages, so `students.js` tracks every bill
 
 - `internal/management/students.go`: `studentList`, `student`, `studentField`, `studentBilling`, `load`, `withBilling`, `studentDisplay`, `pathID`, `billingRefusals`, `billingFailure`, `TouchContract`, `HX-Replace-Url`, `act`, `withdraw`
 - `internal/management/management.go`: `RegisterRoutes`
-- `internal/management/templates/students.html`: `student-filter`, `student-records`, `student-row`, `student-detail`, `student-field`, `student-save`, `student-billing`, `student-billing-portal`, `student-request-error`
+- `internal/management/students.templ`: `student-filter`, `studentRecords`, `studentRow`, `studentDetail`, `studentField`, `studentSave`, `billingBlock`, `billingPortal`, `student-request-error`
 - `static/students.js`: `requestError`, `htmx:beforeSwap`, `htmx:afterRequest`, `showModal`
 - `internal/students/students.go`: `UpdateField`, `List`, `Cohorts`, `CohortLabel`, `Filter`, `WithdrawnAt`
 - `internal/students/fields.go`: `StaffFields`, `FindStaffField`, `GroupOptions`

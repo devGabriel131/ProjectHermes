@@ -174,11 +174,11 @@ func (s *site) studentList(w http.ResponseWriter, r *http.Request) {
 	for i, record := range records {
 		data.Students[i] = studentDisplay(record, false)
 	}
-	name := "students.html"
+	view := studentsView(data)
 	if htmx(r) {
 		// Filter changes and live refreshes swap just the records. The address bar
 		// follows the shown filters, so a reload or bookmark reopens them.
-		name = "student-records"
+		view = studentRecords(data)
 		shown := url.Values{}
 		for key, value := range map[string]string{"status": data.Status, "cohort": data.Cohort, "group": data.Group, "name": data.Name} {
 			if value != "" {
@@ -187,7 +187,7 @@ func (s *site) studentList(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("HX-Replace-Url", strings.TrimSuffix("/management/students?"+shown.Encode(), "?"))
 	}
-	s.render(w, r, http.StatusOK, name, data)
+	s.view(w, r, http.StatusOK, view)
 }
 
 func (s *site) student(w http.ResponseWriter, r *http.Request) {
@@ -203,11 +203,11 @@ func (s *site) student(w http.ResponseWriter, r *http.Request) {
 	if !s.withBilling(w, r, &data) {
 		return
 	}
-	name := "students.html"
+	view := studentsView(data)
 	if modal {
-		name = "student-detail"
+		view = studentDetail(data)
 	}
-	s.render(w, r, http.StatusOK, name, data)
+	s.view(w, r, http.StatusOK, view)
 }
 
 func (s *site) studentField(w http.ResponseWriter, r *http.Request) {
@@ -268,15 +268,15 @@ func (s *site) studentField(w http.ResponseWriter, r *http.Request) {
 		if !s.withBilling(w, r, &data) {
 			return
 		}
-		s.render(w, r, status, "students.html", data)
+		s.view(w, r, status, studentsView(data))
 		return
 	}
 	if saved {
 		data.Student.OOB = modal
-		s.render(w, r, status, "student-save", data)
+		s.view(w, r, status, studentSave(data))
 		return
 	}
-	s.render(w, r, status, "student-field", data.Field)
+	s.view(w, r, status, studentField(*data.Field))
 }
 
 // studentBilling is the billing fragment: read-only, so it never writes to the provider.
@@ -289,7 +289,7 @@ func (s *site) studentBilling(w http.ResponseWriter, r *http.Request) {
 	if !s.withBilling(w, r, &data) {
 		return
 	}
-	s.render(w, r, http.StatusOK, "student-billing", data)
+	s.view(w, r, http.StatusOK, billingBlock(record.ID, data.Billing))
 }
 
 // act runs a staff-attributed billing action and answers with the fresh fragment. It is not timed:
@@ -306,9 +306,7 @@ func (s *site) act(do func(context.Context, uint64) (*billing.Summary, error)) h
 			billingFailure(w, r, err)
 			return
 		}
-		s.render(w, r, http.StatusOK, "student-billing", studentPageData{
-			Student: studentView{Student: students.Student{ID: id}}, Billing: summary,
-		})
+		s.view(w, r, http.StatusOK, billingBlock(id, summary))
 	}
 }
 
@@ -349,5 +347,5 @@ func (s *site) portal(w http.ResponseWriter, r *http.Request) {
 		billingFailure(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "student-billing-portal", portal)
+	s.view(w, r, http.StatusOK, billingPortal(portal))
 }
