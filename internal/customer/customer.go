@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/a-h/templ"
+
 	"apollo/internal/billing"
 	"apollo/internal/links"
 	"apollo/internal/logging/httplog"
@@ -152,19 +154,32 @@ func withHeaders(h http.HandlerFunc) http.Handler {
 	})
 }
 
-// render writes the named template, or the branded 404 that makes HTMX reload the page.
+// render writes the page for data.View, or the branded 404 that makes HTMX reload the page. Welcome,
+// agreement and not-found are templ views; the other views run the named html/template page or fragment until C5.
 func (s *site) render(w http.ResponseWriter, r *http.Request, name string, data pageData, status int) {
-	if status == http.StatusNotFound {
-		name = "not-found.html"
+	var view templ.Component
+	switch {
+	case status == http.StatusNotFound:
+		view = notFoundPage()
 		if htmx(r) {
 			w.Header().Set("HX-Refresh", "true")
 		}
+	case data.View == "welcome":
+		view = welcomePage(data)
+	case data.View == "agreement":
+		view = agreementPage(data)
 	}
 	w.WriteHeader(status)
 	if r.Method == http.MethodHead {
 		return
 	}
-	if err := s.page.ExecuteTemplate(w, name, data); err != nil {
+	var err error
+	if view != nil {
+		err = view.Render(r.Context(), w)
+	} else {
+		err = s.page.ExecuteTemplate(w, name, data)
+	}
+	if err != nil {
 		httplog.RecordError(r, "render", err)
 	}
 }
