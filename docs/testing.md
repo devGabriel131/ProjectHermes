@@ -1,6 +1,6 @@
 # Testing
 
-How the app is verified: the automated layers and their commands, the helpers that isolate them (`testdb`, `billingtest`), what stays manual, and what no test covers today. Load scripts are documented in [loadtest/README.md](../loadtest/README.md); local setup is in [Local development](operations/local-development.md).
+How the app is verified: the automated layers and their commands, the [CI](#ci) workflow that runs them on every push, the helpers that isolate them (`testdb`, `billingtest`), what stays manual, and what no test covers today. Load scripts are documented in [loadtest/README.md](../loadtest/README.md); local setup is in [Local development](operations/local-development.md).
 
 ## Layers
 
