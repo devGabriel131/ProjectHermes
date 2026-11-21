@@ -10,7 +10,7 @@ Versions are the ones pinned in `go.mod`.
 |---|---|---|---|
 | Language | Go | `1.27.4` (`go` directive; no `toolchain` line) | `net/http` `ServeMux` with method and path patterns |
 | Views | templ (`tool github.com/a-h/templ/cmd/templ`), MIT | v0.3.1118 | `.templ` files compile to committed `*_templ.go`; run as `go tool templ`. The staff login, settings, links, students (list and details) and add-students pages and the customer welcome, agreement and not-found pages so far; the other pages stay on `html/template` until their Phase C step. See [Local development](operations/local-development.md#templ) |
-| Database | PostgreSQL through one pgx pool, with GORM on it | `github.com/jackc/pgx/v5` v5.10.0, `gorm.io/gorm` v1.31.2, `gorm.io/driver/postgres` v1.6.3 | `internal/db` opens the pool; GORM and the session store reach it through `database/sql`. Schema comes from `AutoMigrate(models()...)`; there are no migration files |
+| Database | PostgreSQL through one pgx pool, with GORM on it; goose migrations | `github.com/jackc/pgx/v5` v5.12.0, `gorm.io/gorm` v1.31.2, `gorm.io/driver/postgres` v1.6.3, `github.com/pressly/goose/v3` v3.30.1 | `internal/db` opens the pool and applies the migrations embedded from `internal/db/migrations` ([Data model](data-model.md#migrations)); GORM and the session store reach the pool through `database/sql` |
 | Payments | `github.com/stripe/stripe-go/v87` | v87.0.0 | Used by `internal/billing` only |
 | Staff passwords | `github.com/alexedwards/argon2id` | v1.0.0 | |
 | Staff sessions | `github.com/alexedwards/scs/v2` + `scs/postgresstore` | v2.9.0 + a pinned pseudo-version | The store shares the application's SQL pool |
@@ -109,7 +109,7 @@ flowchart LR
 | `internal/billing` | Stripe configuration and catalog, Checkout, invoices, webhook intake, the leased worker ([Billing overview](billing/overview.md)) |
 | `internal/billing/billingtest` | Billing services backed by a fake Stripe, for other packages' tests ([Testing](testing.md)) |
 | `internal/customer` | Private `/customer/{token}` pages and the payment return page ([Customer flow](domain/customer-flow.md)) |
-| `internal/db` | The one pgx pool (10 connections, the query tracer), and the `database/sql` and GORM handles on it ([Startup and shutdown](operations/startup-shutdown.md)) |
+| `internal/db` | The one pgx pool (10 connections, the query tracer), the `database/sql` and GORM handles on it, and the goose migrations ([Startup and shutdown](operations/startup-shutdown.md)) |
 | `internal/documents/ist` | The IST (physical evaluation): its events as students are told to do them, the standards by sex and age band, and `Evaluate`, which grades a set of scores. Pure rules, standard library only ([Context map](context-map.md#documents)) |
 | `internal/links` | Customer links by token digest; `Enroll` turns a paid link into a Student ([Links](domain/links.md)) |
 | `internal/live` | In-process server-sent-event fan-out ([Live updates](live-updates.md)) |
@@ -233,8 +233,9 @@ The 403 from `CrossOriginProtection` fires for non-safe methods (such as POST) w
 
 ## Source
 
-- `main.go`: `newApp`, `newServer`, `secureHeaders`, `sitePolicy`, `serve`, `run`, `models`, `startupError`, `assets`
-- `go.mod`: `github.com/a-h/templ`, `github.com/air-verse/air`, `github.com/getsentry/sentry-go`, `github.com/nyaruka/phonenumbers/v2`, `github.com/stripe/stripe-go/v87`, `gorm.io/gorm`, `gorm.io/driver/postgres`
+- `main.go`: `newApp`, `newServer`, `secureHeaders`, `sitePolicy`, `serve`, `run`, `startupError`, `assets`
+- `go.mod`: `github.com/a-h/templ`, `github.com/air-verse/air`, `github.com/getsentry/sentry-go`, `github.com/nyaruka/phonenumbers/v2`, `github.com/pressly/goose/v3`, `github.com/stripe/stripe-go/v87`, `gorm.io/gorm`, `gorm.io/driver/postgres`
+- `internal/db/migrate.go`: `Migrate`
 - `internal/ui/staff.templ`: `SignIn`, `Staff`, `Nav`
 - `internal/ui/customer.templ`: `CustomerLanding`, `CustomerStep`
 - `internal/auth/http.go`: `Manager.RegisterRoutes`, `Require`, `Staff`

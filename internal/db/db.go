@@ -1,5 +1,5 @@
-// Package db opens the one PostgreSQL pool every query runs on, whichever library issues it. See
-// docs/architecture.md and docs/operations/startup-shutdown.md.
+// Package db opens the one PostgreSQL pool every query runs on, whichever library issues it, and migrates
+// the schema with goose. See docs/architecture.md, docs/data-model.md and docs/operations/startup-shutdown.md.
 package db
 
 import (

@@ -17,7 +17,7 @@
 //     a comma list, is a table. After FROM, JOIN or USING a name followed by "(" is a function, and a name
 //     declared as "name AS (" in the same string is a CTE; both are skipped. IS DISTINCT FROM and
 //     EXTRACT(...) are removed first.
-//   - GORM calls: an argument whose type is a model from models(), or a pointer, slice or array of one, uses
+//   - GORM calls: an argument whose type is a model from gormModels(), or a pointer, slice or array of one, uses
 //     that model's table when the call is made on a *gorm.DB or takes one as a parameter; so does a literal
 //     Table("name").
 //   - GORM associations: a model's type declaration uses the table of every model it has a relationship
@@ -28,8 +28,9 @@
 //     TRUNCATE, COPY, FROM ONLY, clause.From, Table(variable), and a model passed as any. Schema-qualified
 //     names fail closed: public.students reads as the unknown table "public".
 //   - A table inside a statement whose CTE has the same name.
-//   - SQL outside Go. No package embeds .sql today; sqlc's generated Go holds each query as a constant,
-//     which is scanned, so queries.sql must keep upper-case keywords.
+//   - SQL outside Go. Only internal/db embeds .sql, the migrations, whose DDL no context owns;
+//     TestMigrationTablesHaveOwners holds every table they create or rename to tableOwners. sqlc's generated
+//     Go holds each query as a constant, which is scanned, so queries.sql must keep upper-case keywords.
 //   - A second reach into the same table from an allowlisted declaration: entries are per declaration.
 //   - GORM many-to-many join tables: a relationship charges only the related model's table. None exist today.
 //
@@ -64,6 +65,12 @@ import (
 	"testing"
 
 	"gorm.io/gorm/schema"
+
+	"apollo/internal/auth"
+	"apollo/internal/billing"
+	"apollo/internal/links"
+	"apollo/internal/settings"
+	"apollo/internal/students"
 )
 
 // reshapedRoots are context root packages already in the Go shape of docs/context-map.md. Each reshape step
@@ -324,6 +331,35 @@ func TestSQLTableNames(t *testing.T) {
 	}
 }
 
+// TestMigrationTablesHaveOwners fails on a table a migration creates (CREATE TABLE) or renames to (ALTER TABLE
+// ... RENAME TO) that no context owns, so the ownership test can charge every reach into it. Comments are
+// skipped, unquoted names fold to lower case as Postgres folds them, and schema-qualified names fail closed,
+// as in the SQL matcher.
+func TestMigrationTablesHaveOwners(t *testing.T) {
+	files, err := filepath.Glob("internal/db/migrations/*.sql")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no migrations found: %v", err)
+	}
+	comments := regexp.MustCompile(`(?s)/\*.*?\*/|--[^\n]*`)
+	tableName := regexp.MustCompile(`(?i)\b(?:CREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?|` +
+		`ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?[\w."]+\s+RENAME\s+TO\s+)("?)(\w+)`)
+	for _, file := range files {
+		sql, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range tableName.FindAllSubmatch(comments.ReplaceAll(sql, nil), -1) {
+			name := string(m[2])
+			if len(m[1]) == 0 {
+				name = strings.ToLower(name)
+			}
+			if _, owned := tableOwners[name]; !owned {
+				t.Errorf("%s: table %q has no owner; add it to the table-ownership map in docs/context-map.md and tableOwners", file, name)
+			}
+		}
+	}
+}
+
 func isGORMCall(call *ast.CallExpr, info *types.Info) bool {
 	if sel, ok := call.Fun.(*ast.SelectorExpr); ok && isGORMDB(info.TypeOf(sel.X)) {
 		return true
@@ -375,11 +411,20 @@ type model struct {
 	related []string // tables of the models its fields associate with
 }
 
-// modelSchemas maps each AutoMigrate model to its table and related tables, as GORM names them.
+// gormModels are every GORM model; a new model joins this list.
+func gormModels() []any {
+	return []any{
+		&auth.User{}, &auth.Session{}, &settings.Settings{}, &links.Link{}, &links.Enrollment{}, &students.Student{},
+		&billing.Contract{}, &billing.Obligation{}, &billing.CheckoutAttempt{}, &billing.Payment{},
+		&billing.Suspension{}, &billing.WebhookEvent{},
+	}
+}
+
+// modelSchemas maps each model in gormModels to its table and related tables, as GORM names them.
 func modelSchemas(t *testing.T) map[string]model {
 	schemas := map[string]model{}
 	cache := &sync.Map{}
-	for _, m := range models() {
+	for _, m := range gormModels() {
 		s, err := schema.Parse(m, cache, schema.NamingStrategy{})
 		if err != nil {
 			t.Fatal(err)

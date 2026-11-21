@@ -12,7 +12,7 @@ import (
 )
 
 func TestLinkLifetime(t *testing.T) {
-	db := testdb.Open(t, &Settings{})
+	db := testdb.Open(t)
 	store := New(db)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -69,7 +69,7 @@ func TestLinkLifetime(t *testing.T) {
 }
 
 func TestProgramStartDate(t *testing.T) {
-	db := testdb.Open(t, &Settings{})
+	db := testdb.Open(t)
 	store := New(db)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -156,7 +156,7 @@ func TestProgramStartDate(t *testing.T) {
 // ProjectHephaestus reads bootcamp_date; a bootcamp write must keep the other
 // settings, and the other writes must keep the bootcamp date.
 func TestBootcampDate(t *testing.T) {
-	db := testdb.Open(t, &Settings{})
+	db := testdb.Open(t)
 	store := New(db)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()

@@ -206,8 +206,7 @@ func seedLink(t *testing.T, db *gorm.DB) uint64 {
 // contract never has one before funding.
 func setupTestEnvironment(t *testing.T, mock *mockStripeServer) (*gorm.DB, *billing.Service, uint64, uint64) {
 	t.Helper()
-	allModels := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)
-	db := testdb.Open(t, allModels...)
+	db := testdb.Open(t)
 
 	tokenHash := make([]byte, 32)
 	rand.Read(tokenHash)

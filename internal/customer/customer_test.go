@@ -874,8 +874,7 @@ const httpTimeout = 10 * time.Second
 
 func customerDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
-	models := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}, &settings.Settings{}}, billing.Models()...)
-	return testdb.Open(t, models...)
+	return testdb.Open(t)
 }
 
 func testCustomerBiller(t *testing.T, db *gorm.DB) *billing.Service {

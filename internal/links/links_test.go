@@ -1259,7 +1259,7 @@ func TestAgreementWritesRejectUnusableTokens(t *testing.T) {
 
 func testStore(t *testing.T) (*gorm.DB, *Store, context.Context) {
 	t.Helper()
-	db := testdb.Open(t, &Link{}, &Enrollment{}, &students.Student{}, &settings.Settings{})
+	db := testdb.Open(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	t.Cleanup(cancel)
 	return db, New(db, nil), ctx

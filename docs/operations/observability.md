@@ -98,6 +98,7 @@ Every event that reports an error builds it with `logging.ErrorAttrs`. It expose
 |---|---|---|---|
 | `startup_started` | info | none | Web server start, before any other work (not for CLI commands) |
 | `startup_failed` | error | error attrs, `stage` | A startup stage failed; stages are in [Configuration](configuration.md) |
+| `database_migrated` | info | `migration` (its number; the logger's `version` is the build), `adopted`, `duration_ms` | Startup applied a migration. `adopted` is true only for version 1 recorded with no DDL ([Data model](../data-model.md#migrations)). No SQL |
 | `server_listening` | info | `addr` | The listener is bound |
 | `shutdown_requested` | info | `drain_timeout_ms` (10000) | SIGINT or SIGTERM reached `serve` |
 | `shutdown_completed` | info | `duration_ms` | The drain finished cleanly |
@@ -142,7 +143,7 @@ A query's label (`logging.Label`) is its request's route pattern (or `unmatched`
 | Label | Source |
 |---|---|
 | route pattern, `unmatched` | Any query made while serving a request |
-| `startup_migrate` | `AutoMigrate` at startup |
+| `startup_migrate` | The goose migrations at startup |
 | `cli_user` | The `user` CLI |
 | `billing_worker` | Everything the billing worker does, including detached persists |
 | `session_cleanup` | The expired-session delete |
@@ -222,6 +223,7 @@ railway ssh --project <id> --environment <env> --service Apollo -- /app/out sent
 - `internal/logging/httplog/http.go`: `Requests`, `Routes`, `RecordError`, `RequestID`, `requestID`, `validRequestID`, `requestMethod`, `statusWriter`, `ServerErrorLog`, `serverErrorWriter`
 - `internal/logging/dblog/database.go`: `Tracer`, `slowQueryThreshold`, `TraceQueryStart`, `TraceQueryEnd`, `Flush`, `WatchPool`, `database_slow_summary`, `database_pool_wait`
 - `internal/db/db.go`: `Open`, `maxConns`
+- `internal/db/migrate.go`: `database_migrated`
 - `internal/logging/httplog/stripe.go`: `StripeTimer`, `NewStripeTimer`, `RoundTrip`, `Flush`, `stripe_call_summary`
 - `internal/logging/sentrylog/sentrylog.go`: `New`, `Options`, `Reporter`, `Handler`, `Middleware`, `Flush`, `LastEventID`, `scrub`, `flatten`
 - `main.go`: `startup_started`, `startup_failed`, `server_listening`, `shutdown_requested`, `shutdown_completed`, `shutdown_failed`, `server_failed`, `sentry_check`, `newLogger`, `checkSentry`, `RAILWAY_SERVICE_NAME`, `SENTRY_DSN`

@@ -53,7 +53,7 @@ func makeStripeEventJSON(id, eventType, resourceID string, livemode bool, apiVer
 func TestWebhookAuthenticityAndReplay(t *testing.T) {
 	secret := billingtest.Config().WebhookSecret
 
-	db := testdb.Open(t, billing.Models()...)
+	db := testdb.Open(t)
 	svc := billingtest.New(t, db, nil)
 
 	const apiVersion = "2026-09-30.endive"
@@ -140,7 +140,7 @@ func TestWebhookAuthenticityAndReplay(t *testing.T) {
 // and idle, so the second event finishing within 3s can only come from the wake.
 func TestWebhookWakesWorker(t *testing.T) {
 	secret := billingtest.Config().WebhookSecret
-	db := testdb.Open(t, billing.Models()...)
+	db := testdb.Open(t)
 	svc := billingtest.New(t, db, nil)
 
 	post := func(id string) {
