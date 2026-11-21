@@ -8,7 +8,7 @@ Versions are the ones pinned in `go.mod`.
 
 | Layer | Choice | Version | Notes |
 |---|---|---|---|
-| Language | Go | `1.27.3` (`go` directive; no `toolchain` line) | `net/http` `ServeMux` with method and path patterns, `html/template` |
+| Language | Go | `1.27.4` (`go` directive; no `toolchain` line) | `net/http` `ServeMux` with method and path patterns, `html/template` |
 | Database | PostgreSQL through GORM | `gorm.io/gorm` v1.31.2, `gorm.io/driver/postgres` v1.6.3 (pgx v5.10.0, indirect) | Schema comes from `AutoMigrate(models()...)`; there are no migration files |
 | Payments | `github.com/stripe/stripe-go/v87` | v87.0.0 | Used by `internal/billing` only |
 | Staff passwords | `github.com/alexedwards/argon2id` | v1.0.0 | |
