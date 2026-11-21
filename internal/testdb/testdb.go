@@ -1,12 +1,13 @@
 //go:build integration
 
-// Package testdb gives each integration test its own PostgreSQL schema on TEST_DATABASE_URL, migrated at open and dropped with the test. See docs/testing.md.
+// Package testdb gives each integration test its own PostgreSQL schema on TEST_DATABASE_URL, migrated by goose at open and dropped with the test. See docs/testing.md.
 package testdb
 
 import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"log/slog"
 	"net/url"
 	"os"
 	"testing"
@@ -19,13 +20,13 @@ import (
 )
 
 // Open isolates each test in a schema, including queries through db.DB().
-func Open(t *testing.T, models ...any) *gorm.DB {
+func Open(t *testing.T) *gorm.DB {
 	t.Helper()
-	return OpenTraced(t, nil, models...)
+	return OpenTraced(t, nil)
 }
 
 // OpenTraced is Open on a pool whose queries tracer times, as main's pool does.
-func OpenTraced(t *testing.T, tracer pgx.QueryTracer, models ...any) *gorm.DB {
+func OpenTraced(t *testing.T, tracer pgx.QueryTracer) *gorm.DB {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	parsed, err := url.Parse(dsn)
@@ -61,10 +62,8 @@ func OpenTraced(t *testing.T, tracer pgx.QueryTracer, models ...any) *gorm.DB {
 			t.Errorf("drop test schema: %v", err)
 		}
 	})
-	if len(models) > 0 {
-		if err := orm.WithContext(ctx).AutoMigrate(models...); err != nil {
-			t.Fatal(err)
-		}
+	if err := database.Migrate(ctx, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
 	}
 	return orm
 }

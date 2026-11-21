@@ -14,8 +14,7 @@ import (
 )
 
 func TestBillingModelsMigration(t *testing.T) {
-	allModels := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)
-	db := testdb.Open(t, allModels...)
+	db := testdb.Open(t)
 
 	// Verify we can insert a student and contract
 	hash := make([]byte, 32)

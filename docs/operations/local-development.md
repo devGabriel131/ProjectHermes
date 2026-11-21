@@ -56,7 +56,12 @@ docker compose up --detach --wait --wait-timeout 90 db
 docker compose exec -T db createdb -U postgres hermes_test
 ```
 
-The app creates its own tables: startup runs `AutoMigrate` ([Startup and shutdown](startup-shutdown.md)). Mock data may be dropped freely ([AGENTS.md](../../AGENTS.md#production-ready-false)).
+Server startup (so `go tool air`) applies the pending goose migrations; a database `AutoMigrate` built before goose adopts version 1 with no DDL ([Data model](../data-model.md#migrations)). Mock data may be dropped freely ([AGENTS.md](../../AGENTS.md#production-ready-false)). To reset the database, for example after `startup_failed` with stage `database_baseline`, recreate it, then save any Go file so Air restarts and migrates it. This also drops ProjectHephaestus's tables in it:
+
+```fish
+docker compose exec -T db dropdb -U postgres --force hermes
+docker compose exec -T db createdb -U postgres hermes
+```
 
 This repository owns the `hermes` database. ProjectHephaestus (`../ProjectHephaestus`) connects to the same database and has no Compose database of its own, so start it from here.
 
@@ -89,7 +94,7 @@ go run . --help   # usage, username and password rules; needs no environment
 ```
 
 - Commands: `add`, `passwd`, `revoke`, `remove` take a username; `list` takes none. Passwords are read twice from a hidden terminal prompt, so run `add` and `passwd` in an interactive terminal, never through a pipe.
-- Every `user` command connects to the database and runs `AutoMigrate` first, so point `DATABASE_URL` only at the database you mean to migrate.
+- `user` commands never migrate, so start the server once on a new database before adding an account.
 - Account rules, sessions and login limiting: [Staff auth](../staff-auth.md). The deployed equivalent is `./user.fish` ([Railway](railway.md)).
 
 ## Stripe webhooks
@@ -115,7 +120,8 @@ Every open links, Trash, students or dashboard page holds one server-sent-event 
 - `compose.yaml`: `postgres:18@sha256:…`, `POSTGRES_DB`, `postgres18_data`, `pg_isready`
 - `.air.toml`: `env_files`, `entrypoint`, `include_ext`, `exclude_dir`
 - `.env.example`: `DATABASE_URL`, `STRIPE_WEBHOOK_SECRET`, `PUBLIC_BASE_URL`
-- `main.go`: `assets`, `run`, `newServer`, `models`
+- `main.go`: `assets`, `run`, `newServer`
+- `internal/db/migrate.go`: `Migrate`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`, `readNewPassword`
 - `internal/live/live.go`: `Feed`
 - `static/management-live.js`: `listenForChanges`

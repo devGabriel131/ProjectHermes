@@ -141,15 +141,3 @@ type WebhookEvent struct {
 	CreatedAt      time.Time `gorm:"not null;default:CURRENT_TIMESTAMP;index:idx_pending_events,where:processed_at IS NULL"`
 	UpdatedAt      time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 }
-
-// Models returns instances of all billing entities for GORM AutoMigrate.
-func Models() []any {
-	return []any{
-		&Contract{},
-		&Obligation{},
-		&CheckoutAttempt{},
-		&Payment{},
-		&Suspension{},
-		&WebhookEvent{},
-	}
-}

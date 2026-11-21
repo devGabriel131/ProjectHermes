@@ -22,7 +22,7 @@ The repository carries no Dockerfile, `railway.json` or Nixpacks file; its only 
 flowchart TD
     push["git push to master"] --> build["Railway build: Railpack\n[EXTERNAL]"]
     build --> start["Start /app/out"]
-    start --> run["run: configuration, database, AutoMigrate,\nStripe catalog, auth, routes, listen"]
+    start --> run["run: configuration, database, migrations,\nStripe catalog, auth, routes, listen"]
     run -->|"any startupError"| failed["log startup_failed, exit 1\ndeploy blocked [EXTERNAL]"]
     run -->|"net.Listen succeeds"| listening["log server_listening"]
     listening --> health{"Health check\nGET /management/"}
@@ -77,9 +77,14 @@ The health-check path is `/management/` `[EXTERNAL]` (a dashboard setting). The 
 
 Account rules and sessions: [Staff auth](../staff-auth.md).
 
-## The CLI migrates the database
+## Migrations on deploy
 
-Every `user` command, including `list` and a mistyped subcommand, connects to the database and runs `AutoMigrate` before it does anything else. Run through `user.fish`, that applies the **deployed** binary's models to the target environment's database. `AutoMigrate` adds tables, columns and constraints but never drops a column the models no longer declare, so a renamed column leaves the old one behind until it is dropped by hand. Locally, `go run . user ...` migrates whatever `DATABASE_URL` points at ([Local development](local-development.md)).
+The new deployment's `run` applies the pending migrations before it loads the Stripe catalog or listens ([Data model](../data-model.md#migrations)), while the previous deployment still serves `[EXTERNAL]`; that is why migrations only expand.
+
+- **First deploy with goose:** production and preview already hold the twelve tables `AutoMigrate` built, so version 1 is adopted with no DDL. goose creates `goose_db_version`, and the deploy log shows `database_migrated` with `migration` 1 and `adopted` true.
+- **A failed migration** rolls back its own transaction and logs `startup_failed` with `database_migrate`, or `database_baseline` when only some baseline tables exist; the deploy is blocked and the schema keeps its last committed version.
+- **Rollback** is redeploying the previous deployment, which runs on the expanded schema. A binary from before goose ignores `goose_db_version`, and its `AutoMigrate` changes nothing on the baseline.
+- `user.fish` commands never migrate; they run the deployed binary against the schema its deploy migrated.
 
 ## Deliberate choices
 
@@ -97,6 +102,7 @@ A change to `go.mod`/`go.sum`, the Go toolchain, or build or deploy configuratio
 - `main.go`: `RAILWAY_SERVICE_NAME`, `RAILWAY_ENVIRONMENT_NAME`, `RAILWAY_GIT_COMMIT_SHA`, `RAILWAY_DEPLOYMENT_ID`, `RAILWAY_REPLICA_ID`, `PORT`, `startupError`, `serve`, `run`
 - `internal/auth/http.go`: `Require`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`
+- `internal/db/migrate.go`: `Migrate`, `database_migrated`
 - `.env.example`: `DATABASE_URL`, `STRIPE_MODE`, `PUBLIC_BASE_URL`
 - `.gitignore`: `/.env`
 - `AGENTS.md`: `Production ready: false`, `Railway`

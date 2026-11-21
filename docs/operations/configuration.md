@@ -8,7 +8,7 @@ The application never loads a `.env` file itself; locally, Air injects `.env` (`
 
 | Variable | Used by | Default | Validation | Failure stage |
 |---|---|---|---|---|
-| `DATABASE_URL` | server, `user` CLI | none; required | Non-empty, then parsed by the pgx driver | `configuration` (empty), `database_open` (unparseable), `database_connect` (unreachable or 10 s spent), `database_migrate` |
+| `DATABASE_URL` | server, `user` CLI | none; required | Non-empty, then parsed by the pgx driver | `configuration` (empty), `database_open` (unparseable), `database_connect` (unreachable or 10 s spent), `database_baseline`, `database_migrate` |
 | `PORT` | server only | unset: listen on `127.0.0.1:3000`. Set: listen on `:<PORT>` (all interfaces) | None; a bad value fails when binding | `listen` |
 | `STRIPE_API_KEY` | server only | none; required | Non-empty; prefix `rk_test_` or `sk_test_` when `STRIPE_MODE=sandbox`, `rk_live_` or `sk_live_` when `live` | `billing_configuration` |
 | `STRIPE_MODE` | server only | none; required | Exactly `sandbox` or `live` | `billing_configuration` |
@@ -55,7 +55,8 @@ A startup failure logs `startup_failed` with a `stage` field, then the process e
 | `configuration` | `run` | `DATABASE_URL` empty; `INSTALLMENT_SPACING` not a positive duration or set with `STRIPE_MODE=live` |
 | `database_open` | `db.Open` | DSN does not parse. No connection is attempted here: the pool connects on first use |
 | `database_connect` | `Pool.Ping` | Server unreachable, rejected credentials, the shared 10 s budget spent, or a signal during startup |
-| `database_migrate` | `AutoMigrate(models()...)` | DDL failure or the shared 10 s budget spent |
+| `database_baseline` | `db.Migrate` | The schema holds some but not all of the baseline tables; nothing was changed ([Data model](../data-model.md#migrations)) |
+| `database_migrate` | `db.Migrate` | A migration failed and rolled back, or the shared 10 s budget was spent, waiting for the migration lock included |
 | `billing_configuration` | `billing.LoadConfigFromEnv` | Any Stripe variable above; `INSTALLMENT_RETRY_DELAY` not a positive duration |
 | `billing_catalog` | `billing.LoadCatalog` | Price missing, duplicated, inactive, wrong mode, currency, billing scheme, type or amount; Stripe unreachable within 15 s |
 | `billing_initialize` | `billing.New` | Repeats the `Config.Validate` that `LoadConfigFromEnv` already passed, so it cannot fail after `billing_configuration` succeeds |
@@ -72,6 +73,7 @@ Failures after `listen` succeeds are `server_failed` or `shutdown_failed`, not s
 - `internal/logging/sentrylog/sentrylog.go`: `New`
 - `internal/billing/stripe.go`: `Config.Validate`, `Config.SecureOrigin`, `LoadConfigFromEnv`, `LoadCatalog`, `STRIPE_API_KEY`, `STRIPE_MODE`, `PUBLIC_BASE_URL`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID`, `STRIPE_PORTAL_CONFIGURATION_ID`, `INSTALLMENT_RETRY_DELAY`
 - `internal/billing/billing.go`: `New`
+- `internal/db/migrate.go`: `Migrate`, `ErrPartialSchema`
 - `internal/testdb/testdb.go`: `Open`, `TEST_DATABASE_URL`
 - `.air.toml`: `env_files`
 - `.env.example`: `STRIPE_MODE`, `PUBLIC_BASE_URL`, `INSTALLMENT_SPACING`, `INSTALLMENT_RETRY_DELAY`

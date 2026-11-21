@@ -16,7 +16,7 @@ flowchart TD
   dsn{"DATABASE_URL set?"}
   open["db.Open: pgx pool of 10 with the tracer\nGORM and the session store on it through database/sql\nno connection yet"]
   ping["Pool.Ping\n10 s budget"]
-  migrate["AutoMigrate models\nsame 10 s budget, then slow.Flush"]
+  migrate["db.Migrate: pending goose migrations\nsame 10 s budget, then slow.Flush"]
   branch{"args after the binary name?"}
   cli["auth.RunCLI user command\nexit 0 or 1"]
   feed["live.New"]
@@ -37,12 +37,12 @@ flowchart TD
   reporter -.->|"sentry_configuration"| fail
   logger -->|"sentry-check"| check
   dsn -->|"no: configuration"| fail
-  dsn -->|"yes"| open --> ping --> migrate --> branch
+  dsn -->|"yes"| open --> ping --> branch
   open -.->|"database_open"| fail
   ping -.->|"database_connect"| fail
-  migrate -.->|"database_migrate"| fail
   branch -->|"user ..."| cli
-  branch -->|"none"| feed --> cfg --> catalog --> addr --> biller --> authm --> server --> worker --> listen --> serve
+  branch -->|"none"| migrate --> feed --> cfg --> catalog --> addr --> biller --> authm --> server --> worker --> listen --> serve
+  migrate -.->|"database_baseline or database_migrate"| fail
   cfg -.->|"billing_configuration"| fail
   catalog -.->|"billing_catalog"| fail
   biller -.->|"billing_initialize"| fail
@@ -56,25 +56,25 @@ Facts the diagram compresses:
 - The Sentry reporter, then the logger, are built first, from `SENTRY_DSN` and the `RAILWAY_*` variables; only the web server logs to stdout ([Observability](observability.md)). Without `SENTRY_DSN` the reporter is nil and nothing Sentry-related runs.
 - `apollo sentry-check` stops after the logger: it needs no database ([Observability](observability.md#sentry)).
 - After every path but help and an unknown command, `main` logs `startup_failed` if a stage failed, then flushes Sentry for at most 2 s, then exits.
-- Ping and `AutoMigrate` share one 10 s context derived from the signal context. The slow-query summary is flushed right after the migration.
-- `AutoMigrate(models()...)` creates or alters every table: `auth.User`, `auth.Session`, `settings.Settings`, `links.Link`, `links.Enrollment`, `students.Student` and `billing.Models()`. It never drops a table or column. There are no migration files ([Data model](../data-model.md)).
+- Ping and the migration share one 10 s context derived from the signal context. The slow-query summary is flushed right after the migration.
+- `db.Migrate` applies the pending migrations in `internal/db/migrations/` and logs `database_migrated` for each ([Data model](../data-model.md#migrations)). A schema holding only some of the baseline tables fails as `database_baseline` before any DDL; any other migration failure, including the spent budget, is `database_migrate` and rolls back that migration's transaction.
 - Stripe settings, and the cookie `Secure` flag derived from `PUBLIC_BASE_URL`, are read only after the database is migrated, so a bad Stripe variable still leaves the schema migrated.
 - Both worker goroutines start before `net.Listen`; a `listen` failure unwinds through the deferred stop, which cancels and awaits them.
 - Any startup failure is logged by `main` after `run` returns, so deferred cleanup (including the final slow-query flush) happens first.
 
 ### CLI branch
 
-`apollo user <command>` takes the same path as the server through `AutoMigrate`, then calls `auth.RunCLI` instead of building the web stack ([Staff authentication](../staff-auth.md) documents the commands).
+`apollo user <command>` takes the same path as the server through the ping, then calls `auth.RunCLI` instead of migrating and building the web stack ([Staff authentication](../staff-auth.md) documents the commands).
 
 | Invocation | Behavior |
 |---|---|
 | `--help`, `-h`, `user`, `user --help`, `user -h` | Print `auth.Usage`, exit 0. No logger, no environment, no database |
 | Any other first argument | `unknown command` on stderr, exit 1. No database |
-| `user <anything else>` | Connects to `DATABASE_URL`, runs `AutoMigrate`, then `RunCLI` |
+| `user <anything else>` | Connects to `DATABASE_URL`, pings, then `RunCLI` |
 
 Consequences:
 
-- Every `user` command, including an invalid subcommand, needs a reachable database and migrates it first; an invalid subcommand only reports its usage error after that.
+- Every `user` command, including an invalid subcommand, needs a reachable database; an invalid subcommand only reports its usage error after the ping. The CLI never migrates, so it needs a database a server start has migrated.
 - Logs go to stderr, so stdout stays clean for `user list`. No `startup_started` is logged. Database failures still log `startup_failed` (to stderr); a command's own error is printed to stderr and exits 1 without that event.
 - The CLI uses the slow-query label `cli_user`.
 
@@ -82,7 +82,7 @@ Consequences:
 
 | Setting | Value | Where |
 |---|---|---|
-| Ping plus `AutoMigrate` | 10 s, one shared budget | `run` |
+| Ping plus migration | 10 s, one shared budget | `run` |
 | Stripe catalog load | 15 s; the Stripe HTTP client also times out each call at 5 s with up to 2 retries | `run`, `billing.NewStripeClient` |
 | Pool | One pgx pool of 10 connections, opened on demand, each closed after an hour (pgx default) or 30 min idle; GORM and the SCS session store borrow from it through `database/sql`, which keeps no idle connections of its own | `internal/db` |
 | GORM | `SkipDefaultTransaction`, `DisableAutomaticPing`; `Logger` is `logger.Discard`, the pool's tracer times queries instead | `internal/db` |
@@ -151,8 +151,9 @@ Details:
 
 ## Source
 
-- `main.go`: `main`, `newLogger`, `checkSentry`, `run`, `newApp`, `serve`, `newServer`, `startupError`, `models`, `signalContext`, `cancelWorker`
+- `main.go`: `main`, `newLogger`, `checkSentry`, `run`, `newApp`, `serve`, `newServer`, `startupError`, `signalContext`, `cancelWorker`
 - `internal/db/db.go`: `Open`, `DB.Close`, `maxConns`
+- `internal/db/migrate.go`: `Migrate`, `ErrPartialSchema`
 - `internal/logging/sentrylog/sentrylog.go`: `New`, `Reporter.Flush`
 - `internal/auth/http.go`: `New`, `Run`, `deleteExpiredSessions`
 - `internal/auth/cli.go`: `Usage`, `RunCLI`

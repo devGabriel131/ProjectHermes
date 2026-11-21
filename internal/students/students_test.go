@@ -46,24 +46,8 @@ func TestListRetainsExpiredSourcesAndOrdersNewestFirst(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var sourceBefore links.Enrollment
-	if err := db.WithContext(ctx).Where("id = ?", oldest.EnrollmentID).Take(&sourceBefore).Error; err != nil {
-		t.Fatal(err)
-	}
 	if err := db.WithContext(ctx).Model(&students.Student{}).Where("id = ?", oldest.ID).Update("is_active", false).Error; err != nil {
 		t.Fatal(err)
-	}
-	for range 2 {
-		if err := db.WithContext(ctx).AutoMigrate(&links.Link{}, &links.Enrollment{}, &students.Student{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var sourceAfter links.Enrollment
-	if err := db.WithContext(ctx).Where("id = ?", oldest.EnrollmentID).Take(&sourceAfter).Error; err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(sourceAfter, sourceBefore) {
-		t.Fatalf("inactive student changed retained source: before=%+v, after=%+v", sourceBefore, sourceAfter)
 	}
 
 	listed, err := roster.List(ctx, students.Filter{})
@@ -388,7 +372,7 @@ func studentXmin(t *testing.T, db *gorm.DB, ctx context.Context, id uint64) stri
 
 func studentStores(t *testing.T) (*gorm.DB, *students.Store, *links.Store, context.Context) {
 	t.Helper()
-	db := testdb.Open(t, &links.Link{}, &links.Enrollment{}, &students.Student{}, &settings.Settings{})
+	db := testdb.Open(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	t.Cleanup(cancel)
 	return db, students.New(db, nil), links.New(db, nil), ctx

@@ -499,7 +499,7 @@ func newWorkerMockServer(paidAt time.Time, initialAmount int64) *workerMockServe
 // obligations and an open attempt; the worker mock reports that attempt's Session paid.
 func seedThreePlanCheckout(t *testing.T) (*gorm.DB, links.Enrollment, billing.Contract, billing.CheckoutAttempt) {
 	t.Helper()
-	db := testdb.Open(t, append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)...)
+	db := testdb.Open(t)
 	sessionHash := make([]byte, 32)
 	rand.Read(sessionHash)
 	now := time.Now().UTC()
@@ -903,8 +903,7 @@ func TestFailedInstallmentIsPaidAgain(t *testing.T) {
 func TestRefundsAndFraudSignalsSurfaceWithoutWebhook(t *testing.T) {
 	paidAt := time.Date(2026, time.November, 15, 4, 0, 0, 0, time.UTC)
 	mock := newWorkerMockServer(paidAt, 60000)
-	allModels := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)
-	db := testdb.Open(t, allModels...)
+	db := testdb.Open(t)
 
 	tokenHash := make([]byte, 32)
 	rand.Read(tokenHash)
@@ -1080,8 +1079,7 @@ func TestSuspensionAndReinstatement(t *testing.T) {
 	paidAt := time.Date(2026, time.November, 15, 4, 0, 0, 0, time.UTC)
 	mock := newWorkerMockServer(paidAt, 20834)
 
-	allModels := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)
-	db := testdb.Open(t, allModels...)
+	db := testdb.Open(t)
 
 	svc := billingtest.New(t, db, mock.mux)
 
@@ -1344,7 +1342,7 @@ func TestCorrectedEpisodeCancelsFee(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := newWorkerMockServer(time.Now(), 20834)
-			db := testdb.Open(t, append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)...)
+			db := testdb.Open(t)
 			svc := billingtest.New(t, db, mock.mux)
 			student, contract := seedFundedStudent(t, db, "Corrected Episode", "corrected@example.com")
 			customer := *contract.StripeCustomerID
@@ -1439,7 +1437,7 @@ func TestCorrectedEpisodeCancelsFee(t *testing.T) {
 // unsettled invoice and ends the student, and repeating it moves no money again.
 func TestWithdrawalRefundsAndStopsCollection(t *testing.T) {
 	mock := newWorkerMockServer(time.Now(), 20834)
-	db := testdb.Open(t, append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)...)
+	db := testdb.Open(t)
 	svc := billingtest.New(t, db, mock.mux)
 	student, contract := seedFundedStudent(t, db, "Withdrawn Student", "withdrawn@example.com")
 	customer := *contract.StripeCustomerID
@@ -1543,7 +1541,7 @@ func TestWithdrawalRefundsAndStopsCollection(t *testing.T) {
 func TestWorkerSyncsCustomerContact(t *testing.T) {
 	ctx := t.Context()
 	mock := newWorkerMockServer(time.Now(), 20834)
-	db := testdb.Open(t, append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)...)
+	db := testdb.Open(t)
 	svc := billingtest.New(t, db, mock.mux)
 	student, contract := seedFundedStudent(t, db, "Maria Santos", "maria@example.com")
 	customer := *contract.StripeCustomerID

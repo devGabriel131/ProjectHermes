@@ -63,10 +63,10 @@ To reproduce locally, set up the test database as in [Commands](#commands) and r
 
 ## `testdb`: one schema per test
 
-`testdb.Open(t, models...)` gives each test an isolated database view on the one `TEST_DATABASE_URL` database. `testdb.OpenTraced(t, tracer, models...)` does the same with a pgx query tracer on the pool, as `main` sets `dblog.Tracer`:
+`testdb.Open(t)` gives each test an isolated database view on the one `TEST_DATABASE_URL` database. `testdb.OpenTraced(t, tracer)` does the same with a pgx query tracer on the pool, as `main` sets `dblog.Tracer`:
 
 1. It generates a schema name `pwtest_<16 hex digits>` and opens the pool through `db.Open`, as `main` does, with `search_path` set to that schema, so every query, including those made through `db.DB()`, lands in it.
-2. It runs `CREATE SCHEMA`, then `AutoMigrate(models...)` within a 10 s budget.
+2. It runs `CREATE SCHEMA`, then `db.Migrate`, the goose migrations `main` runs, within a 10 s budget. Every test therefore runs on the migrated schema with all twelve tables, and a GORM model field without its migration fails ([Data model](data-model.md#migrations)).
 3. Cleanup runs in reverse registration order: it drops the schema first (`DROP SCHEMA ... CASCADE`, 5 s budget, a failure fails the test), then closes the pool.
 
 Tests therefore run in parallel without sharing rows. Nothing sweeps schemas left by a killed test run, so stray `pwtest_*` schemas can accumulate in the test database. `testdb.AwaitBlocked` supports lock-contention tests: it polls `pg_blocking_pids` until a session is really waiting on the blocker's open transaction, then lets the test release the lock, so those tests act on observed database state instead of elapsed time. It fails the test if the call returns before blocking.
@@ -151,7 +151,8 @@ Tests do not prove randomness statistically. No test proves these browser checks
 - `main_test.go`: `TestServeLifecycle`
 - `main_wiring_integration_test.go`: `TestRoutesAreMounted`, `TestPublicCustomerIgnoresStaffSessions`, `TestCrossOriginWritesAreRejected`, `TestSessionCookiesFollowPublicOrigin`, `newTestServer`, `serverHandler`, `addStaff`, `signInStaff`, `send`
 - `main_logging_integration_test.go`: `TestCustomerRolledBackRequestsLogOnce`, `TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging`, `TestSessionLoadFailureKeepsPublicHeadQuiet`, `TestSignInCommitFailureLogsActualStatusWithoutCredentials`, `TestAgreementFailuresLogOnceWithoutContactData`, `TestHandlerPanicReachesSentryOnceWithoutRequestData`, `TestSentryOffWithoutDSN`, `requireFailure`, `requireNoPrivate`, `sentryCapture`, `sentrySink`
-- `internal/testdb/testdb.go`: `Open`, `AwaitBlocked`, `TEST_DATABASE_URL`
+- `internal/testdb/testdb.go`: `Open`, `OpenTraced`, `AwaitBlocked`, `TEST_DATABASE_URL`
+- `internal/db/migrate.go`: `Migrate`
 - `internal/billing/billingtest/billingtest.go`: `Config`, `Catalog`, `Client`, `New`
 - `internal/management/students.go`: `HX-Replace-Url`
 - `internal/management/dashboard.go`: `dashboard`

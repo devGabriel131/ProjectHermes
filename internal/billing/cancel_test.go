@@ -23,12 +23,11 @@ import (
 )
 
 func TestBillingSafeCancelEnrollment(t *testing.T) {
-	allModels := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}}, billing.Models()...)
 	now := time.Now().UTC()
 
 	setup := func(t *testing.T, handler http.HandlerFunc) (*gorm.DB, *links.Store, *billing.Service, links.LinkEntry) {
 		t.Helper()
-		db := testdb.Open(t, allModels...)
+		db := testdb.Open(t)
 		store := links.New(db, nil)
 		biller := billingtest.New(t, db, handler)
 		link, err := store.CreateLink(t.Context(), "staff", "Cohort", now.Add(7*24*time.Hour))

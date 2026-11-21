@@ -25,7 +25,7 @@ import (
 
 func TestSignIn(t *testing.T) {
 	t.Parallel()
-	db := testdb.Open(t, &User{}, &Session{})
+	db := testdb.Open(t)
 	if err := createUser(t.Context(), db, "alice", "first password"); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestSignIn(t *testing.T) {
 func TestCredentialChangesEndSessions(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db := testdb.Open(t, &User{}, &Session{})
+	db := testdb.Open(t)
 	app, manager := newApp(t, db)
 	manager.limiter = rate.NewLimiter(rate.Inf, 0)
 	if err := createUser(ctx, db, "alice", "first password"); err != nil {
@@ -124,7 +124,7 @@ func TestCredentialChangesEndSessions(t *testing.T) {
 
 func TestSignOutEndsOnlyThisBrowser(t *testing.T) {
 	t.Parallel()
-	db := testdb.Open(t, &User{}, &Session{})
+	db := testdb.Open(t)
 	app, manager := newApp(t, db)
 	manager.limiter = rate.NewLimiter(rate.Inf, 0)
 	if err := createUser(t.Context(), db, "alice", "first password"); err != nil {
@@ -160,7 +160,7 @@ func TestSessionCleanupDeletesOnlyExpired(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	log := logging.New(&out)
-	db := testdb.OpenTraced(t, dblog.New(log), &Session{})
+	db := testdb.OpenTraced(t, dblog.New(log))
 	manager := &Manager{db: db, log: log}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	sessions := []Session{

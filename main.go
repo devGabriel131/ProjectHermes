@@ -131,17 +131,6 @@ type startupError struct {
 
 func (e startupError) Error() string { return e.stage + ": " + e.err.Error() }
 
-func models() []any {
-	return append([]any{
-		&auth.User{},
-		&auth.Session{},
-		&settings.Settings{},
-		&links.Link{},
-		&links.Enrollment{},
-		&students.Student{},
-	}, billing.Models()...)
-}
-
 func run(log *slog.Logger, reporter *sentrylog.Reporter, args []string) error {
 	if len(args) == 0 {
 		log.Info("startup_started")
@@ -169,18 +158,21 @@ func run(log *slog.Logger, reporter *sentrylog.Reporter, args []string) error {
 	if err := database.Pool.Ping(ctx); err != nil {
 		return startupError{"database_connect", err}
 	}
-	err = database.GORM.WithContext(logging.WithOperation(ctx, "startup_migrate")).AutoMigrate(models()...)
-	slow.Flush()
-	if err != nil {
-		return startupError{"database_migrate", err}
-	}
-
 	if len(args) > 0 {
 		err := auth.RunCLI(logging.WithOperation(signalContext, "cli_user"), database.GORM, args[1:])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
 		return err
+	}
+
+	err = database.Migrate(logging.WithOperation(ctx, "startup_migrate"), log)
+	slow.Flush()
+	switch {
+	case errors.Is(err, db.ErrPartialSchema):
+		return startupError{"database_baseline", err}
+	case err != nil:
+		return startupError{"database_migrate", err}
 	}
 
 	// Committed writes tell open management pages to refresh themselves.

@@ -130,7 +130,7 @@ func TestSessionCookiesFollowPublicOrigin(t *testing.T) {
 			if err := cfg.Validate(); err != nil {
 				t.Fatal(err)
 			}
-			db := testdb.Open(t, models()...)
+			db := testdb.Open(t)
 			handler := serverHandler(t, db, db, logging.New(io.Discard), nil, cfg)
 			staff := signInStaff(t, db, handler)
 			link, err := links.New(db, nil).CreateLink(t.Context(), "staff", "", time.Now().Add(time.Hour))
@@ -152,7 +152,7 @@ func TestSessionCookiesFollowPublicOrigin(t *testing.T) {
 // newTestServer builds the real handler over an isolated database.
 func newTestServer(t *testing.T) (http.Handler, *gorm.DB) {
 	t.Helper()
-	db := testdb.Open(t, models()...)
+	db := testdb.Open(t)
 	return serverHandler(t, db, db, logging.New(io.Discard), nil, billingtest.Config()), db
 }
 

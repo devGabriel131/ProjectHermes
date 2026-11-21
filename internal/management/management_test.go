@@ -109,8 +109,7 @@ func newBiller(t *testing.T, db *gorm.DB) *billing.Service {
 // newApp wires routes like main.go: auth owns session middleware.
 func newApp(t *testing.T) *app {
 	t.Helper()
-	models := append([]any{&links.Link{}, &links.Enrollment{}, &students.Student{}, &settings.Settings{}, &auth.User{}, &auth.Session{}}, billing.Models()...)
-	db := testdb.Open(t, models...)
+	db := testdb.Open(t)
 	store := links.New(db, nil)
 	log := logging.New(io.Discard)
 	manager, err := auth.New(db, false, log)
@@ -826,7 +825,7 @@ func TestStaffShareLinkStatuses(t *testing.T) {
 // Database failures answer 500 with no list, row, or notice that htmx could
 // swap in as if the request had worked.
 func TestStoreFailuresAreServerErrors(t *testing.T) {
-	db := testdb.Open(t, &links.Link{}, &links.Enrollment{}, &students.Student{})
+	db := testdb.Open(t)
 	failed := db.WithContext(t.Context()).Begin()
 	if err := failed.Rollback().Error; err != nil {
 		t.Fatal(err)

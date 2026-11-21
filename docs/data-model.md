@@ -1,6 +1,6 @@
 # Data model
 
-The application persists all state in a single PostgreSQL database across 12 tables. This page documents the entity-relationship structure, ownership, and database-enforced constraints. For business flows and vocabulary, see [Lifecycle](domain/lifecycle.md); for application architecture and packages, see [Architecture](architecture.md).
+The application persists all state in a single PostgreSQL database across 12 tables, created and changed only by goose [migrations](#migrations). This page documents the entity-relationship structure, ownership, database-enforced constraints and how the schema changes. For business flows and vocabulary, see [Lifecycle](domain/lifecycle.md); for application architecture and packages, see [Architecture](architecture.md).
 
 ```mermaid
 erDiagram
@@ -158,6 +158,26 @@ The customer selects a 4-to-6 digit PIN at final submission. The system enforces
 
 A concurrent race between `Submit` and `Enroll` can still see the PIN free under READ COMMITTED; if this happens, funding rolls back on `idx_student_pin` and the worker retries (see [Go-live](go-live.md)).
 
+## Migrations
+
+goose (`github.com/pressly/goose/v3`, used as a library; production has no goose CLI) owns the schema. The numbered SQL files in `internal/db/migrations/` are embedded in the binary, and `db.Migrate` applies the pending ones at server startup ([Startup and shutdown](operations/startup-shutdown.md)): each in its own transaction, under a session advisory lock keyed by the current schema, recording each version in that schema's `goose_db_version`. There is no down step: rollback is redeploying the previous binary, so a migration only adds what that binary can ignore, and a drop waits one release.
+
+**Version 1 is the baseline.** `00001_baseline.sql` is the schema GORM `AutoMigrate` built before goose: `pg_dump --schema-only --no-owner --no-privileges` of a fresh database, without `SET` lines, comments or the `public.` qualifier, so it creates in the current schema. A Go migration in `migrate.go` runs it instead of goose's SQL runner so that it can adopt a database `AutoMigrate` already built. It checks the twelve baseline tables in the current schema:
+
+| Baseline tables present | Version 1 |
+|---|---|
+| all | Adopted: recorded with no DDL. `database_migrated` says `adopted: true` |
+| none | Applied: the baseline creates them |
+| some | Refused before goose creates `goose_db_version`: no DDL, and startup fails with stage `database_baseline` |
+
+Other tables, such as ProjectHephaestus's `hephaestus_*` in the shared production database, do not count.
+
+### Adding a migration
+
+1. Add `internal/db/migrations/<next number, five digits>_<what>.sql` starting with `-- +goose Up`. Never edit a migration that has shipped: goose skips versions it has recorded.
+2. A GORM model field ships with its migration or after it, never before: integration tests run on the migrated schema (`testdb`), so a field without its column fails CI.
+3. Update the diagram and the table inventory above.
+
 ## Source
 
 - `internal/auth/auth.go`: `User`, `Session`
@@ -166,4 +186,5 @@ A concurrent race between `Submit` and `Enroll` can still see the PIN free under
 - `internal/students/students.go`: `Student`, `Details`, `WithdrawnAt`
 - `internal/billing/models.go`: `Contract`, `Obligation`, `CheckoutAttempt`, `Payment`, `Suspension`, `WebhookEvent`, `WithdrawnAt`, `WithdrawnBy`
 - `internal/billing/withdraw.go`: `withdraw`
-- `main.go`: `models`
+- `internal/db/migrate.go`: `Migrate`, `adoptBaseline`, `baselineTables`, `ErrPartialSchema`
+- `internal/db/migrations/00001_baseline.sql`

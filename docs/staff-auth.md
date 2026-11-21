@@ -57,7 +57,7 @@ A version changed by `passwd` or `revoke`, or a row deleted by `remove`, invalid
 
 ### CLI
 
-Every `user` command opens the database, then pings it and runs `AutoMigrate` inside one 10-second budget before the command runs ([Startup and shutdown](operations/startup-shutdown.md)). The CLI needs only `DATABASE_URL` (no Stripe) and logs to stderr. Session rows are not touched by any command.
+Every `user` command opens the database and pings it inside a 10-second budget before the command runs ([Startup and shutdown](operations/startup-shutdown.md)). It never migrates, so the tables must exist from a server start. The CLI needs only `DATABASE_URL` (no Stripe) and logs to stderr. Session rows are not touched by any command.
 
 ```mermaid
 flowchart TD
@@ -66,7 +66,7 @@ flowchart TD
     B -->|"--help or -h"| H["print auth.Usage, exit 0"]
     B -->|"user, alone or with --help or -h"| H
     B -->|"anything else except user"| U["stderr: unknown command, exit 1"]
-    B -->|"user with more arguments"| D["DATABASE_URL, open, ping, AutoMigrate"]
+    B -->|"user with more arguments"| D["DATABASE_URL, open, ping"]
     D --> R["auth.RunCLI with the arguments after user"]
     R --> X{"shape"}
     X -->|"list"| P["print usernames in order"]
