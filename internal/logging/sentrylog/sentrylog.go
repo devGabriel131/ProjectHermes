@@ -51,19 +51,24 @@ func New(o Options) (*Reporter, error) {
 }
 
 // Handler sends every record at error level or above to Sentry, its attributes as the event's "attributes"
-// context.
+// context, except the http_server_error of kind panic that follows a panic Middleware already reported.
 func (r *Reporter) Handler() slog.Handler {
 	return handler{hub: r.hub}
 }
 
-// Middleware reports a handler panic, then panics again so net/http still logs http_server_error. It sits
-// just inside httplog.Requests, whose route and request ID the panic event takes. A nil Reporter returns next.
+// Middleware reports a handler panic, then panics again so net/http still logs http_server_error, which
+// Handler then leaves out of Sentry. It sits just inside httplog.Requests, whose route and request ID the
+// panic event takes. A nil Reporter returns next.
 func (r *Reporter) Middleware(next http.Handler) http.Handler {
 	if r == nil {
 		return next
 	}
 	recoverer := sentryhttp.New(sentryhttp.Options{Repanic: true}).Handle(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// Tracing is off, so a client's trace headers have no use; sentryhttp would copy them into the
+		// envelope header, out of scrub's reach.
+		req.Header.Del(sentry.SentryTraceHeader)
+		req.Header.Del(sentry.SentryBaggageHeader)
 		recoverer.ServeHTTP(w, req.WithContext(sentry.SetHubOnContext(req.Context(), r.hub.Clone())))
 	})
 }
@@ -102,6 +107,10 @@ func (h handler) Handle(ctx context.Context, record slog.Record) error {
 		flatten(extra, h.prefix, attr)
 		return true
 	})
+	// Middleware already reported this panic with its route and stack; net/http's line would be a second event.
+	if record.Message == "http_server_error" && extra["kind"] == "panic" {
+		return nil
+	}
 	event := &sentry.Event{Level: sentry.LevelError, Message: record.Message, Timestamp: record.Time,
 		Contexts: map[string]sentry.Context{attributesContext: extra}}
 	h.hub.CaptureEventWithHint(event, &sentry.EventHint{Context: ctx})

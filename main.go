@@ -63,12 +63,12 @@ func main() {
 		out = os.Stderr
 	}
 	environment := cmp.Or(os.Getenv("RAILWAY_ENVIRONMENT_NAME"), "local")
-	release := os.Getenv("RAILWAY_GIT_COMMIT_SHA")
-	reporter, sentryErr := sentrylog.New(sentrylog.Options{DSN: os.Getenv("SENTRY_DSN"), Environment: environment, Release: release})
+	version := cmp.Or(os.Getenv("RAILWAY_GIT_COMMIT_SHA"), "unknown")
+	reporter, sentryErr := sentrylog.New(sentrylog.Options{DSN: os.Getenv("SENTRY_DSN"), Environment: environment, Release: version})
 	log := newLogger(out, reporter).With(
 		"service", cmp.Or(os.Getenv("RAILWAY_SERVICE_NAME"), "Apollo"),
 		"environment", environment,
-		"version", cmp.Or(release, "unknown"),
+		"version", version,
 	)
 	if id := os.Getenv("RAILWAY_DEPLOYMENT_ID"); id != "" {
 		log = log.With("deployment_id", id)

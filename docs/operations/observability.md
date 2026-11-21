@@ -72,7 +72,7 @@ A 4xx is logged only if a handler called `RecordError`. A render failure after t
 
 Current stage values come from the `RecordError` callers: `session`, `authenticate`, `login`, `logout`, `render`, `load`, `lookup`, `list`, `save`, `create`, `start`, `rename`, `cancel`, `accept`, `checkout`, `billing`, `export`, `stream`, and `response`.
 
-A handler panic is not a `request_failed`: `Requests` has no recover, so net/http recovers the panic and reports it through the server error log, which becomes `http_server_error` with `kind` `panic`. With Sentry on, `sentrylog`'s middleware reports the panic first ([Sentry](#sentry)).
+A handler panic is not a `request_failed`: `Requests` has no recover, so net/http recovers the panic and reports it through the server error log, which becomes `http_server_error` with `kind` `panic`. With Sentry on, `sentrylog`'s middleware reports the panic to Sentry first, and that `http_server_error` stays in the log only ([Sentry](#sentry)).
 
 ## Error attributes
 
@@ -162,14 +162,14 @@ Both ride on the same flushes and labels, and split a request's time into the da
 
 ## Sentry
 
-Errors also go to Sentry, through `internal/logging/sentrylog`, with nothing the JSON log line would not carry. It is switched on by `SENTRY_DSN` alone ([Configuration](configuration.md)).
+Errors also go to Sentry, through `internal/logging/sentrylog`, with no request or student data beyond the JSON log line's fields. It is switched on by `SENTRY_DSN` alone ([Configuration](configuration.md)).
 
 **Off without `SENTRY_DSN`.** `sentrylog.New` returns a nil `*Reporter`, and `main` then builds exactly the pre-Sentry logger and middleware chain: no Sentry client, hub or transport exists, nothing is sent, and no Sentry goroutine starts. The SDK's global hub is never used, even when Sentry is on. An invalid DSN fails startup with stage `sentry_configuration`.
 
 **What is reported.**
 
-- Every log event at `error` level, through an extra handler beside the JSON one (`slog.NewMultiHandler` in `main.newLogger`): `startup_failed`, `shutdown_failed`, `server_failed`, `http_server_error`, `request_failed` at `error`, `session_cleanup_failed`, `stripe_webhook_store_failed`, `sentry_check`. Warnings and info events are not. The event's message is the log event name, and its attributes, the logger's own included, are the event's `attributes` context.
-- Handler panics. `Reporter.Middleware` wraps `sentryhttp` with `Repanic: true` just inside `httplog.Requests`, so the panic is reported with its type and stack trace, then net/http still recovers it and logs `http_server_error`, which is reported too: one panic makes two Sentry events.
+- Every log event at `error` level, through an extra handler beside the JSON one (`slog.NewMultiHandler` in `main.newLogger`): `startup_failed`, `shutdown_failed`, `server_failed`, `http_server_error` except `kind` `panic` (next item), `request_failed` at `error`, `session_cleanup_failed`, `stripe_webhook_store_failed`, `sentry_check`. Warnings and info events are not. The event's message is the log event name, and its attributes, the logger's own included, are the event's `attributes` context.
+- Handler panics. `Reporter.Middleware` wraps `sentryhttp` with `Repanic: true` just inside `httplog.Requests`, so the panic is reported with its type, stack trace, route and request ID, then net/http still recovers it and logs `http_server_error` with `kind` `panic`. The Sentry handler skips that record, so one panic makes one Sentry event.
 
 **Event fields.**
 
@@ -179,9 +179,11 @@ Errors also go to Sentry, through `internal/logging/sentrylog`, with nothing the
 | fingerprint | Sentry's default grouping plus the transaction, so one failure in two routes is two issues |
 | tag `request_id` | The request ID, for events raised while serving a request |
 | environment | `RAILWAY_ENVIRONMENT_NAME`, default `local` |
-| release | `RAILWAY_GIT_COMMIT_SHA`; unset, the SDK's default (the build's VCS revision) |
+| release | `RAILWAY_GIT_COMMIT_SHA`, default `unknown`: the log's `version` |
+| exception | Panic events only: type and stack trace, with the function, module, build path and line of each frame. No values, locals or source lines |
+| modules | Every Go module linked into the binary, with its version |
 
-**Scrubbing.** `SendDefaultPII` is false and `BeforeSend` (`scrub`) drops, on every event: the request (URL, query string, headers, cookies, body), the user and client IP, the host name, breadcrumbs, every context except `attributes`, and the text of every exception. A panic's message becomes `panic`, since a non-error panic value would arrive there. Exception types and stack traces stay. `sentryhttp` buffers up to 10 KiB of a request body for its request record; `scrub` drops that record, so the body never leaves the process.
+**Scrubbing.** `SendDefaultPII` is false and `BeforeSend` (`scrub`) drops, on every event: the request (URL, query string, headers, cookies, body), the user and client IP, the host name, breadcrumbs, every context except `attributes`, and the text of every exception. A panic's message becomes `panic`, since a non-error panic value would arrive there. Exception types and stack traces stay. `sentryhttp` buffers up to 10 KiB of a request body for its request record; `scrub` drops that record, so the body never leaves the process. The middleware deletes a client's `sentry-trace` and `baggage` headers before `sentryhttp` reads them: it would copy them into the envelope header, which `BeforeSend` never sees.
 
 **Tracing is off.** `EnableTracing` is false, so `sentryhttp`'s per-request transaction is never sampled or sent.
 
@@ -193,7 +195,7 @@ Errors also go to Sentry, through `internal/logging/sentrylog`, with nothing the
 railway ssh --project <id> --environment <env> --service ProjectHermes -- /app/out sentry-check
 ```
 
-`sentry-check` needs no database. It logs one `sentry_check` error, which carries only the logger's service, environment and version fields, through the same logger as the server, waits up to 2 s for the SDK to send it, and prints its event ID. The SDK does not report Sentry's answer, so a wrong key or a blocked network still prints the ID: search Sentry for that ID to confirm the event arrived and carries nothing but the fields above. Without `SENTRY_DSN` it prints that Sentry is off and exits 1.
+`sentry-check` needs no database. It logs one `sentry_check` error, which carries only the logger's service, environment and version fields, plus `deployment_id` and `replica_id` where Railway sets them, through the same logger as the server, waits up to 2 s for the SDK to send it, and prints its event ID. The SDK does not report Sentry's answer, so a wrong key or a blocked network still prints the ID: search Sentry for that ID to confirm the event arrived and carries nothing but the fields above. Without `SENTRY_DSN` it prints that Sentry is off and exits 1.
 
 ## Privacy rules
 
@@ -204,8 +206,8 @@ railway ssh --project <id> --environment <env> --service ProjectHermes -- /app/o
 - `http_server_error` keeps only a fixed class; the standard library's diagnostic text, which can include remote addresses, is dropped.
 - Stripe webhook body, signature and secret are never logged, and the Stripe SDK's own logger is set to null.
 - Billing events carry only opaque references the app generated (`contract`, `obligation`, `attempt`), Stripe event ids and amounts; no names, emails, phone numbers, PINs, tokens or staff usernames appear in any event above (the withdrawing staff name goes only to Stripe refund metadata).
-- `main_logging_integration_test.go` drives real failures through `newServer` and fails if a query string, header, credential, cookie, token, contact value, client IP or SQL text reaches the log event or the Sentry events, which it captures through the SDK's `Transport` interface ([Testing](../testing.md)).
-- Sentry gets the same fields as the log, after the scrubbing above ([Sentry](#sentry)).
+- `main_logging_integration_test.go` drives real failures through `newServer` and fails if a query string, header, credential, cookie, token, contact value, client IP or SQL text reaches the log event or the Sentry events, which it captures through the SDK's `Transport` interface. Its panic test reads the whole envelopes the SDK posts to a loopback sink, so client trace headers are checked too ([Testing](../testing.md)).
+- Sentry gets the log's fields, after the scrubbing above, plus panic stack traces and the module list ([Sentry](#sentry)).
 
 ## Deliberate choices
 
@@ -213,7 +215,7 @@ railway ssh --project <id> --environment <env> --service ProjectHermes -- /app/o
 - **No `recover` in `Requests`.** The event is emitted only after the stack returns normally, so a panic cannot leave a half-built event; net/http's own recovery and `http_server_error` cover it.
 - **Aggregated slow queries.** Per-query lines would let one slow spell flood the log.
 - **Sentry off means absent.** A nil `*sentrylog.Reporter` leaves the logger and the middleware chain as they were, so an environment without `SENTRY_DSN` runs no Sentry code at all.
-- **A panic reaches Sentry twice.** The `sentryhttp` event has the stack trace and route; `http_server_error` is reported because every error event is. Filtering it would make the Sentry handler special-case one event name.
+- **One panic, one Sentry event.** The `sentryhttp` event has the stack trace, route and request ID; the `http_server_error` of `kind` `panic` that follows has none of them and would group every route's panics into one `other` issue, so the Sentry handler skips it. The JSON log keeps it. The middleware wraps every handler `newServer` mounts; a panic outside it, in `httplog.Requests` itself, would reach the log only.
 
 ## Source
 

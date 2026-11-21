@@ -176,7 +176,7 @@ Session lifetime, auth-version revocation and the limiter are in [Staff authenti
 flowchart TD
   conn["http.Server\nReadHeaderTimeout 5 s, WriteTimeout 10 s, IdleTimeout 60 s\nErrorLog becomes http_server_error"]
   req["httplog.Requests\nrequest ID, status capture, one request_failed"]
-  sentry["sentrylog Reporter.Middleware, only with SENTRY_DSN\nsentryhttp: report a panic, then panic again"]
+  sentry["sentrylog Reporter.Middleware, only with SENTRY_DSN\ndrop sentry-trace, baggage\nsentryhttp: report a panic, then panic again"]
   sec["secureHeaders\nsite CSP, HSTS, nosniff, noindex"]
   cop["http.CrossOriginProtection\n403 for cross-origin writes"]
   outer["httplog.Routes(mux)\nlabel = matched pattern"]

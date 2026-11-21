@@ -108,8 +108,8 @@ Helpers: `newTestServer` builds the handler over a fresh database with `billingt
 | `TestSessionLoadFailureKeepsPublicHeadQuiet` | `sessions` renamed | the public `HEAD` stays a silent 404; `/management/` logs `session` 42P01 and answers the plain SCS 500 |
 | `TestSignInCommitFailureLogsActualStatusWithoutCredentials` | the session insert at sign-in rejected | `session` 23514; no session row persists |
 | `TestAgreementFailuresLogOnceWithoutContactData` | the agreement page with `settings` renamed, then acceptance rejected by a `CHECK` | `load` 42P01, then `accept` 23514 with the enrollment unchanged; the retry redirects to `/payments` silently |
-| `TestHandlerPanicReachesSentryOnceWithoutRequestData` | `newServer` with no database behind its stores, so a draft save panics | no log event; one Sentry `panic` event named `POST /customer/{token}/draft/{field}`, with an exception type and none of the URL token, query, header, cookie, body or IP; the panic still reaches net/http |
-| `TestSentryOffWithoutDSN` | the rolled-back draft save, with no DSN | `sentrylog.New` returns nil; the failure is logged and the transport is never configured or sent anything |
+| `TestHandlerPanicReachesSentryOnceWithoutRequestData` | `newServer` with no database behind its stores, behind a real `http.Server` with `run`'s `ErrorLog`, so a draft save panics; the client also sends `X-Forwarded-For`, `sentry-trace` and `baggage` | one `http_server_error` of `kind` `panic` in the log; one Sentry `panic` event named `POST /customer/{token}/draft/{field}` and tagged with the request ID. The SDK's own transport posts to a loopback `sentrySink`, and no envelope, headers included, carries the URL token, query, header, cookie, body, client IP or the client's trace values |
+| `TestSentryOffWithoutDSN` | the rolled-back draft save, with no DSN | `sentrylog.New` returns nil, and the failure is still logged through `newLogger` and `serverHandler` |
 
 The route table itself is documented in [Architecture](architecture.md).
 
@@ -150,7 +150,7 @@ Tests do not prove randomness statistically. No test proves these browser checks
 
 - `main_test.go`: `TestServeLifecycle`
 - `main_wiring_integration_test.go`: `TestRoutesAreMounted`, `TestPublicCustomerIgnoresStaffSessions`, `TestCrossOriginWritesAreRejected`, `TestSessionCookiesFollowPublicOrigin`, `newTestServer`, `serverHandler`, `addStaff`, `signInStaff`, `send`
-- `main_logging_integration_test.go`: `TestCustomerRolledBackRequestsLogOnce`, `TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging`, `TestSessionLoadFailureKeepsPublicHeadQuiet`, `TestSignInCommitFailureLogsActualStatusWithoutCredentials`, `TestAgreementFailuresLogOnceWithoutContactData`, `TestHandlerPanicReachesSentryOnceWithoutRequestData`, `TestSentryOffWithoutDSN`, `requireFailure`, `requireNoPrivate`, `sentryCapture`
+- `main_logging_integration_test.go`: `TestCustomerRolledBackRequestsLogOnce`, `TestStudentSaveAndPreliminaryLoadKeepSafeLeafLogging`, `TestSessionLoadFailureKeepsPublicHeadQuiet`, `TestSignInCommitFailureLogsActualStatusWithoutCredentials`, `TestAgreementFailuresLogOnceWithoutContactData`, `TestHandlerPanicReachesSentryOnceWithoutRequestData`, `TestSentryOffWithoutDSN`, `requireFailure`, `requireNoPrivate`, `sentryCapture`, `sentrySink`
 - `internal/testdb/testdb.go`: `Open`, `AwaitBlocked`, `TEST_DATABASE_URL`
 - `internal/billing/billingtest/billingtest.go`: `Config`, `Catalog`, `Client`, `New`
 - `internal/management/students.go`: `HX-Replace-Url`

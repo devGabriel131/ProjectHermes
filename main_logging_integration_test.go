@@ -9,7 +9,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -26,6 +28,8 @@ import (
 	"apollo/internal/billing/billingtest"
 	"apollo/internal/links"
 	"apollo/internal/logging/dblog"
+	"apollo/internal/logging/httplog"
+	"apollo/internal/logging/logtest"
 	"apollo/internal/logging/sentrylog"
 	"apollo/internal/settings"
 	"apollo/internal/students"
@@ -229,34 +233,57 @@ func TestAgreementFailuresLogOnceWithoutContactData(t *testing.T) {
 }
 
 func TestHandlerPanicReachesSentryOnceWithoutRequestData(t *testing.T) {
-	fixture := newHTTPLoggingFixture(t)
+	// The SDK's own HTTP transport sends to the sink, so the test sees whole envelopes, headers included.
+	sink := newSentrySink(t)
+	fixture := newLoggingFixture(t, newReporter(t, sentrylog.Options{DSN: sink.dsn()}))
 	entry, cookieToken := fixture.createAndStart(t)
-	// With no database behind newServer's stores, the customer handler panics on its first query.
-	handler := serverHandler(t, fixture.db, nil, fixture.log, fixture.reporter, billingtest.Config())
+	// With no database behind newServer's stores, the customer handler panics on its first query. A real
+	// http.Server with run's ErrorLog recovers the panic and logs http_server_error, as in production.
+	server := httptest.NewUnstartedServer(serverHandler(t, fixture.db, nil, fixture.log, fixture.reporter, billingtest.Config()))
+	server.Config.ErrorLog = httplog.ServerErrorLog(fixture.log)
+	server.Start()
 	form := httpContactForm("Private panic name")
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("the panic did not reach net/http")
-			}
-		}()
-		send(t, handler, http.MethodPost, "/customer/"+entry.Token+"/draft/name"+privateQuery,
-			&http.Cookie{Name: "enrollment_session", Value: cookieToken}, form, loggedHeader)
-	}()
-	events := fixture.sentry.take()
-	if len(events) != 1 || events[0].Message != "panic" || events[0].Transaction != "POST /customer/{token}/draft/{field}" ||
-		events[0].Tags["request_id"] != httpRequestID || len(events[0].Exception) == 0 {
-		t.Fatalf("panic events = %d, want one panic event named by its route pattern and tagged with the request ID", len(events))
+	const clientIP, traceID, baggage = "203.0.113.9", "5bd2e0f1c0a8473f9e3c6d7a4b1f2e90", "PRIVATE_BAGGAGE"
+	r, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		server.URL+"/customer/"+entry.Token+"/draft/name"+privateQuery, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
 	}
-	requireNoPrivate(t, "Sentry event", sentryJSON(t, events), append(httpContactValues(form), entry.Token, cookieToken)...)
-	fixture.requireQuiet(t)
+	maps.Copy(r.Header, loggedHeader)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("X-Forwarded-For", clientIP)
+	r.Header.Set("Sentry-Trace", traceID+"-a1b2c3d4e5f60718-1")
+	r.Header.Set("Baggage", "sentry-trace_id="+traceID+",sentry-sample_rate=1,sentry-user="+baggage)
+	r.AddCookie(&http.Cookie{Name: "enrollment_session", Value: cookieToken})
+	if resp, err := server.Client().Do(r); err == nil {
+		resp.Body.Close()
+		t.Fatalf("a panicking handler answered %d", resp.StatusCode)
+	}
+	server.Close() // waits for the handler, so its log line is written
+	if !fixture.reporter.Flush(2 * time.Second) {
+		t.Fatal("Sentry events were still queued after 2s")
+	}
+
+	logged := logtest.Events(t, fixture.out.Bytes())
+	if len(logged) != 1 || logged[0]["message"] != "http_server_error" || logged[0]["kind"] != "panic" {
+		t.Fatalf("log events = %v, want one http_server_error of kind panic", logged)
+	}
+	raw, events := sink.take(t)
+	if len(events) != 1 || events[0]["message"] != "panic" || events[0]["transaction"] != "POST /customer/{token}/draft/{field}" {
+		t.Fatalf("Sentry events = %d, want one panic event named by its route pattern", len(events))
+	}
+	if tags, _ := events[0]["tags"].(map[string]any); tags["request_id"] != httpRequestID {
+		t.Fatalf("panic event tags = %v, want the request ID", events[0]["tags"])
+	}
+	requireNoPrivate(t, "Sentry envelope", raw, append(httpContactValues(form), entry.Token, cookieToken, clientIP, traceID, baggage)...)
 }
 
 func TestSentryOffWithoutDSN(t *testing.T) {
-	fixture := newLoggingFixture(t, "")
-	if fixture.reporter != nil {
+	reporter := newReporter(t, sentrylog.Options{})
+	if reporter != nil {
 		t.Fatal("an empty DSN built a Sentry reporter")
 	}
+	fixture := newLoggingFixture(t, reporter)
 	tx := fixture.db.WithContext(t.Context()).Begin()
 	if err := tx.Rollback().Error; err != nil {
 		t.Fatal(err)
@@ -267,9 +294,6 @@ func TestSentryOffWithoutDSN(t *testing.T) {
 		&http.Cookie{Name: "enrollment_session", Value: cookieToken}, httpContactForm("Private off name"), loggedHeader)
 	if !strings.Contains(fixture.out.String(), `"request_failed"`) {
 		t.Fatal("the forced failure was not logged")
-	}
-	if fixture.sentry.configured || len(fixture.sentry.take()) != 0 {
-		t.Fatal("Sentry was initialised or captured an event without a DSN")
 	}
 }
 
@@ -311,37 +335,42 @@ type httpLoggingFixture struct {
 	sentry   *sentryCapture
 }
 
+// newHTTPLoggingFixture turns Sentry on, its events kept by a sentryCapture.
 func newHTTPLoggingFixture(t *testing.T) *httpLoggingFixture {
-	return newLoggingFixture(t, testDSN)
+	capture := &sentryCapture{}
+	fixture := newLoggingFixture(t, newReporter(t, sentrylog.Options{DSN: testDSN, Transport: capture}))
+	fixture.sentry = capture
+	return fixture
 }
 
-// newLoggingFixture logs as main does, through newLogger, with Sentry on when dsn is set.
-func newLoggingFixture(t *testing.T, dsn string) *httpLoggingFixture {
+// newLoggingFixture logs as main does, through newLogger; a nil reporter leaves Sentry off.
+func newLoggingFixture(t *testing.T, reporter *sentrylog.Reporter) *httpLoggingFixture {
 	t.Helper()
-	fixture := &httpLoggingFixture{sentry: &sentryCapture{}}
-	reporter, err := sentrylog.New(sentrylog.Options{DSN: dsn, Environment: "test", Transport: fixture.sentry})
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture.reporter = reporter
+	fixture := &httpLoggingFixture{reporter: reporter}
 	fixture.log = newLogger(&fixture.out, reporter)
 	fixture.db = testdb.Open(t, models()...).Session(&gorm.Session{Logger: dblog.New(fixture.log)})
 	fixture.store = links.New(fixture.db, nil)
 	return fixture
 }
 
-// sentryCapture is the Sentry client's transport in these tests: it keeps the events the client would send.
-type sentryCapture struct {
-	mu         sync.Mutex
-	configured bool
-	events     []*sentry.Event
+// newReporter fills in the environment and release the tests use; with no DSN it returns nil.
+func newReporter(t *testing.T, options sentrylog.Options) *sentrylog.Reporter {
+	t.Helper()
+	options.Environment, options.Release = "test", "test"
+	reporter, err := sentrylog.New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reporter
 }
 
-func (c *sentryCapture) Configure(sentry.ClientOptions) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.configured = true
+// sentryCapture is the Sentry client's transport in these tests: it keeps the events the client would send.
+type sentryCapture struct {
+	mu     sync.Mutex
+	events []*sentry.Event
 }
+
+func (*sentryCapture) Configure(sentry.ClientOptions) {}
 
 func (c *sentryCapture) SendEvent(event *sentry.Event) {
 	c.mu.Lock()
@@ -360,6 +389,58 @@ func (c *sentryCapture) take() []*sentry.Event {
 	events := c.events
 	c.events = nil
 	return events
+}
+
+// sentrySink is a Sentry ingest endpoint on loopback that keeps every envelope the SDK posts to it.
+type sentrySink struct {
+	server *httptest.Server
+	mu     sync.Mutex
+	bodies [][]byte
+}
+
+func newSentrySink(t *testing.T) *sentrySink {
+	sink := &sentrySink{}
+	sink.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		sink.bodies = append(sink.bodies, body)
+	}))
+	t.Cleanup(sink.server.Close)
+	return sink
+}
+
+func (s *sentrySink) dsn() string {
+	return "http://public@" + s.server.Listener.Addr().String() + "/1"
+}
+
+// take returns every envelope received, concatenated, and the payloads of their event items.
+func (s *sentrySink) take(t *testing.T) ([]byte, []map[string]any) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var raw []byte
+	var events []map[string]any
+	for _, body := range s.bodies {
+		raw = append(raw, body...)
+		// An envelope is a header line, then an item header line and a payload line per item.
+		lines := bytes.Split(bytes.TrimSpace(body), []byte{'\n'})
+		for i := 1; i+1 < len(lines); i += 2 {
+			var item struct{ Type string }
+			if err := json.Unmarshal(lines[i], &item); err != nil {
+				t.Fatalf("envelope item header: %v", err)
+			}
+			if item.Type == "event" {
+				var event map[string]any
+				if err := json.Unmarshal(lines[i+1], &event); err != nil {
+					t.Fatalf("event item: %v", err)
+				}
+				events = append(events, event)
+			}
+		}
+	}
+	s.bodies = nil
+	return raw, events
 }
 
 func sentryJSON(t *testing.T, events []*sentry.Event) []byte {
