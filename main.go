@@ -301,9 +301,7 @@ func newServer(addr string, db *gorm.DB, feed *live.Feed, authentication *auth.M
 	authentication.RegisterRoutes(mux)
 	managementMux := http.NewServeMux()
 	managementMux.Handle("GET /management/events", feed)
-	if err := management.RegisterRoutes(managementMux, store, roster, config, auth.Staff, biller); err != nil {
-		return nil, startupError{"management_routes", err}
-	}
+	management.RegisterRoutes(managementMux, store, roster, config, auth.Staff, biller)
 	mux.Handle("/management/", authentication.Require(httplog.Routes(managementMux)))
 	if err := customer.RegisterRoutes(mux, store, roster, config, biller, secureCookies); err != nil {
 		return nil, startupError{"customer_routes", err}

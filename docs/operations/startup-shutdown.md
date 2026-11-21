@@ -47,7 +47,7 @@ flowchart TD
   catalog -.->|"billing_catalog"| fail
   biller -.->|"billing_initialize"| fail
   authm -.->|"auth_initialize"| fail
-  server -.->|"management_routes or customer_routes"| fail
+  server -.->|"customer_routes"| fail
   listen -.->|"listen"| fail
 ```
 

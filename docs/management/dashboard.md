@@ -85,7 +85,7 @@ When all five are zero the panel reads "All clear". The Overdue amount gets the 
 
 ## Live and static
 
-The `.dashboard` element re-fetches `GET /management/dashboard` (fragment `dashboard-content`) on `management-changed`, so every figure is recomputed on each event. Events come from commits in the links store (create, first visit, drafts, submit, agreement acceptance, cancel), the students store (a field edit that wrote) and billing (funding, worker syncs that changed state, staff actions). Settings writes publish nothing ([Live updates](../live-updates.md)).
+The `.dashboard` element re-fetches `GET /management/dashboard` (fragment `dashboardContent`) on `management-changed`, so every figure is recomputed on each event. Events come from commits in the links store (create, first visit, drafts, submit, agreement acceptance, cancel), the students store (a field edit that wrote) and billing (funding, worker syncs that changed state, staff actions). Settings writes publish nothing ([Live updates](../live-updates.md)).
 
 Nothing publishes an event for the clock alone. A figure that changes only because time passed (an installment crossing its due date, a link passing its expiry) updates on the next event or reload. The page loads `management-live.js` but no `<time>` script: it shows no timestamps.
 
@@ -97,7 +97,7 @@ Nothing publishes an event for the clock alone. A figure that changes only becau
 ## Source
 
 - `internal/management/dashboard.go`: `dashboardWindow`, `dashboardData`, `NeedsAttention`, `dashboard`, `LinksCreated`, `ActiveLinks`, `EnrollmentsStarted`, `FormsCompleted`, `LinksInProgress`
-- `internal/management/templates/dashboard.html`: `dashboard-content`, `dashboard-attention`, `dashboard-alert`, `dashboard-stats`, `management-changed`
+- `internal/management/dashboard.templ`: `dashboardView`, `dashboardContent`, `attention`, `dashboard-attention`, `dashboard-alert`, `dashboard-stats`, `management-changed`
 - `internal/billing/overview.go`: `Overview`, `CollectedCents`, `OutstandingCents`, `OverdueInstallments`, `DueSoonInstallments`, `FailedInstallments`, `ContractsInReview`, `PaymentsInReview`, `FundedRecently`
 - `internal/students/students.go`: `Counts`, `Count`, `Total`
 - `internal/links/links.go`: `ListGroups`, `LinkEntry`, `EnrollmentEntry`

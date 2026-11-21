@@ -3,11 +3,8 @@ package management
 
 import (
 	"context"
-	"embed"
 	"errors"
 	"fmt"
-	"html/template"
-	"io"
 	"net/http"
 	"slices"
 	"strconv"
@@ -18,13 +15,9 @@ import (
 	"apollo/internal/billing"
 	"apollo/internal/links"
 	"apollo/internal/logging/httplog"
-	"apollo/internal/payments"
 	"apollo/internal/settings"
 	"apollo/internal/students"
 )
-
-//go:embed templates/*.html
-var templates embed.FS
 
 // dbTimeout bounds each request's database work.
 const dbTimeout = 5 * time.Second
@@ -55,9 +48,8 @@ type settingsData struct {
 	Staff                         string
 }
 
-// site is the staff handler set: one template set over the stores the pages read and write.
+// site is the staff handler set over the stores the pages read and write.
 type site struct {
-	page     *template.Template
 	links    *links.Store
 	roster   *students.Store
 	settings *settings.Store
@@ -76,16 +68,8 @@ func plural(n int, one, many string) string {
 // RegisterRoutes serves customer links, Trash, Students, the dashboard and settings; staff
 // returns the verified username of the signed-in account for the audit trail.
 // biller supplies each student's billing summary and the staff billing actions.
-func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Store, config *settings.Store, staff func(context.Context) string, biller *billing.Service) error {
-	page, err := template.New("management").Funcs(template.FuncMap{
-		"money":  payments.Money,
-		"plural": plural,
-	}).ParseFS(templates, "templates/*.html")
-	if err != nil {
-		return err
-	}
-
-	s := &site{page: page, links: store, roster: roster, settings: config, billing: biller, staff: staff}
+func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Store, config *settings.Store, staff func(context.Context) string, biller *billing.Service) {
+	s := &site{links: store, roster: roster, settings: config, billing: biller, staff: staff}
 	mux.Handle("GET /management/{$}", timed(s.index))
 	mux.Handle("GET /management/trash", timed(s.trash))
 	mux.Handle("POST /management/program-start-date", timed(s.setProgramStartDate))
@@ -110,7 +94,6 @@ func RegisterRoutes(mux *http.ServeMux, store *links.Store, roster *students.Sto
 	mux.Handle("POST /management/students/{id}/billing/withdraw", s.act(s.withdraw))
 	mux.Handle("GET /management/students/{id}/billing/invoices/{obligation}", http.HandlerFunc(s.invoice))
 	mux.Handle("POST /management/students/{id}/billing/portal", http.HandlerFunc(s.portal))
-	return nil
 }
 
 // timed bounds h's request context by dbTimeout. Only handlers whose work is all database
@@ -121,13 +104,6 @@ func timed(h http.HandlerFunc) http.Handler {
 		defer cancel()
 		h(w, r.WithContext(ctx))
 	})
-}
-
-// render writes the named html/template with status; pages not yet on templ go through it.
-func (s *site) render(w http.ResponseWriter, r *http.Request, status int, name string, data any) {
-	s.view(w, r, status, templ.ComponentFunc(func(_ context.Context, w io.Writer) error {
-		return s.page.ExecuteTemplate(w, name, data)
-	}))
 }
 
 // view writes v with status. Responses are never cached,

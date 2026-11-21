@@ -118,9 +118,7 @@ func newApp(t *testing.T) *app {
 		t.Fatal(err)
 	}
 	child := http.NewServeMux()
-	if err := RegisterRoutes(child, store, students.New(db, nil), settings.New(db), auth.Staff, newBiller(t, db)); err != nil {
-		t.Fatal(err)
-	}
+	RegisterRoutes(child, store, students.New(db, nil), settings.New(db), auth.Staff, newBiller(t, db))
 	root := http.NewServeMux()
 	manager.RegisterRoutes(root)
 	root.Handle("/management/", manager.Require(child))
@@ -830,9 +828,7 @@ func TestStoreFailuresAreServerErrors(t *testing.T) {
 	// A signed-in username lets cancellation reach the database instead of
 	// stopping at the audit check.
 	staff := func(context.Context) string { return "staff" }
-	if err := RegisterRoutes(mux, links.New(failed, nil), students.New(failed, nil), settings.New(failed), staff, newBiller(t, db)); err != nil {
-		t.Fatal(err)
-	}
+	RegisterRoutes(mux, links.New(failed, nil), students.New(failed, nil), settings.New(failed), staff, newBiller(t, db))
 	handler := httplog.Requests(logging.New(io.Discard), mux)
 
 	cancel := "/management/links/" + unknownID + "/cancel" // Well-formed, so it reaches the database.
@@ -1076,9 +1072,7 @@ func TestRegistryLoadsProgramSettingsOnlyForFullMainPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	if err := RegisterRoutes(mux, a.store, students.New(a.db, nil), settings.New(failed), func(context.Context) string { return "staff" }, newBiller(t, a.db)); err != nil {
-		t.Fatal(err)
-	}
+	RegisterRoutes(mux, a.store, students.New(a.db, nil), settings.New(failed), func(context.Context) string { return "staff" }, newBiller(t, a.db))
 	handler := httplog.Requests(logging.New(io.Discard), mux)
 	for _, tc := range []struct {
 		name, path string
