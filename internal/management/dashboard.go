@@ -68,9 +68,9 @@ func (s *site) dashboard(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	name := "dashboard.html"
+	view := dashboardView(data)
 	if htmx(r) {
-		name = "dashboard-content" // A live refresh of just the figures.
+		view = dashboardContent(data) // A live refresh of just the figures.
 	}
-	s.render(w, r, http.StatusOK, name, data)
+	s.view(w, r, http.StatusOK, view)
 }

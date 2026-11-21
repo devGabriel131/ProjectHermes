@@ -55,6 +55,7 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 |---|---|
 | Format | `gofmt -l .` must print nothing |
 | templ generate | `go tool templ generate`, then `git add --intent-to-add .` and `git diff --exit-code HEAD`: a `.templ` change committed without its regenerated `*_templ.go`, a `.templ` added without one, a hand edit to one, or a `*_templ.go` left after its `.templ` is deleted fails the run ([Local development](operations/local-development.md#templ)) |
+| templ fmt | `go tool templ fmt -fail .`: a `.templ` file that `templ fmt` would change fails the run |
 | Vet | `go vet -tags=integration ./...` |
 | Build | `go build ./...` |
 | Tests | `go test -race -tags=integration -count=1 ./...` |

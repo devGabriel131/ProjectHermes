@@ -86,11 +86,11 @@ Consequences:
 Views are `.templ` files beside their handlers, and the layouts they share are in `internal/ui` ([Architecture](../architecture.md)). templ is a `tool` line in `go.mod`, so run `go tool templ`, never a global `templ`. Each `.templ` compiles to a `*_templ.go` file that is committed; never edit one by hand.
 
 ```fish
-go tool templ fmt internal  # format .templ files
+go tool templ fmt .         # format .templ files
 go tool templ generate      # regenerate every *_templ.go
 ```
 
-Air regenerates before each build, so a running dev server needs nothing more. Commit the `.templ` change and its regenerated `*_templ.go` together: CI regenerates and fails on any difference ([Testing](../testing.md#ci)).
+Air regenerates before each build, so a running dev server needs nothing more. Commit the `.templ` change and its regenerated `*_templ.go` together: CI regenerates and fails on any difference, and fails on a `.templ` file `templ fmt` would change ([Testing](../testing.md#ci)).
 
 ## Staff accounts
 

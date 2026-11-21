@@ -1,0 +1,105 @@
+package management
+
+import (
+	"apollo/internal/payments"
+	"apollo/internal/ui"
+	"strconv"
+)
+
+// dashboardView is the Dashboard page. management-live.js turns each change into management-changed,
+// on which .dashboard refetches its figures (dashboardContent).
+templ dashboardView(data dashboardData) {
+	@ui.Staff("Dashboard", ui.NavDashboard, data.Staff, true, "/static/management-live.js") {
+		<div class="management-page-heading">
+			<div>
+				<h1>Dashboard</h1>
+				<p class="management-page-description">Students, enrollment, and tuition at a glance.</p>
+			</div>
+		</div>
+		<div class="dashboard" hx-get="/management/dashboard" hx-trigger="management-changed from:body">
+			@dashboardContent(data)
+		</div>
+	}
+}
+
+// dashboardContent is the dashboard's figures: the page's content, and htmx's answer to a live refresh.
+templ dashboardContent(data dashboardData) {
+	{{ b := data.Billing }}
+	<section class="management-panel" aria-labelledby="attention-heading">
+		<div class="management-panel-heading">
+			<h2 id="attention-heading">Needs attention</h2>
+		</div>
+		if data.NeedsAttention() {
+			<ul class="dashboard-attention" role="list">
+				@attention(data.Students.Suspended, plural(data.Students.Suspended, "suspended student", "suspended students")) {
+					<a href="/management/students?status=suspended">View students</a>
+				}
+				@attention(b.OverdueInstallments, plural(b.OverdueInstallments, "overdue installment", "overdue installments")+", "+payments.Money(b.OverdueCents)+" unpaid")
+				@attention(b.FailedInstallments, plural(b.FailedInstallments, "installment", "installments")+" failed or waiting on the customer")
+				@attention(b.ContractsInReview, plural(b.ContractsInReview, "billing record needs", "billing records need")+" review")
+				@attention(b.PaymentsInReview, plural(b.PaymentsInReview, "payment", "payments")+" disputed or flagged for fraud")
+			</ul>
+		} else {
+			<div class="management-empty">
+				<svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"></path></svg>
+				<h3>All clear</h3>
+				<p>No students are suspended and no payments need follow-up.</p>
+			</div>
+		}
+	</section>
+	<div class="dashboard-grid">
+		<section class="management-panel" aria-labelledby="dashboard-tuition-heading">
+			<div class="management-panel-heading">
+				<h2 id="dashboard-tuition-heading">Tuition</h2>
+			</div>
+			<dl class="dashboard-stats">
+				<div><dt>Collected</dt><dd>{ payments.Money(b.CollectedCents) }<small>After refunds, before Stripe fees</small></dd></div>
+				<div><dt>Outstanding</dt><dd>{ payments.Money(b.OutstandingCents) }<small>Funded students only</small></dd></div>
+				<div>
+					<dt>Overdue</dt>
+					<dd
+						if b.OverdueCents != 0 {
+							class="dashboard-alert"
+						}
+					>{ payments.Money(b.OverdueCents) }<small>{ strconv.Itoa(b.OverdueInstallments) } { plural(b.OverdueInstallments, "installment", "installments") }</small></dd>
+				</div>
+				<div><dt>Due in the next { strconv.Itoa(data.Days) } days</dt><dd>{ payments.Money(b.DueSoonCents) }<small>{ strconv.Itoa(b.DueSoonInstallments) } { plural(b.DueSoonInstallments, "installment", "installments") }</small></dd></div>
+			</dl>
+		</section>
+		<section class="management-panel" aria-labelledby="dashboard-students-heading">
+			<div class="management-panel-heading">
+				<h2 id="dashboard-students-heading">Students</h2>
+			</div>
+			<dl class="dashboard-stats">
+				<div><dt>Active</dt><dd>{ strconv.Itoa(data.Students.Active) }</dd></div>
+				<div><dt>Suspended</dt><dd>{ strconv.Itoa(data.Students.Suspended) }</dd></div>
+				<div><dt>Withdrawn</dt><dd>{ strconv.Itoa(data.Students.Withdrawn) }</dd></div>
+				<div><dt>Total enrolled</dt><dd>{ strconv.Itoa(data.Students.Total()) }</dd></div>
+			</dl>
+		</section>
+		<section class="management-panel" aria-labelledby="dashboard-enrollment-heading">
+			<div class="management-panel-heading">
+				<h2 id="dashboard-enrollment-heading">Enrollment, last { strconv.Itoa(data.Days) } days</h2>
+			</div>
+			<dl class="dashboard-stats">
+				<div><dt>Links created</dt><dd>{ strconv.Itoa(data.LinksCreated) }</dd></div>
+				<div><dt>Enrollments started</dt><dd>{ strconv.Itoa(data.EnrollmentsStarted) }</dd></div>
+				<div><dt>Forms completed</dt><dd>{ strconv.Itoa(data.FormsCompleted) }</dd></div>
+				<div><dt>Paid enrollments</dt><dd>{ strconv.Itoa(b.FundedRecently) }</dd></div>
+				<div><dt>Active links</dt><dd>{ strconv.Itoa(data.ActiveLinks) }<small>Accepting new enrollments now</small></dd></div>
+				<div><dt>In progress</dt><dd>{ strconv.Itoa(data.LinksInProgress) }<small>Customers filling out form now</small></dd></div>
+			</dl>
+		</section>
+	</div>
+}
+
+// attention is one Needs attention line, shown only when its count n is not zero; children follow the text.
+templ attention(n int, text string) {
+	if n != 0 {
+		<li>
+			<span class="dashboard-count">{ strconv.Itoa(n) }</span>
+			<span>{ text }</span>
+			{ children... }
+		</li>
+	}
+}

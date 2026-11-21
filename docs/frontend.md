@@ -4,7 +4,7 @@ The browser side of the site: server-rendered templates, htmx 2.0.11 and six sma
 
 ## Assets
 
-`static/` is embedded in the binary (`//go:embed static`, `assets`) and served by `GET /static/` and `GET /favicon.ico`, so a CSS or script change needs a rebuild ([Local development](operations/local-development.md)). There is no bundler. htmx comes from jsDelivr (`htmx.org@2.0.11`) with an SRI `integrity` hash, `crossorigin="anonymous"` and `defer`; the tag is repeated in each `html/template` page that uses it, and `ui.Staff` renders it for templ staff pages that ask for htmx. Fonts come from Google Fonts stylesheets (no SRI).
+`static/` is embedded in the binary (`//go:embed static`, `assets`) and served by `GET /static/` and `GET /favicon.ico`, so a CSS or script change needs a rebuild ([Local development](operations/local-development.md)). There is no bundler. htmx comes from jsDelivr (`htmx.org@2.0.11`) with an SRI `integrity` hash, `crossorigin="anonymous"` and `defer`; the customer `html/template` page `index.html` repeats the tag, and `ui.Staff` renders it for staff pages that ask for htmx. Fonts come from Google Fonts stylesheets (no SRI).
 
 | File | Used by |
 |---|---|
@@ -149,7 +149,7 @@ The same middleware sends `Strict-Transport-Security: max-age=31536000` (no `inc
 
 - **`includeIndicatorStyles: false`.** Removing it makes htmx inject inline styles that the site CSP blocks.
 - **Clipboard write started inside the click.** Moving it after the response breaks Safari's user-activation rule.
-- **The htmx tag repeated per template.** The `html/template` management page `dashboard.html` and the customer `index.html` each define their own complete HTML documents rather than sharing a global layout template. Pages moved to templ share one layout instead: login, settings, links, students and add students use `internal/ui`'s staff document; the customer welcome and not-found use `ui.CustomerLanding` and the agreement `ui.CustomerStep`, neither with htmx; the rest follow in their Phase C steps.
+- **The htmx tag repeated per template.** The customer `html/template` pages (`index.html`, with the form, edit, payments and payment-return pages) define their own complete HTML document rather than sharing a global layout template. Pages moved to templ share one layout instead: every staff page (login, dashboard, links, students, add students and settings) uses `internal/ui`'s staff document; the customer welcome and not-found use `ui.CustomerLanding` and the agreement `ui.CustomerStep`, neither with htmx; the remaining customer pages follow in C5.
 
 ## Source
 
