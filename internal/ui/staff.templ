@@ -15,7 +15,7 @@ const (
 
 // SignIn is the signed-out staff document: the brand above the page's main.
 templ SignIn(title string) {
-	@staffDocument(title, "management-signin", nil) {
+	@staffDocument(title, "management-signin", false, nil) {
 		@brand()
 		<main id="main-content" class="management-login">
 			{ children... }
@@ -24,9 +24,9 @@ templ SignIn(title string) {
 }
 
 // Staff is a signed-in staff document: the rail (brand, navigation, account) beside the page's main.
-// scripts are same-origin script URLs, loaded deferred.
-templ Staff(title string, current Nav, username string, scripts ...string) {
-	@staffDocument(title, "management-workspace", scripts) {
+// htmx loads htmx with its config; scripts are same-origin script URLs, loaded deferred after it.
+templ Staff(title string, current Nav, username string, htmx bool, scripts ...string) {
+	@staffDocument(title, "management-workspace", htmx, scripts) {
 		<header class="management-sidebar">
 			@brand()
 			@navigation(current)
@@ -39,7 +39,8 @@ templ Staff(title string, current Nav, username string, scripts ...string) {
 }
 
 // staffDocument is the HTML document of every staff page; the skip link targets the main its caller renders.
-templ staffDocument(title, bodyClass string, scripts []string) {
+// htmx loads from jsDelivr with SRI until C6 self-hosts it as one of the scripts.
+templ staffDocument(title, bodyClass string, htmx bool, scripts []string) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
@@ -47,6 +48,10 @@ templ staffDocument(title, bodyClass string, scripts []string) {
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<title>{ title }</title>
 			<link rel="icon" type="image/vnd.microsoft.icon" href="/favicon.ico" sizes="16x16 32x32 48x48"/>
+			if htmx {
+				<meta name="htmx-config" content='{"includeIndicatorStyles":false}'/>
+				<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js" integrity="sha384-2OatzQy1H+Zd/IIrjr1TcuDGqLXeHhbooAyJY1KdQMKnr4LZ22k31GBLdYKHmVjg" crossorigin="anonymous" defer></script>
+			}
 			<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400..700&amp;family=Marcellus&amp;display=swap"/>
 			<link rel="stylesheet" href="/static/styles.css"/>
 			for _, src := range scripts {
@@ -95,7 +100,7 @@ templ navigation(current Nav) {
 				aria-current="page"
 			}
 		>
-			<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+			@LinkIcon()
 			Customer links
 		</a>
 		<a
@@ -135,8 +140,18 @@ templ navigation(current Nav) {
 				aria-current="page"
 			}
 		>
-			<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"></path></svg>
+			@TrashIcon()
 			Trash
 		</a>
 	</nav>
+}
+
+// LinkIcon is the decorative chain-link icon of Customer links.
+templ LinkIcon() {
+	<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+}
+
+// TrashIcon is the decorative bin icon of Trash.
+templ TrashIcon() {
+	<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"></path></svg>
 }

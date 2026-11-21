@@ -6,7 +6,7 @@ import (
 )
 
 templ settingsView(data settingsData) {
-	@ui.Staff("Settings", ui.NavSettings, data.Staff, "/static/settings.js") {
+	@ui.Staff("Settings", ui.NavSettings, data.Staff, false, "/static/settings.js") {
 		<div class="management-page-heading">
 			<div>
 				<h1>Settings</h1>

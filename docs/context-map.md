@@ -30,7 +30,7 @@ flowchart LR
 | Students & Enrollment | `internal/students` | `internal/students`, `internal/links`, `internal/customer`, `internal/settings`; the student, link and settings pages in `internal/management` |
 | Billing | `internal/billing` | `internal/billing` (with `billingtest`), `internal/payments`; the billing fragments and dashboard in `internal/management` |
 | Learning | `internal/learning` | none yet (Hephaestus games) |
-| Documents | `internal/documents` | none yet (Hephaestus forms and letters) |
+| Documents | `internal/documents` | `internal/documents/ist` (IST grading); Hephaestus forms and letters still to come |
 
 **Platform, not a context:** `main.go` (wiring), `internal/db` (the one pgx pool and the goose migrations today; the unit of work later), `internal/logging` (with `httplog`, `dblog`, `sentrylog` and `logtest` under it), `internal/live`, `internal/puertorico`, `internal/testdb`, and `internal/ui` (shared templ layouts; only `<context>web` packages and today's `internal/auth` and `internal/management` import it, never a root). `internal/management` is the staff UI for two contexts until phase F splits it into `studentsweb` and `billingweb`. Platform packages and `internal/management` own no table.
 
@@ -79,7 +79,7 @@ Arrives in phase E.
 
 ## Documents
 
-Arrives in phase D.
+Arrives in phase D. Its first package is `internal/documents/ist`: the IST's events, standards and grading (`Evaluate`), pure rules on the standard library with no I/O, copied unchanged from Hephaestus `internal/ist`. Nothing calls it until the IST pages arrive.
 
 - **Aggregates and invariants:**
   - *EmployerDetails*, per student: schedule, employer, position (from the list, or "Otro" plus free text) and workplace. The last four SSN digits are never stored.

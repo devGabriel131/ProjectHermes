@@ -33,7 +33,11 @@ var later = time.Now().Add(time.Hour)
 func TestIssuedLinkAndSessionBoundary(t *testing.T) {
 	db, store, ctx := testStore(t)
 
+	// CreateLink names an unnamed link from its own clock, so the date read on either side of the call brackets it.
+	today := func() string { return time.Now().In(puertorico.Zone).Format(time.DateOnly) }
+	before := today()
 	first, err := store.CreateLink(ctx, staff, "", later)
+	after := today()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,9 +45,8 @@ func TestIssuedLinkAndSessionBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantDate := time.Now().In(puertorico.Zone).Format(time.DateOnly)
-	if first.Name != wantDate || second.Name != "Custom Cohort" {
-		t.Fatalf("names = %q, %q; want %q, %q", first.Name, second.Name, wantDate, "Custom Cohort")
+	if (first.Name != before && first.Name != after) || second.Name != "Custom Cohort" {
+		t.Fatalf("names = %q, %q; want %q or %q, %q", first.Name, second.Name, before, after, "Custom Cohort")
 	}
 
 	e1, cookie1, err := store.StartEnrollment(ctx, first.Token, "")
