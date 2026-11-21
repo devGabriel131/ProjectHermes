@@ -1,0 +1,254 @@
+package management
+
+import (
+	"apollo/internal/links"
+	"apollo/internal/ui"
+	"strconv"
+	"time"
+)
+
+// linksView is the Customer links page, or Trash when data.Trash. Customer links adds the create
+// button and the program start date form. Its scripts keep #generated-links live (management-live.js),
+// show local times (management-time.js), and copy links and keep open rows across swaps (management.js).
+templ linksView(data pageData) {
+	{{ title, nav, list := "Customer links", ui.NavLinks, "/management/" }}
+	if data.Trash {
+		{{ title, nav, list = "Trash", ui.NavTrash, "/management/trash" }}
+	}
+	@ui.Staff(title, nav, data.Staff, true, "/static/management-time.js", "/static/management-live.js", "/static/management.js") {
+		<div class="management-page-heading">
+			<div>
+				<h1>{ title }</h1>
+				if data.Trash {
+					<p class="management-page-description">Canceled and expired unfinished links, with their saved data and history.</p>
+				} else {
+					<p class="management-page-description">Active links, forms awaiting payment, and enrollments paid in the last 24 hours. A customer becomes a student only when payment is confirmed.</p>
+				}
+			</div>
+			if !data.Trash {
+				<form id="create-link" action="/management/links" method="post" hx-post="/management/links" hx-swap="none" hx-disabled-elt="button">
+					<button type="submit" class="management-button-primary">
+						<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+						Create link
+					</button>
+				</form>
+			}
+		</div>
+		if !data.Trash {
+			@programStart(data)
+		}
+		<section class="management-panel" aria-labelledby="link-registry-heading">
+			<div class="management-panel-heading">
+				if data.Trash {
+					<h2 id="link-registry-heading">Canceled and expired links</h2>
+					<p>These links or enrollments no longer open. Their data is kept.</p>
+				} else {
+					<h2 id="link-registry-heading">Link registry</h2>
+					<p>Share any active link with customers. Completed enrollments leave this page 24 hours after payment.</p>
+				}
+			</div>
+			<p id="link-status" role="status">{ data.Notice }</p>
+			<p id="link-refresh-error" role="status"></p>
+			<ul id="generated-links" role="list" aria-label="Generated customer links" hx-get={ list } hx-trigger="management-changed from:body">
+				@linkRows(data.Links)
+			</ul>
+			<div class="management-empty">
+				if data.Trash {
+					@ui.TrashIcon()
+					<h3>Trash is empty</h3>
+					<p>Canceled and expired unfinished links will appear here, with their saved data.</p>
+				} else {
+					@ui.LinkIcon()
+					<h3>No active, pending, or recently paid links</h3>
+					<p>Create a customer link to get started. Customers appear in Students once payment is confirmed.</p>
+				}
+			</div>
+			<div class="management-panel-footer">
+				if data.Trash {
+					<p class="management-retention-note">Links and their history are retained, not deleted.</p>
+				} else {
+					<p class="management-retention-note">Paid links leave this page after 24 hours; their information remains in Students. Canceled and expired unpaid links move to Trash.</p>
+				}
+			</div>
+		</section>
+		<p id="copy-toast" role="status"></p>
+	}
+}
+
+templ programStart(data pageData) {
+	<section class="management-panel management-program-settings" aria-labelledby="program-start-heading" lang="es">
+		<div class="management-panel-heading">
+			<h2 id="program-start-heading">Fecha de comienzo del programa</h2>
+		</div>
+		<form class="management-settings-form" method="post" action="/management/program-start-date">
+			<label for="program-start-date">Fecha de comienzo</label>
+			<input
+				id="program-start-date"
+				name="program_start_date"
+				type="date"
+				value={ data.ProgramStartDate }
+				required
+				if data.ProgramStartError != "" {
+					aria-describedby="program-start-scope program-start-error"
+					aria-invalid="true"
+				} else {
+					aria-describedby="program-start-scope"
+				}
+			/>
+			<p id="program-start-scope">Esta fecha se muestra en los nuevos acuerdos. Los acuerdos ya aceptados conservan su fecha original. Configúrala antes de que los clientes puedan aceptar el acuerdo.</p>
+			if data.ProgramStartError != "" {
+				<p id="program-start-error" role="alert">{ data.ProgramStartError }</p>
+			}
+			<button type="submit" class="management-button-primary">Guardar fecha</button>
+		</form>
+		<div class="management-settings-footer">
+			<p id="program-start-notice" role="status">{ data.ProgramStartNotice }</p>
+		</div>
+	</section>
+}
+
+// linkRows is the inside of #generated-links: the whole page's list, and the htmx refresh of it.
+templ linkRows(rows []linkRow) {
+	for _, row := range rows {
+		@linkItem(row)
+	}
+}
+
+// linkItem is one link with its enrollments. management.js restores open <details> by id after a swap.
+templ linkItem(row linkRow) {
+	{{ l, id := row.Link, strconv.FormatUint(row.Link.ID, 10) }}
+	<li class="management-link" id={ "link-row-" + id }>
+		<div class="management-link-details">
+			<div class="management-link-heading">
+				<strong>{ l.Name }</strong>
+				<span class="management-link-status" data-status={ string(l.Status) }>{ string(l.Status) }</span>
+				<details class="management-link-rename" id={ "link-rename-" + id }>
+					<summary>Rename</summary>
+					<form class="management-link-rename-form" action={ "/management/links/" + id + "/rename" } method="post" hx-post={ "/management/links/" + id + "/rename" } hx-swap="none" hx-disabled-elt="button">
+						<label class="visually-hidden" for={ "link-name-input-" + id }>Link name</label>
+						<input id={ "link-name-input-" + id } name="name" type="text" value={ l.Name } maxlength="100" required/>
+						<button type="submit" class="management-button-primary">Save</button>
+					</form>
+				</details>
+			</div>
+			<div class="management-link-meta">
+				<span>
+					Created @timestamp(l.CreatedAt)
+					if l.CreatedBy != "" {
+						{ " by " + l.CreatedBy }
+					}
+				</span>
+				if l.Status == links.LinkCanceled {
+					if l.CanceledBy != "" {
+						<span>Link canceled by { l.CanceledBy }</span>
+					}
+				} else {
+					<span>{ expiry(l.Status == links.LinkExpired) } @timestamp(l.ExpiresAt)</span>
+				}
+				<span>{ strconv.Itoa(l.EnrollmentCount) } { plural(l.EnrollmentCount, "enrollment", "enrollments") }</span>
+			</div>
+			<a id={ "link-url-" + id } class="management-link-url" href={ "/customer/" + l.Token } target="_blank" rel="noopener noreferrer">/customer/{ l.Token }</a>
+			if len(row.Enrollments) > 0 {
+				<details class="management-enrollments-tree" id={ "link-tree-" + id }>
+					<summary>{ strconv.Itoa(len(row.Enrollments)) } { plural(len(row.Enrollments), "enrollment", "enrollments") }</summary>
+					<ul class="management-enrollments" role="list">
+						for _, e := range row.Enrollments {
+							@enrollmentItem(e, row.Declined[e.ID])
+						}
+					</ul>
+				</details>
+			}
+		</div>
+		<div class="management-link-actions">
+			<button id={ "link-copy-" + id } type="button" data-copy-link>Copy link</button>
+			if l.Cancelable() {
+				<form action={ "/management/links/" + id + "/cancel" } method="post" hx-post={ "/management/links/" + id + "/cancel" } hx-swap="none" hx-disabled-elt="button" hx-confirm="Are you sure you want to cancel this link? New customers will not be able to start.">
+					<button id={ "link-cancel-" + id } type="submit" class="management-button-danger">Cancel link</button>
+				</form>
+			}
+		</div>
+	</li>
+}
+
+// enrollmentItem is one enrollment under its link; declined marks a first payment that was declined.
+templ enrollmentItem(e links.EnrollmentEntry, declined bool) {
+	{{ id := strconv.FormatUint(e.ID, 10) }}
+	<li class="management-enrollment" id={ "enrollment-row-" + id }>
+		<div class="management-enrollment-heading">
+			if e.Name != "" {
+				<strong>{ e.Name }</strong>
+			} else {
+				<strong class="management-link-unnamed">No name yet</strong>
+			}
+			if e.Phone != "" {
+				<span class="management-link-phone">{ e.Phone }</span>
+			}
+			<span class="management-link-status" data-status={ string(e.Status) }>{ string(e.Status) }</span>
+			if e.Status == links.AwaitingPayment && declined {
+				<span class="status-badge" data-tone="danger">Payment declined</span>
+			}
+		</div>
+		<div class="management-link-meta">
+			<span>Started @timestamp(e.CreatedAt)</span>
+			if e.SubmittedAt != nil {
+				<span>Submitted @timestamp(*e.SubmittedAt)</span>
+			}
+			if e.TermsAcceptedAt != nil {
+				<span>
+					Agreement accepted @timestamp(*e.TermsAcceptedAt)
+					if e.ProgramStartDate != "" {
+						{ " (start " + e.ProgramStartDate + ")" }
+					}
+				</span>
+			}
+			if e.PaidAt != nil {
+				<span>Paid @timestamp(*e.PaidAt)</span>
+			}
+			if e.SubmittedAt != nil && (e.Status == links.AwaitingPayment || e.Status == links.Expired) {
+				<span>{ expiry(e.Status == links.Expired) } @timestamp(e.ExpiresAt)</span>
+			}
+			if e.Status == links.Canceled && e.CanceledBy != "" {
+				<span>Canceled by { e.CanceledBy }</span>
+			}
+		</div>
+		if e.Cancelable() {
+			<form class="management-enrollment-cancel" action={ "/management/enrollments/" + id + "/cancel" } method="post" hx-post={ "/management/enrollments/" + id + "/cancel" } hx-swap="none" hx-disabled-elt="button" hx-confirm={ cancelPrompt(e.Status) }>
+				<button id={ "enrollment-cancel-" + id } type="submit" class="management-button-danger">
+					if e.Status == links.Expired {
+						Clear PIN
+					} else {
+						Cancel enrollment
+					}
+				</button>
+			</form>
+		}
+	</li>
+}
+
+// linkNotice is an htmx action's answer: the notice, swapped out of band into #link-status.
+templ linkNotice(notice string) {
+	<p id="link-status" hx-swap-oob="innerHTML">{ notice }</p>
+}
+
+// timestamp is a UTC time that management-time.js rewrites in the reader's zone.
+templ timestamp(t time.Time) {
+	<time datetime={ t.UTC().Format("2006-01-02T15:04:05Z") }>{ t.UTC().Format("Jan 2, 2006 15:04 UTC") }</time>
+}
+
+func expiry(expired bool) string {
+	if expired {
+		return "Expired"
+	}
+	return "Expires"
+}
+
+func cancelPrompt(status links.Status) string {
+	switch status {
+	case links.Expired:
+		return "Clear this expired enrollment's PIN so it can be reused?"
+	case links.AwaitingPayment:
+		return "Cancel this awaiting-payment enrollment and close any open checkout session?"
+	default:
+		return "Are you sure you want to cancel this enrollment?"
+	}
+}

@@ -123,7 +123,7 @@ flowchart LR
 | `internal/settings` | The single settings row: link lifetime, program start date ([Agreement](domain/agreement.md)), bootcamp date |
 | `internal/students` | Student record, contact-field registry, municipalities ([Students](domain/students.md)) |
 | `internal/testdb` | One PostgreSQL schema per integration test ([Testing](testing.md)) |
-| `internal/ui` | Shared page layouts, platform: the staff document (`SignIn`, `Staff`: head, skip link, rail with brand, navigation and account, and `main`). Pages pass only their main content |
+| `internal/ui` | Shared page layouts, platform: the staff document (`SignIn`, `Staff`: head, with htmx when the page asks, skip link, rail with brand, navigation and account, and `main`) and the `LinkIcon` and `TrashIcon` it shares with pages. Pages pass only their main content |
 | `static/` | Embedded scripts, stylesheets, images, favicon (`//go:embed static`) |
 | `compose.yaml`, `.air.toml`, `.env.example` | Local database and dev server ([Local development](operations/local-development.md)) |
 | `user.fish` | Railway wrapper for the `user` CLI ([Railway](operations/railway.md)) |

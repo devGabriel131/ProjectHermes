@@ -204,23 +204,23 @@ func (s *site) list(w http.ResponseWriter, r *http.Request, status int, data pag
 		}
 	}
 	data.Links = filtered
-	name := "link-rows"
-	if !htmx(r) || status != http.StatusOK {
-		name = "index.html"
-		data.Staff = s.staff(ctx)
-		if !data.Trash {
-			current, err := s.settings.Current(ctx)
-			if err != nil {
-				httplog.RecordError(r, "load", err)
-				http.Error(w, "Could not load settings. Please try again.", http.StatusInternalServerError)
-				return
-			}
-			if data.ProgramStartError == "" {
-				data.ProgramStartDate = current.ProgramStartDate
-			}
+	if htmx(r) && status == http.StatusOK {
+		s.view(w, r, status, linkRows(data.Links))
+		return
+	}
+	data.Staff = s.staff(ctx)
+	if !data.Trash {
+		current, err := s.settings.Current(ctx)
+		if err != nil {
+			httplog.RecordError(r, "load", err)
+			http.Error(w, "Could not load settings. Please try again.", http.StatusInternalServerError)
+			return
+		}
+		if data.ProgramStartError == "" {
+			data.ProgramStartDate = current.ProgramStartDate
 		}
 	}
-	s.render(w, r, status, name, data)
+	s.view(w, r, status, linksView(data))
 }
 
 // answer reports a link or enrollment action. A browser gets the links page with the notice. htmx gets
@@ -236,7 +236,7 @@ func (s *site) answer(w http.ResponseWriter, r *http.Request, status int, notice
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.Header().Set("HX-Trigger", "management-changed")
-		s.render(w, r, http.StatusOK, "result", pageData{Notice: notice})
+		s.view(w, r, http.StatusOK, linkNotice(notice))
 	}
 }
 

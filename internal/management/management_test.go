@@ -242,7 +242,7 @@ func writePaths(id uint64) []string {
 // requirePage checks a full page lists exactly want, in order.
 func requirePage(t *testing.T, res *http.Response, body string, want []links.LinkGroup) {
 	t.Helper()
-	start, end := strings.Index(body, `<ul id="generated-links"`), strings.Index(body, "</ul>\n      <div class=\"management-empty\">")
+	start, end := strings.Index(body, `<ul id="generated-links"`), strings.Index(body, `<div class="management-empty">`)
 	if res.StatusCode != http.StatusOK || !strings.HasPrefix(body, "<!doctype html>") || start < 0 || end < start {
 		t.Fatalf("status = %d, want full management page: %s", res.StatusCode, body)
 	}
@@ -280,7 +280,7 @@ func escapedHTML(value string) string {
 func requireRegistryPrivacy(t *testing.T, body string, details students.Details) {
 	t.Helper()
 	for _, private := range []string{details.Email, details.Municipality} {
-		if private != "" && (strings.Contains(body, private) || strings.Contains(body, escapedHTML(private))) {
+		if private != "" && (strings.Contains(body, private) || strings.Contains(body, html.EscapeString(private))) {
 			t.Fatalf("registry leaked excluded contact data %q: %s", private, body)
 		}
 	}
@@ -288,11 +288,11 @@ func requireRegistryPrivacy(t *testing.T, body string, details students.Details)
 
 // requireRows checks parent reusable links, permanent URLs, audit history, cancellation
 // availability, and child enrollments for exactly the expected groups.
-func requireRows(t *testing.T, html string, want []links.LinkGroup) {
+func requireRows(t *testing.T, list string, want []links.LinkGroup) {
 	t.Helper()
-	rows := strings.Split(html, `<li class="management-link"`)[1:]
+	rows := strings.Split(list, `<li class="management-link"`)[1:]
 	if len(rows) != len(want) {
-		t.Fatalf("rendered %d links, want %d: %s", len(rows), len(want), html)
+		t.Fatalf("rendered %d links, want %d: %s", len(rows), len(want), list)
 	}
 	for i, group := range want {
 		row := rows[i]
@@ -321,7 +321,7 @@ func requireRows(t *testing.T, html string, want []links.LinkGroup) {
 			erow := erows[j]
 			eok := strings.Contains(erow, string(entry.Status)) && strings.Contains(erow, entry.Name)
 			if entry.Phone != "" {
-				eok = eok && strings.Contains(erow, `<span class="management-link-phone">`+escapedHTML(entry.Phone)+`</span>`)
+				eok = eok && strings.Contains(erow, `<span class="management-link-phone">`+html.EscapeString(entry.Phone)+`</span>`)
 			}
 			eok = eok && !strings.Contains(erow, "tel:")
 			eCancelable := strings.Contains(erow, fmt.Sprintf(`action="/management/enrollments/%d/cancel"`, entry.ID))
